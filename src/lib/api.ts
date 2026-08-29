@@ -12,6 +12,7 @@ import type {
   DebtInput,
   DebtPaymentInput,
   Overview,
+  PricePoint,
   Transaction,
   TransactionInput,
   TransactionQuery,
@@ -70,6 +71,15 @@ export const api = {
     call<void>('save_investment_lot', { input }),
   deleteInvestmentLot: (id: string) => call<void>('delete_investment_lot', { id }),
   refreshPrices: () => call<void>('refresh_prices'),
+  /** One holding's price line. `days` bounds the window; null asks for all. */
+  holdingSeries: (id: string, days: number | null) =>
+    call<PricePoint[]>('holding_series', { id, days }),
+  /** Every holding's line at once, keyed by holding id. */
+  holdingSeriesAll: (days: number | null) =>
+    call<Record<string, PricePoint[]>>('holding_series_all', { days }),
+  /** What a gram has gone for, day by day, at a purity. Null means 24K. */
+  goldRateSeries: (days: number | null, purityE4: number | null) =>
+    call<PricePoint[]>('gold_rate_series', { days, purityE4 }),
   searchSchemes: (query: string) => call<Scheme[]>('search_schemes', { query }),
 
   getSetting: (key: string) => call<string | null>('get_setting', { key }),

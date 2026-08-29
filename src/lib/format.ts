@@ -152,13 +152,15 @@ export function percentDelta(now: number, before: number) {
  * because gold is bought in tenths of a gram and funds allot to four places —
  * padding both to the same width would only add noise.
  */
-export function quantity(e4: Scaled, unit: 'g' | 'units' = 'g') {
+export function quantity(e4: Scaled, unit: 'g' | 'units' | '' = 'g') {
   const negative = e4 < 0;
   const abs = Math.abs(e4);
   const whole = inr.format(Math.floor(abs / 10_000));
   const frac = String(abs % 10_000).padStart(4, '0').replace(/0+$/, '');
   const body = frac ? `${whole}.${frac}` : whole;
-  return `${negative ? '−' : ''}${body} ${unit}`;
+  // An empty unit is for places whose label already says what is being
+  // counted, where "142.36 units" only repeats the column heading.
+  return `${negative ? '−' : ''}${body}${unit ? ` ${unit}` : ''}`;
 }
 
 /** `+3.2%`, `−1.8%`, `0%` — the same minus sign `money` uses. */

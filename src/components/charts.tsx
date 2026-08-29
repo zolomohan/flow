@@ -1,8 +1,8 @@
 import { useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { compactMoney, money } from '../lib/format';
+import { compactMoney, money, shortDayLabel, unitPrice } from '../lib/format';
 import { spring } from '../lib/motion';
-import type { FlowPoint, Paise } from '../lib/types';
+import type { FlowPoint, Paise, PricePoint } from '../lib/types';
 
 /** Catmull-Rom through the points, emitted as cubic beziers. */
 function smoothPath(points: [number, number][]) {
@@ -97,6 +97,208 @@ export function Sparkline({
           />
         </svg>
       )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ PriceChart */
+
+/**
+ * A price line with a readable y-axis and a crosshair that follows the
+ * pointer. Days are plotted evenly rather than by calendar distance: a NAV is
+ * only published on business days, and spacing the gaps would leave the line
+ * limping across every long weekend for no information gained.
+ */
+export function PriceChart({
+  points, height = 240, stroke = 'var(--violet)', reference, referenceLabel,
+}: {
+  points: PricePoint[];
+  height?: number;
+  stroke?: string;
+  /** A scaled price to mark with a dashed rule — a fund's average cost. */
+  reference?: number | null;
+  referenceLabel?: string;
+}) {
+  const gradientId = useId();
+  const host = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+  const [hover, setHover] = useState<number | null>(null);
+
+  useLayoutEffect(() => {
+    const node = host.current;
+    if (!node) return;
+    const observer = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width));
+    observer.observe(node);
+    setWidth(node.clientWidth);
+    return () => observer.disconnect();
+  }, []);
+
+  // Room on the right for the axis labels, and a little top and bottom so the
+  // high and the low don't sit flush against the frame.
+  const gutter = 52;
+  const pad = 14;
+  const plot = Math.max(0, width - gutter);
+
+  const shape = useMemo(() => {
+    if (points.length < 2 || plot <= 0) return null;
+    const values = points.map((p) => p.priceE4);
+    const low = Math.min(...values);
+    const high = Math.max(...values);
+    // A line that never moved still deserves to sit in the middle rather than
+    // on the floor, so a flat run is given a nominal span.
+    const span = high - low || Math.max(1, high * 0.02);
+    const floor = high === low ? high - span / 2 : low;
+    const y = (value: number) =>
+      height - pad - ((value - floor) / span) * (height - pad * 2);
+    const x = (i: number) => (i / (points.length - 1)) * plot;
+    const coords = points.map((p, i) => [x(i), y(p.priceE4)] as [number, number]);
+    const line = smoothPath(coords);
+    return {
+      line,
+      area: `${line} L ${plot} ${height} L 0 ${height} Z`,
+      coords,
+      low,
+      high,
+      lowAt: values.indexOf(low),
+      highAt: values.indexOf(high),
+      y,
+      floor,
+      span,
+    };
+  }, [points, plot, height]);
+
+  if (!shape) {
+    return (
+      <div className="price-chart-empty" style={{ height }}>
+        <span>Not enough price history yet — refresh prices and it fills in.</span>
+      </div>
+    );
+  }
+
+  // Axis labels follow the range rather than the number: a NAV moving between
+  // ₹87.20 and ₹88.40 needs its paise, a gold rate in the thousands does not.
+  const tickLabel = (e4: number) => {
+    const rupees = e4 / 10_000;
+    const spread = shape.span / 10_000;
+    const places = spread < 20 ? 2 : spread < 200 ? 1 : 0;
+    return `₹${rupees.toLocaleString('en-IN', {
+      minimumFractionDigits: places,
+      maximumFractionDigits: places,
+    })}`;
+  };
+
+  const at = hover ?? points.length - 1;
+  const active = points[at];
+  const [activeX, activeY] = shape.coords[at];
+  // Four rules across the range, labelled in rupees on the right.
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map((t) => shape.floor + shape.span * t);
+  const refY =
+    reference != null && reference > 0 ? shape.y(reference) : null;
+
+  return (
+    <div className="price-chart" ref={host} style={{ height }}>
+      <svg
+        width={width}
+        height={height}
+        onMouseLeave={() => setHover(null)}
+        onMouseMove={(event) => {
+          const box = event.currentTarget.getBoundingClientRect();
+          const ratio = (event.clientX - box.left) / (plot || 1);
+          const index = Math.round(ratio * (points.length - 1));
+          setHover(Math.max(0, Math.min(points.length - 1, index)));
+        }}
+      >
+        <defs>
+          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={stroke} stopOpacity="0.2" />
+            <stop offset="100%" stopColor={stroke} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+
+        {ticks.map((value, i) => (
+          <g key={i}>
+            <line
+              className="price-rule"
+              x1={0}
+              x2={plot}
+              y1={shape.y(value)}
+              y2={shape.y(value)}
+            />
+            <text className="price-tick" x={plot + 8} y={shape.y(value) + 4}>
+              {tickLabel(value)}
+            </text>
+          </g>
+        ))}
+
+        {refY !== null && refY > 0 && refY < height && (
+          <g>
+            <line
+              className="price-reference"
+              x1={0}
+              x2={plot}
+              y1={refY}
+              y2={refY}
+            />
+            {referenceLabel && (
+              <text className="price-reference-label" x={4} y={refY - 6}>
+                {referenceLabel}
+              </text>
+            )}
+          </g>
+        )}
+
+        <motion.path
+          d={shape.area}
+          fill={`url(#${gradientId})`}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.5, delay: 0.2 }}
+        />
+        <motion.path
+          d={shape.line}
+          fill="none"
+          stroke={stroke}
+          strokeWidth={2.25}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          initial={{ pathLength: 0 }}
+          animate={{ pathLength: 1 }}
+          transition={{ duration: 0.9, ease: [0.4, 0, 0.2, 1] }}
+        />
+
+        {/* The high and the low, which is what anyone reads a price line for
+            before they read any single day of it. */}
+        {[shape.highAt, shape.lowAt].map((index, i) => (
+          <circle
+            key={i}
+            className="price-extreme"
+            cx={shape.coords[index][0]}
+            cy={shape.coords[index][1]}
+            r={2.5}
+            style={{ fill: stroke }}
+          />
+        ))}
+
+        <line
+          className="price-crosshair"
+          x1={activeX}
+          x2={activeX}
+          y1={0}
+          y2={height}
+          opacity={hover === null ? 0 : 1}
+        />
+        <circle className="price-dot" cx={activeX} cy={activeY} r={4} style={{ fill: stroke }} />
+      </svg>
+
+      <div
+        className="price-readout"
+        style={{
+          left: Math.min(Math.max(activeX, 0), Math.max(0, plot - 96)),
+        }}
+      >
+        <strong>{unitPrice(active.priceE4)}</strong>
+        <span>{shortDayLabel(active.asOf)}</span>
+      </div>
     </div>
   );
 }

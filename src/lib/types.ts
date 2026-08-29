@@ -382,6 +382,15 @@ export interface HoldingInput {
   closed?: boolean | null;
 }
 
+/**
+ * One day on a price line: rupees per gram or per unit, scaled by 10^4, on
+ * the date that price was published. Points arrive oldest first.
+ */
+export interface PricePoint {
+  asOf: string;
+  priceE4: Scaled;
+}
+
 export interface Scheme {
   schemeCode: string;
   schemeName: string;

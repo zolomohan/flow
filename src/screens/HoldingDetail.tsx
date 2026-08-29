@@ -1,7 +1,9 @@
 import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from '../components/Icon';
 import { BigMoney } from '../components/Money';
+import { PriceHistory } from '../components/PriceHistory';
 import { Button, Card, CardHead, Empty } from '../components/ui';
+import { api } from '../lib/api';
 import {
   dayLabel, money, percent, perUnit, quantity, shortDayLabel, unitPrice,
 } from '../lib/format';
@@ -56,8 +58,9 @@ export function HoldingDetail({
   const unit = unitOf(holding);
   const { title, detail } = splitName(holding);
   const priced = holding.priceE4 !== null;
-  // Gold is weight and today's price. There is no purchase history behind it
-  // and no cost to measure a return against, so both are left off.
+  // Gold is weight and a rate. There is no purchase history behind it and no
+  // cost to measure a return against, so both are left off — what it can show
+  // is where the rate itself has been.
   const isGold = holding.kind === 'gold';
 
   const gain = holding.totalReturn;
@@ -207,6 +210,26 @@ export function HoldingDetail({
           )}
         </div>
       </Card>
+
+      <PriceHistory
+        title={isGold ? 'Gold rate' : 'NAV'}
+        hint={
+          isGold
+            ? `rupees a gram of ${carats(holding.purityE4)}, day by day`
+            : 'what one unit has been worth, day by day'
+        }
+        tint={isGold ? 'var(--amber)' : 'var(--violet)'}
+        load={(days) => api.holdingSeries(holding.id, days)}
+        reference={!isGold && avgBuy ? avgBuy * 100 : null}
+        referenceLabel={
+          !isGold && avgBuy ? `your average cost · ${money(avgBuy, { paise: true })}` : undefined
+        }
+        footnote={
+          isGold
+            ? "London's daily fix, converted at the ECB's rupee rate and marked up for duty and GST."
+            : 'AMFI publishes a scheme’s NAV once a day, after the market closes.'
+        }
+      />
 
       <div className={`detail-grid ${isGold ? 'is-single' : ''}`}>
         {!isGold && (
