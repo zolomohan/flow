@@ -1,0 +1,3230 @@
+use chrono::{Datelike, Duration, NaiveDate, Utc};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row};
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Mutex;
+use uuid::Uuid;
+
+use crate::models::*;
+use crate::prices::Quote;
+
+pub struct Db(pub Mutex<Connection>);
+
+pub type Result<T> = std::result::Result<T, String>;
+
+fn oops<E: std::fmt::Display>(e: E) -> String {
+    e.to_string()
+}
+
+fn now() -> String {
+    Utc::now().to_rfc3339()
+}
+
+fn new_id() -> String {
+    Uuid::new_v4().to_string()
+}
+
+/// Every account's live balance, expressed as a correlated subquery so that a
+/// single SELECT can return accounts already folded with their postings.
+const BALANCE_EXPR: &str = "
+    a.opening_balance
+  + COALESCE((SELECT SUM(t.amount) FROM transactions t WHERE t.account_id = a.id AND t.kind = 'income'), 0)
+  - COALESCE((SELECT SUM(t.amount) FROM transactions t WHERE t.account_id = a.id AND t.kind = 'expense'), 0)
+  - COALESCE((SELECT SUM(t.amount) FROM transactions t WHERE t.account_id = a.id AND t.kind = 'transfer'), 0)
+  + COALESCE((SELECT SUM(t.amount) FROM transactions t WHERE t.to_account_id = a.id AND t.kind = 'transfer'), 0)
+";
+
+/// Joined once, used by both the row query and the totals that go with it —
+/// the filters reach into account and category names, so they have to be here.
+const TX_FROM: &str = "
+FROM transactions t
+JOIN accounts a ON a.id = t.account_id
+LEFT JOIN accounts ta ON ta.id = t.to_account_id
+LEFT JOIN categories c ON c.id = t.category_id
+LEFT JOIN categories p ON p.id = c.parent_id
+";
+
+const TX_SELECT: &str = "
+SELECT t.id, t.kind, t.amount, t.account_id, t.to_account_id, t.category_id,
+       t.merchant, t.note, t.occurred_at, t.created_at,
+       a.name, a.color, ta.name, c.name, c.icon, c.color,
+       COALESCE(p.id, c.id), COALESCE(p.name, c.name)
+";
+
+pub fn open(path: &Path) -> Result<Connection> {
+    let conn = Connection::open(path).map_err(oops)?;
+    conn.execute_batch(
+        "PRAGMA journal_mode = WAL;
+         PRAGMA foreign_keys = ON;
+         PRAGMA synchronous = NORMAL;",
+    )
+    .map_err(oops)?;
+    migrate(&conn)?;
+    Ok(conn)
+}
+
+fn migrate(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS accounts (
+            id              TEXT PRIMARY KEY,
+            name            TEXT NOT NULL,
+            kind            TEXT NOT NULL,
+            institution     TEXT,
+            opening_balance INTEGER NOT NULL DEFAULT 0,
+            color           TEXT NOT NULL,
+            icon            TEXT NOT NULL,
+            archived        INTEGER NOT NULL DEFAULT 0,
+            sort_order      INTEGER NOT NULL DEFAULT 0,
+            created_at      TEXT NOT NULL,
+            credit_limit    INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS categories (
+            id         TEXT PRIMARY KEY,
+            kind       TEXT NOT NULL,
+            name       TEXT NOT NULL,
+            icon       TEXT NOT NULL,
+            color      TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            parent_id  TEXT REFERENCES categories(id) ON DELETE SET NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS transactions (
+            id            TEXT PRIMARY KEY,
+            kind          TEXT NOT NULL CHECK (kind IN ('income','expense','transfer')),
+            amount        INTEGER NOT NULL CHECK (amount > 0),
+            account_id    TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            to_account_id TEXT REFERENCES accounts(id) ON DELETE CASCADE,
+            category_id   TEXT REFERENCES categories(id) ON DELETE SET NULL,
+            merchant      TEXT NOT NULL DEFAULT '',
+            note          TEXT,
+            occurred_at   TEXT NOT NULL,
+            created_at    TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_tx_occurred ON transactions(occurred_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_tx_account  ON transactions(account_id);
+        CREATE INDEX IF NOT EXISTS idx_tx_to       ON transactions(to_account_id);
+        CREATE INDEX IF NOT EXISTS idx_tx_category ON transactions(category_id);
+
+        CREATE TABLE IF NOT EXISTS debts (
+            id             TEXT PRIMARY KEY,
+            direction      TEXT NOT NULL CHECK (direction IN ('lent','borrowed')),
+            counterparty   TEXT NOT NULL,
+            principal      INTEGER NOT NULL CHECK (principal > 0),
+            opened_on      TEXT NOT NULL,
+            due_on         TEXT,
+            note           TEXT,
+            settled_at     TEXT,
+            created_at     TEXT NOT NULL,
+            transaction_id TEXT REFERENCES transactions(id) ON DELETE SET NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS debt_payments (
+            id             TEXT PRIMARY KEY,
+            debt_id        TEXT NOT NULL REFERENCES debts(id) ON DELETE CASCADE,
+            amount         INTEGER NOT NULL CHECK (amount > 0),
+            occurred_at    TEXT NOT NULL,
+            note           TEXT,
+            transaction_id TEXT REFERENCES transactions(id) ON DELETE SET NULL,
+            created_at     TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_debt_payments ON debt_payments(debt_id);
+
+        CREATE TABLE IF NOT EXISTS holdings (
+            id          TEXT PRIMARY KEY,
+            kind        TEXT NOT NULL CHECK (kind IN ('gold','fund')),
+            name        TEXT NOT NULL,
+            account_id  TEXT REFERENCES accounts(id) ON DELETE SET NULL,
+            scheme_code TEXT,
+            isin        TEXT,
+            purity_e4   INTEGER CHECK (purity_e4 IS NULL OR (purity_e4 > 0 AND purity_e4 <= 10000)),
+            -- Grams held, for gold. A fund is measured by its lots instead.
+            grams_e4    INTEGER NOT NULL DEFAULT 0 CHECK (grams_e4 >= 0),
+            note        TEXT,
+            closed_at   TEXT,
+            created_at  TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS investment_lots (
+            id             TEXT PRIMARY KEY,
+            holding_id     TEXT NOT NULL REFERENCES holdings(id) ON DELETE CASCADE,
+            kind           TEXT NOT NULL CHECK (kind IN ('buy','sell')),
+            quantity_e4    INTEGER NOT NULL CHECK (quantity_e4 > 0),
+            amount         INTEGER NOT NULL CHECK (amount >= 0),
+            occurred_at    TEXT NOT NULL,
+            -- When the units were credited, if that was not the day the money
+            -- moved. NULL means the two were the same day.
+            allotted_at    TEXT,
+            transaction_id TEXT REFERENCES transactions(id) ON DELETE SET NULL,
+            owns_transaction INTEGER NOT NULL DEFAULT 0,
+            note           TEXT,
+            created_at     TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_lots_holding ON investment_lots(holding_id);
+
+        -- One posting backs at most one lot. Two lots sharing a transfer would
+        -- count its cost basis twice and quietly skew net worth.
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_lot_tx
+            ON investment_lots(transaction_id) WHERE transaction_id IS NOT NULL;
+
+        CREATE TABLE IF NOT EXISTS price_cache (
+            key        TEXT PRIMARY KEY,
+            price_e4   INTEGER NOT NULL,
+            as_of      TEXT NOT NULL,
+            fetched_at TEXT NOT NULL,
+            source     TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        ",
+    )
+    .map_err(oops)?;
+    add_column_if_missing(conn, "categories", "parent_id", "parent_id TEXT")?;
+    add_column_if_missing(
+        conn,
+        "investment_lots",
+        "owns_transaction",
+        "owns_transaction INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_missing(conn, "investment_lots", "allotted_at", "allotted_at TEXT")?;
+    add_column_if_missing(
+        conn,
+        "accounts",
+        "credit_limit",
+        "credit_limit INTEGER NOT NULL DEFAULT 0",
+    )?;
+    migrate_gold_to_grams(conn)?;
+    conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_cat_parent ON categories(parent_id);")
+        .map_err(oops)?;
+    seed_categories(conn)
+}
+
+/// SQLite has no `ADD COLUMN IF NOT EXISTS`, so check the table first. Books
+/// created before category nesting existed pick the column up on next launch.
+fn add_column_if_missing(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<()> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(oops)?;
+    let present = stmt
+        .query_map([], |r| r.get::<_, String>(1))
+        .map_err(oops)?
+        .filter_map(std::result::Result::ok)
+        .any(|name| name == column);
+    if !present {
+        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {decl}"), [])
+            .map_err(oops)?;
+    }
+    Ok(())
+}
+
+/// Gold used to be traded in lots like a fund. It isn't a position you trade
+/// — it is metal in a locker — so the grams its lots came to become the
+/// holding's own weight, and the lots go. Whatever those lots posted to the
+/// ledger stays: money really did leave the bank.
+fn migrate_gold_to_grams(conn: &Connection) -> Result<()> {
+    add_column_if_missing(
+        conn,
+        "holdings",
+        "grams_e4",
+        "grams_e4 INTEGER NOT NULL DEFAULT 0",
+    )?;
+    conn.execute_batch(
+        "UPDATE holdings SET grams_e4 = MAX(0, COALESCE(
+             (SELECT SUM(CASE WHEN l.kind = 'buy' THEN l.quantity_e4
+                              ELSE -l.quantity_e4 END)
+              FROM investment_lots l WHERE l.holding_id = holdings.id), 0))
+         WHERE kind = 'gold' AND grams_e4 = 0;
+
+         DELETE FROM investment_lots WHERE holding_id IN
+             (SELECT id FROM holdings WHERE kind = 'gold');
+
+         -- Nothing posts into an account any more, so the link would only
+         -- ever mislead about where the metal's cost is sitting.
+         UPDATE holdings SET account_id = NULL WHERE kind = 'gold';",
+    )
+    .map_err(oops)
+}
+
+/// Fold-flavoured starting taxonomy. Only inserted once; user edits survive.
+fn seed_categories(conn: &Connection) -> Result<()> {
+    let existing: i64 = conn
+        .query_row("SELECT COUNT(*) FROM categories", [], |r| r.get(0))
+        .map_err(oops)?;
+    if existing > 0 {
+        return Ok(());
+    }
+
+    let expense = [
+        ("Food & Drink", "utensils", "#F2724F"),
+        ("Groceries", "shopping-basket", "#42C251"),
+        ("Transport", "car-front", "#118AE4"),
+        ("Shopping", "shopping-bag", "#A855F7"),
+        ("Bills & Utilities", "zap", "#F0B429"),
+        ("Rent & Home", "house", "#5A87E6"),
+        ("Health", "heart-pulse", "#EC4899"),
+        ("Entertainment", "clapperboard", "#8B5CF6"),
+        ("Travel", "plane", "#06B6D4"),
+        ("Education", "graduation-cap", "#0EA5E9"),
+        ("Subscriptions", "repeat", "#14B8A6"),
+        ("Fees & Charges", "receipt", "#94A3B8"),
+        ("Family & Gifts", "gift", "#F43F5E"),
+        ("Other", "circle-dashed", "#676B89"),
+    ];
+    let income = [
+        ("Salary", "briefcase", "#42C251"),
+        ("Business", "store", "#0F9D58"),
+        ("Interest", "piggy-bank", "#118AE4"),
+        ("Investments", "trending-up", "#7C3AED"),
+        ("Refunds", "undo-2", "#F0B429"),
+        ("Gifts", "gift", "#F43F5E"),
+        ("Other Income", "circle-dashed", "#676B89"),
+    ];
+
+    let mut stmt = conn
+        .prepare("INSERT INTO categories (id, kind, name, icon, color, sort_order) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")
+        .map_err(oops)?;
+    for (i, (name, icon, color)) in expense.iter().enumerate() {
+        stmt.execute(params![new_id(), "expense", name, icon, color, i as i64])
+            .map_err(oops)?;
+    }
+    for (i, (name, icon, color)) in income.iter().enumerate() {
+        stmt.execute(params![new_id(), "income", name, icon, color, i as i64])
+            .map_err(oops)?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------- accounts
+
+fn account_from_row(r: &Row) -> rusqlite::Result<Account> {
+    Ok(Account {
+        id: r.get(0)?,
+        name: r.get(1)?,
+        kind: r.get(2)?,
+        institution: r.get(3)?,
+        opening_balance: r.get(4)?,
+        color: r.get(5)?,
+        icon: r.get(6)?,
+        archived: r.get::<_, i64>(7)? != 0,
+        sort_order: r.get(8)?,
+        created_at: r.get(9)?,
+        balance: r.get(10)?,
+        credit_limit: r.get(11)?,
+    })
+}
+
+pub fn list_accounts(conn: &Connection) -> Result<Vec<Account>> {
+    let sql = format!(
+        "SELECT a.id, a.name, a.kind, a.institution, a.opening_balance, a.color, a.icon,
+                a.archived, a.sort_order, a.created_at, {BALANCE_EXPR} AS balance,
+                a.credit_limit
+         FROM accounts a
+         ORDER BY a.archived ASC, a.sort_order ASC, a.created_at ASC"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(oops)?;
+    let rows = stmt.query_map([], account_from_row).map_err(oops)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(oops)
+}
+
+fn get_account(conn: &Connection, id: &str) -> Result<Account> {
+    let sql = format!(
+        "SELECT a.id, a.name, a.kind, a.institution, a.opening_balance, a.color, a.icon,
+                a.archived, a.sort_order, a.created_at, {BALANCE_EXPR} AS balance,
+                a.credit_limit
+         FROM accounts a WHERE a.id = ?1"
+    );
+    conn.query_row(&sql, params![id], account_from_row)
+        .map_err(oops)
+}
+
+pub fn save_account(conn: &Connection, input: AccountInput) -> Result<Account> {
+    match input.id {
+        Some(id) => {
+            conn.execute(
+                "UPDATE accounts SET name = ?2, kind = ?3, institution = ?4,
+                        opening_balance = ?5, color = ?6, icon = ?7, credit_limit = ?8
+                 WHERE id = ?1",
+                params![
+                    id,
+                    input.name,
+                    input.kind,
+                    input.institution,
+                    input.opening_balance,
+                    input.color,
+                    input.icon,
+                    // A limit only means anything on a card.
+                    if input.kind == "credit" { input.credit_limit } else { 0 }
+                ],
+            )
+            .map_err(oops)?;
+            get_account(conn, &id)
+        }
+        None => {
+            let id = new_id();
+            let next: i64 = conn
+                .query_row(
+                    "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM accounts",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(oops)?;
+            conn.execute(
+                "INSERT INTO accounts (id, name, kind, institution, opening_balance, color, icon,
+                                       archived, sort_order, created_at, credit_limit)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?10)",
+                params![
+                    id,
+                    input.name,
+                    input.kind,
+                    input.institution,
+                    input.opening_balance,
+                    input.color,
+                    input.icon,
+                    next,
+                    now(),
+                    if input.kind == "credit" { input.credit_limit } else { 0 }
+                ],
+            )
+            .map_err(oops)?;
+            get_account(conn, &id)
+        }
+    }
+}
+
+pub fn set_account_archived(conn: &Connection, id: &str, archived: bool) -> Result<()> {
+    conn.execute(
+        "UPDATE accounts SET archived = ?2 WHERE id = ?1",
+        params![id, archived as i64],
+    )
+    .map_err(oops)?;
+    Ok(())
+}
+
+pub fn delete_account(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute("DELETE FROM accounts WHERE id = ?1", params![id])
+        .map_err(oops)?;
+    Ok(())
+}
+
+pub fn reorder_accounts(conn: &Connection, ids: Vec<String>) -> Result<()> {
+    for (i, id) in ids.iter().enumerate() {
+        conn.execute(
+            "UPDATE accounts SET sort_order = ?2 WHERE id = ?1",
+            params![id, i as i64],
+        )
+        .map_err(oops)?;
+    }
+    Ok(())
+}
+
+// -------------------------------------------------------------- categories
+
+pub fn list_categories(conn: &Connection) -> Result<Vec<Category>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, kind, name, icon, color, sort_order, parent_id FROM categories
+             ORDER BY kind DESC, sort_order ASC, name ASC",
+        )
+        .map_err(oops)?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(Category {
+                id: r.get(0)?,
+                kind: r.get(1)?,
+                name: r.get(2)?,
+                icon: r.get(3)?,
+                color: r.get(4)?,
+                sort_order: r.get(5)?,
+                parent_id: r.get(6)?,
+            })
+        })
+        .map_err(oops)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(oops)
+}
+
+pub fn save_category(conn: &Connection, input: CategoryInput) -> Result<Category> {
+    // Nesting is exactly one level deep, and a category can never be its own
+    // ancestor — reject anything that would build a deeper or cyclic tree.
+    let parent_id = match input.parent_id.filter(|p| !p.is_empty()) {
+        None => None,
+        Some(parent) => {
+            if Some(&parent) == input.id.as_ref() {
+                return Err("A category cannot be its own parent.".into());
+            }
+            let grandparent: Option<String> = conn
+                .query_row(
+                    "SELECT parent_id FROM categories WHERE id = ?1",
+                    params![parent],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(oops)?
+                .flatten();
+            if grandparent.is_some() {
+                return Err("Categories only nest one level deep.".into());
+            }
+            Some(parent)
+        }
+    };
+
+    let id = match input.id {
+        Some(id) => {
+            conn.execute(
+                "UPDATE categories SET kind = ?2, name = ?3, icon = ?4, color = ?5, parent_id = ?6
+                 WHERE id = ?1",
+                params![id, input.kind, input.name, input.icon, input.color, parent_id],
+            )
+            .map_err(oops)?;
+            // Moving a group under a parent would orphan its children two
+            // levels down, so lift them to the top instead.
+            if parent_id.is_some() {
+                conn.execute(
+                    "UPDATE categories SET parent_id = NULL WHERE parent_id = ?1",
+                    params![id],
+                )
+                .map_err(oops)?;
+            }
+            id
+        }
+        None => {
+            let id = new_id();
+            let next: i64 = conn
+                .query_row(
+                    "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM categories WHERE kind = ?1",
+                    params![input.kind],
+                    |r| r.get(0),
+                )
+                .map_err(oops)?;
+            conn.execute(
+                "INSERT INTO categories (id, kind, name, icon, color, sort_order, parent_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![id, input.kind, input.name, input.icon, input.color, next, parent_id],
+            )
+            .map_err(oops)?;
+            id
+        }
+    };
+    conn.query_row(
+        "SELECT id, kind, name, icon, color, sort_order, parent_id FROM categories WHERE id = ?1",
+        params![id],
+        |r| {
+            Ok(Category {
+                id: r.get(0)?,
+                kind: r.get(1)?,
+                name: r.get(2)?,
+                icon: r.get(3)?,
+                color: r.get(4)?,
+                sort_order: r.get(5)?,
+                parent_id: r.get(6)?,
+            })
+        },
+    )
+    .map_err(oops)
+}
+
+/// Transactions filed under each category, keyed by category id. Categories
+/// with nothing filed under them are left out entirely.
+pub fn category_usage(conn: &Connection) -> Result<HashMap<String, i64>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT category_id, COUNT(*) FROM transactions
+             WHERE category_id IS NOT NULL GROUP BY category_id",
+        )
+        .map_err(oops)?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        .map_err(oops)?;
+    rows.collect::<rusqlite::Result<_>>().map_err(oops)
+}
+
+fn child_ids(conn: &Connection, id: &str) -> Result<Vec<String>> {
+    let mut stmt = conn
+        .prepare("SELECT id FROM categories WHERE parent_id = ?1")
+        .map_err(oops)?;
+    let rows = stmt.query_map(params![id], |r| r.get(0)).map_err(oops)?;
+    rows.collect::<rusqlite::Result<_>>().map_err(oops)
+}
+
+fn category_kind(conn: &Connection, id: &str) -> Result<String> {
+    conn.query_row(
+        "SELECT kind FROM categories WHERE id = ?1",
+        params![id],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(oops)?
+    .ok_or_else(|| "That category no longer exists.".to_string())
+}
+
+/// The single place transactions change hands. A `to` of `None` leaves them
+/// uncategorised. Returns how many moved.
+fn move_transactions(conn: &Connection, from: &[String], to: Option<&str>) -> Result<i64> {
+    if from.is_empty() {
+        return Ok(0);
+    }
+    let sql = format!(
+        "UPDATE transactions SET category_id = ? WHERE category_id IN ({})",
+        placeholders(from.len())
+    );
+    let mut args: Vec<Option<String>> = vec![to.map(str::to_string)];
+    args.extend(from.iter().map(|f| Some(f.clone())));
+    let moved = conn
+        .execute(&sql, params_from_iter(args))
+        .map_err(oops)?;
+    Ok(moved as i64)
+}
+
+/// Files every transaction sitting under `from` — and, when asked, under its
+/// sub-categories — beneath `to` instead, leaving both categories in place.
+pub fn reassign_category(
+    conn: &Connection,
+    from: &str,
+    to: &str,
+    include_children: bool,
+) -> Result<i64> {
+    let mut sources = vec![from.to_string()];
+    if include_children {
+        sources.extend(child_ids(conn, from)?);
+    }
+    if sources.iter().any(|s| s == to) {
+        return Err("Pick a different category to move them to.".into());
+    }
+    if category_kind(conn, from)? != category_kind(conn, to)? {
+        return Err("Income and expense categories can't be mixed.".into());
+    }
+    move_transactions(conn, &sources, Some(to))
+}
+
+/// Removes a category. Its transactions either move to `reassign_to` or fall
+/// back to uncategorised, and its sub-categories go with it only when asked —
+/// otherwise they are promoted to the top level.
+pub fn delete_category(
+    conn: &Connection,
+    id: &str,
+    reassign_to: Option<String>,
+    delete_children: bool,
+) -> Result<()> {
+    let mut doomed = vec![id.to_string()];
+    if delete_children {
+        doomed.extend(child_ids(conn, id)?);
+    }
+
+    let target = match reassign_to.filter(|t| !t.is_empty()) {
+        None => None,
+        Some(target) => {
+            if doomed.contains(&target) {
+                return Err("Pick a category that isn't being deleted.".into());
+            }
+            if category_kind(conn, id)? != category_kind(conn, &target)? {
+                return Err("Income and expense categories can't be mixed.".into());
+            }
+            Some(target)
+        }
+    };
+
+    // Transactions move first: once the rows go, the foreign key has already
+    // nulled the column and there is nothing left to point anywhere.
+    move_transactions(conn, &doomed, target.as_deref())?;
+
+    if !delete_children {
+        // Promote any children rather than deleting them along with the group.
+        conn.execute(
+            "UPDATE categories SET parent_id = NULL WHERE parent_id = ?1",
+            params![id],
+        )
+        .map_err(oops)?;
+    }
+    let sql = format!(
+        "DELETE FROM categories WHERE id IN ({})",
+        placeholders(doomed.len())
+    );
+    conn.execute(&sql, params_from_iter(doomed.iter()))
+        .map_err(oops)?;
+    Ok(())
+}
+
+// ------------------------------------------------------------ transactions
+
+fn tx_from_row(r: &Row) -> rusqlite::Result<Transaction> {
+    Ok(Transaction {
+        id: r.get(0)?,
+        kind: r.get(1)?,
+        amount: r.get(2)?,
+        account_id: r.get(3)?,
+        to_account_id: r.get(4)?,
+        category_id: r.get(5)?,
+        merchant: r.get(6)?,
+        note: r.get(7)?,
+        occurred_at: r.get(8)?,
+        created_at: r.get(9)?,
+        account_name: r.get(10)?,
+        account_color: r.get(11)?,
+        to_account_name: r.get(12)?,
+        category_name: r.get(13)?,
+        category_icon: r.get(14)?,
+        category_color: r.get(15)?,
+        category_group_id: r.get(16)?,
+        category_group_name: r.get(17)?,
+    })
+}
+
+/// A typed amount as paise, when what was typed is only a number. Commas and
+/// a rupee mark are allowed through, since that is how the app prints them.
+fn rupees_to_paise(text: &str) -> Option<Paise> {
+    let cleaned: String = text
+        .chars()
+        .filter(|c| !matches!(c, ',' | ' ' | '\u{20B9}'))
+        .collect();
+    if cleaned.is_empty() || !cleaned.chars().all(|c| c.is_ascii_digit() || c == '.') {
+        return None;
+    }
+    let (whole, frac) = cleaned.split_once('.').unwrap_or((cleaned.as_str(), ""));
+    let whole: i64 = whole.parse().ok()?;
+    let paise: i64 = match frac.len() {
+        0 => 0,
+        1 => frac.parse::<i64>().ok()? * 10,
+        _ => frac.get(..2)?.parse().ok()?,
+    };
+    Some(whole * 100 + paise)
+}
+
+fn placeholders(n: usize) -> String {
+    std::iter::repeat("?").take(n).collect::<Vec<_>>().join(",")
+}
+
+/// The WHERE clause and its arguments for a query, built once so that the rows
+/// and the totals beside them can never disagree about what is being shown.
+fn tx_filters(q: &TransactionQuery) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
+    let mut wheres: Vec<String> = Vec::new();
+    let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+    if let Some(s) = q.search.as_ref().filter(|s| !s.trim().is_empty()) {
+        let term = s.trim();
+        // `ta.name` matters as much as `a.name`: a transfer is most easily
+        // found by where it went, and searching only the source side hides
+        // every posting into an account from a search for that account.
+        let mut clause =
+            String::from("(t.merchant LIKE ? OR t.note LIKE ? OR a.name LIKE ? OR ta.name LIKE ? OR c.name LIKE ?");
+        let like = format!("%{term}%");
+        for _ in 0..5 {
+            args.push(Box::new(like.clone()));
+        }
+        // A bare number is almost always an amount — "15000" should find the
+        // ₹15,000 SIP rather than nothing at all.
+        if let Some(paise) = rupees_to_paise(term) {
+            clause.push_str(" OR t.amount = ?");
+            args.push(Box::new(paise));
+        }
+        clause.push(')');
+        wheres.push(clause);
+    }
+    if let Some(kinds) = q.kinds.as_ref().filter(|v| !v.is_empty()) {
+        wheres.push(format!("t.kind IN ({})", placeholders(kinds.len())));
+        for k in kinds {
+            args.push(Box::new(k.clone()));
+        }
+    }
+    if let Some(ids) = q.account_ids.as_ref().filter(|v| !v.is_empty()) {
+        let ph = placeholders(ids.len());
+        // Which side of the posting to look at. It only tells transfers apart —
+        // income and expenses touch one account — but for those it is the
+        // difference between "money I moved out of savings" and "into it".
+        let sides = match q.account_side.as_deref() {
+            Some("from") => 1,
+            Some("to") => 2,
+            _ => 0,
+        };
+        wheres.push(match sides {
+            1 => format!("t.account_id IN ({ph})"),
+            2 => format!("t.to_account_id IN ({ph})"),
+            _ => format!("(t.account_id IN ({ph}) OR t.to_account_id IN ({ph}))"),
+        });
+        for _ in 0..if sides == 0 { 2 } else { 1 } {
+            for id in ids {
+                args.push(Box::new(id.clone()));
+            }
+        }
+    }
+    if let Some(ids) = q.category_ids.as_ref().filter(|v| !v.is_empty()) {
+        wheres.push(format!("t.category_id IN ({})", placeholders(ids.len())));
+        for id in ids {
+            args.push(Box::new(id.clone()));
+        }
+    }
+    if let Some(from) = q.from.as_ref() {
+        wheres.push("t.occurred_at >= ?".to_string());
+        args.push(Box::new(from.clone()));
+    }
+    if let Some(to) = q.to.as_ref() {
+        // `to` is an inclusive date; compare against the end of that day.
+        wheres.push("t.occurred_at <= ?".to_string());
+        args.push(Box::new(format!("{to}T23:59:59")));
+    }
+
+    let clause = if wheres.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", wheres.join(" AND "))
+    };
+    (clause, args)
+}
+
+pub fn list_transactions(conn: &Connection, q: TransactionQuery) -> Result<Vec<Transaction>> {
+    let (clause, args) = tx_filters(&q);
+    let mut sql = format!("{TX_SELECT}{TX_FROM}{clause} ORDER BY t.occurred_at DESC, t.created_at DESC");
+    if let Some(limit) = q.limit {
+        sql.push_str(&format!(" LIMIT {limit}"));
+        if let Some(offset) = q.offset {
+            sql.push_str(&format!(" OFFSET {offset}"));
+        }
+    }
+
+    let mut stmt = conn.prepare(&sql).map_err(oops)?;
+    let rows = stmt
+        .query_map(params_from_iter(args.iter().map(|b| b.as_ref())), tx_from_row)
+        .map_err(oops)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(oops)
+}
+
+/// How many postings match, and what they come to. Deliberately ignores
+/// `limit`: the list may be showing a page, but the totals above it describe
+/// everything the filters select, not the slice that happens to be loaded.
+pub fn transaction_summary(conn: &Connection, q: TransactionQuery) -> Result<TransactionSummary> {
+    let (clause, args) = tx_filters(&q);
+    let sql = format!(
+        "SELECT COUNT(*),
+                COALESCE(SUM(CASE WHEN t.kind = 'income'   THEN t.amount ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN t.kind = 'expense'  THEN t.amount ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN t.kind = 'transfer' THEN t.amount ELSE 0 END), 0)
+         {TX_FROM}{clause}"
+    );
+    conn.query_row(
+        &sql,
+        params_from_iter(args.iter().map(|b| b.as_ref())),
+        |r| {
+            Ok(TransactionSummary {
+                count: r.get(0)?,
+                income: r.get(1)?,
+                expense: r.get(2)?,
+                transferred: r.get(3)?,
+            })
+        },
+    )
+    .map_err(oops)
+}
+
+fn get_transaction(conn: &Connection, id: &str) -> Result<Transaction> {
+    let sql = format!("{TX_SELECT}{TX_FROM} WHERE t.id = ?1");
+    conn.query_row(&sql, params![id], tx_from_row).map_err(oops)
+}
+
+pub fn save_transaction(conn: &Connection, input: TransactionInput) -> Result<Transaction> {
+    if input.amount <= 0 {
+        return Err("Amount must be greater than zero.".into());
+    }
+    if input.kind == "transfer" {
+        match input.to_account_id.as_deref() {
+            None | Some("") => return Err("Pick an account to transfer into.".into()),
+            Some(to) if to == input.account_id => {
+                return Err("A transfer needs two different accounts.".into())
+            }
+            _ => {}
+        }
+    }
+    // Transfers move money between your own accounts, so they are never
+    // categorised — clear anything the form left behind.
+    let category_id = if input.kind == "transfer" {
+        None
+    } else {
+        input.category_id.filter(|c| !c.is_empty())
+    };
+    let to_account_id = if input.kind == "transfer" {
+        input.to_account_id
+    } else {
+        None
+    };
+
+    let id = match input.id {
+        Some(id) => {
+            conn.execute(
+                "UPDATE transactions SET kind = ?2, amount = ?3, account_id = ?4,
+                        to_account_id = ?5, category_id = ?6, merchant = ?7, note = ?8,
+                        occurred_at = ?9
+                 WHERE id = ?1",
+                params![
+                    id,
+                    input.kind,
+                    input.amount,
+                    input.account_id,
+                    to_account_id,
+                    category_id,
+                    input.merchant,
+                    input.note,
+                    input.occurred_at
+                ],
+            )
+            .map_err(oops)?;
+            id
+        }
+        None => {
+            let id = new_id();
+            conn.execute(
+                "INSERT INTO transactions (id, kind, amount, account_id, to_account_id,
+                                           category_id, merchant, note, occurred_at, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    id,
+                    input.kind,
+                    input.amount,
+                    input.account_id,
+                    to_account_id,
+                    category_id,
+                    input.merchant,
+                    input.note,
+                    input.occurred_at,
+                    now()
+                ],
+            )
+            .map_err(oops)?;
+            id
+        }
+    };
+    get_transaction(conn, &id)
+}
+
+pub fn delete_transaction(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute("DELETE FROM transactions WHERE id = ?1", params![id])
+        .map_err(oops)?;
+    Ok(())
+}
+
+// ------------------------------------------------------------------- debts
+
+/// A short label for a linked posting, so the UI can name what opened a debt
+/// without a second round-trip.
+const TX_LABEL: &str = "
+    (SELECT CASE WHEN t.merchant <> '' THEN t.merchant
+                 ELSE COALESCE(c.name, 'Transaction') END
+     FROM transactions t LEFT JOIN categories c ON c.id = t.category_id
+     WHERE t.id = ";
+
+pub fn list_debts(conn: &Connection) -> Result<Vec<Debt>> {
+    let sql = format!(
+        "SELECT d.id, d.direction, d.counterparty, d.principal, d.opened_on, d.due_on,
+                d.note, d.settled_at, d.created_at, d.transaction_id,
+                {TX_LABEL} d.transaction_id),
+                COALESCE((SELECT SUM(p.amount) FROM debt_payments p WHERE p.debt_id = d.id), 0)
+         FROM debts d
+         ORDER BY d.settled_at IS NOT NULL, d.opened_on DESC, d.created_at DESC"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(oops)?;
+    let mut debts = stmt
+        .query_map([], |r| {
+            let principal: Paise = r.get(3)?;
+            let paid: Paise = r.get(11)?;
+            let settled_at: Option<String> = r.get(7)?;
+            let outstanding = (principal - paid).max(0);
+            Ok(Debt {
+                id: r.get(0)?,
+                direction: r.get(1)?,
+                counterparty: r.get(2)?,
+                principal,
+                opened_on: r.get(4)?,
+                due_on: r.get(5)?,
+                note: r.get(6)?,
+                settled: settled_at.is_some() || outstanding == 0,
+                settled_at,
+                created_at: r.get(8)?,
+                transaction_id: r.get(9)?,
+                transaction_label: r.get(10)?,
+                paid,
+                outstanding,
+                payments: Vec::new(),
+            })
+        })
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?;
+
+    let sql = format!(
+        "SELECT p.id, p.debt_id, p.amount, p.occurred_at, p.note, p.transaction_id,
+                {TX_LABEL} p.transaction_id), p.created_at
+         FROM debt_payments p ORDER BY p.occurred_at DESC"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(oops)?;
+    let payments = stmt
+        .query_map([], |r| {
+            Ok(DebtPayment {
+                id: r.get(0)?,
+                debt_id: r.get(1)?,
+                amount: r.get(2)?,
+                occurred_at: r.get(3)?,
+                note: r.get(4)?,
+                transaction_id: r.get(5)?,
+                transaction_label: r.get(6)?,
+                created_at: r.get(7)?,
+            })
+        })
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?;
+
+    for payment in payments {
+        if let Some(debt) = debts.iter_mut().find(|d| d.id == payment.debt_id) {
+            debt.payments.push(payment);
+        }
+    }
+    Ok(debts)
+}
+
+pub fn save_debt(conn: &Connection, input: DebtInput) -> Result<()> {
+    if input.principal <= 0 {
+        return Err("A debt needs an amount greater than zero.".into());
+    }
+    if input.counterparty.trim().is_empty() {
+        return Err("Who is this debt with?".into());
+    }
+    match input.id {
+        Some(id) => {
+            // Preserve when it was settled unless the flag itself changed.
+            let previous: Option<String> = conn
+                .query_row("SELECT settled_at FROM debts WHERE id = ?1", params![id], |r| {
+                    r.get(0)
+                })
+                .optional()
+                .map_err(oops)?
+                .flatten();
+            let settled_at = match input.settled {
+                Some(true) => previous.clone().or_else(|| Some(now())),
+                Some(false) => None,
+                None => previous,
+            };
+            conn.execute(
+                "UPDATE debts SET direction = ?2, counterparty = ?3, principal = ?4,
+                        opened_on = ?5, due_on = ?6, note = ?7, transaction_id = ?8,
+                        settled_at = ?9
+                 WHERE id = ?1",
+                params![
+                    id,
+                    input.direction,
+                    input.counterparty.trim(),
+                    input.principal,
+                    input.opened_on,
+                    input.due_on,
+                    input.note,
+                    input.transaction_id,
+                    settled_at
+                ],
+            )
+            .map_err(oops)?;
+        }
+        None => {
+            conn.execute(
+                "INSERT INTO debts (id, direction, counterparty, principal, opened_on,
+                                    due_on, note, settled_at, created_at, transaction_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    new_id(),
+                    input.direction,
+                    input.counterparty.trim(),
+                    input.principal,
+                    input.opened_on,
+                    input.due_on,
+                    input.note,
+                    if input.settled == Some(true) { Some(now()) } else { None },
+                    now(),
+                    input.transaction_id
+                ],
+            )
+            .map_err(oops)?;
+        }
+    }
+    Ok(())
+}
+
+pub fn delete_debt(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute("DELETE FROM debts WHERE id = ?1", params![id])
+        .map_err(oops)?;
+    Ok(())
+}
+
+pub fn save_debt_payment(conn: &Connection, input: DebtPaymentInput) -> Result<()> {
+    if input.amount <= 0 {
+        return Err("A repayment needs an amount greater than zero.".into());
+    }
+    match input.id {
+        Some(id) => conn.execute(
+            "UPDATE debt_payments SET amount = ?2, occurred_at = ?3, note = ?4,
+                    transaction_id = ?5
+             WHERE id = ?1",
+            params![id, input.amount, input.occurred_at, input.note, input.transaction_id],
+        ),
+        None => conn.execute(
+            "INSERT INTO debt_payments (id, debt_id, amount, occurred_at, note,
+                                        transaction_id, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                new_id(),
+                input.debt_id,
+                input.amount,
+                input.occurred_at,
+                input.note,
+                input.transaction_id,
+                now()
+            ],
+        ),
+    }
+    .map_err(oops)?;
+    Ok(())
+}
+
+pub fn delete_debt_payment(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute("DELETE FROM debt_payments WHERE id = ?1", params![id])
+        .map_err(oops)?;
+    Ok(())
+}
+
+/// Outstanding totals across open debts, as (owed to you, owed by you).
+fn debt_positions(conn: &Connection) -> Result<(Paise, Paise)> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT d.direction,
+                    COALESCE(SUM(MAX(0, d.principal
+                      - COALESCE((SELECT SUM(p.amount) FROM debt_payments p
+                                  WHERE p.debt_id = d.id), 0))), 0)
+             FROM debts d WHERE d.settled_at IS NULL GROUP BY d.direction",
+        )
+        .map_err(oops)?;
+    let mut lent = 0;
+    let mut borrowed = 0;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Paise>(1)?)))
+        .map_err(oops)?;
+    for row in rows {
+        let (direction, total) = row.map_err(oops)?;
+        if direction == "lent" {
+            lent = total;
+        } else {
+            borrowed = total;
+        }
+    }
+    Ok((lent, borrowed))
+}
+
+// ------------------------------------------------------------- investments
+
+/// Cached prices are keyed by instrument: spot gold and the rupee are shared
+/// by every gold holding, while each fund carries its own scheme's NAV.
+pub const KEY_GOLD: &str = "gold.usd_oz";
+pub const KEY_FX: &str = "fx.usdinr";
+
+/// The landed-cost multiplier over international spot gold, scaled by 10^4.
+/// Indian physical gold carries import duty and GST on top of the world price
+/// — about 9% between them — and those rates move with the budget, so this is
+/// a setting rather than a constant compiled into the app.
+pub const GOLD_LANDED_KEY: &str = "gold_landed_e4";
+const GOLD_LANDED_DEFAULT: i64 = 10_900;
+
+pub fn gold_landed_e4(conn: &Connection) -> Result<i64> {
+    Ok(setting(conn, GOLD_LANDED_KEY)?
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(GOLD_LANDED_DEFAULT))
+}
+
+/// Divide rounding half away from zero, so the two sides of a sale round by
+/// the same distance rather than drifting towards it.
+fn div_round(num: i128, den: i128) -> i128 {
+    if num >= 0 {
+        (num + den / 2) / den
+    } else {
+        (num - den / 2) / den
+    }
+}
+
+/// `quantity_e4 × price_e4 / 10^6`, in whole paise: each input carries a 10^4
+/// scale and paise adds another 10^2. Quantities are summed exactly across
+/// every lot first, so this rounds once per holding rather than once per buy.
+fn market_value_paise(qty_e4: Scaled, price_e4: Scaled) -> Paise {
+    div_round(qty_e4 as i128 * price_e4 as i128, 1_000_000) as Paise
+}
+
+/// Spot dollars an ounce folded with the rupee, the landed-cost multiplier and
+/// the metal's purity, into rupees a gram. The numerator reaches ~10^21, which
+/// is why this works in i128 — i64 overflows it a few hundred times over.
+pub fn gold_price_e4(usd_oz_e4: i64, inr_usd_e4: i64, landed_e4: i64, purity_e4: i64) -> Scaled {
+    /// Grams in a troy ounce, scaled by 10^4.
+    const TROY_OUNCE_G_E4: i128 = 311_035;
+    let num =
+        usd_oz_e4 as i128 * inr_usd_e4 as i128 * landed_e4 as i128 * purity_e4 as i128;
+    div_round(num, 10_000 * 10_000 * TROY_OUNCE_G_E4) as Scaled
+}
+
+/// Everything the price cache holds, read once so that valuing a page of
+/// holdings doesn't hit the database per row.
+struct PriceBook {
+    rows: HashMap<String, (Scaled, String)>,
+    landed_e4: i64,
+}
+
+impl PriceBook {
+    fn load(conn: &Connection) -> Result<Self> {
+        let mut stmt = conn
+            .prepare("SELECT key, price_e4, as_of FROM price_cache")
+            .map_err(oops)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    (r.get::<_, Scaled>(1)?, r.get::<_, String>(2)?),
+                ))
+            })
+            .map_err(oops)?
+            .collect::<rusqlite::Result<HashMap<_, _>>>()
+            .map_err(oops)?;
+        Ok(Self {
+            rows,
+            landed_e4: gold_landed_e4(conn)?,
+        })
+    }
+
+    /// Rupees per gram or per unit for one holding, with the date that price
+    /// is good for. `None` when nothing has been fetched for it yet — every
+    /// caller then leaves the holding out rather than valuing it at nothing.
+    fn price_for(
+        &self,
+        kind: &str,
+        scheme_code: Option<&str>,
+        purity_e4: Option<Scaled>,
+    ) -> Option<(Scaled, String)> {
+        if kind == "gold" {
+            let (usd_oz, as_of) = self.rows.get(KEY_GOLD)?;
+            let (inr_usd, _) = self.rows.get(KEY_FX)?;
+            let purity = purity_e4.unwrap_or(10_000);
+            Some((
+                gold_price_e4(*usd_oz, *inr_usd, self.landed_e4, purity),
+                as_of.clone(),
+            ))
+        } else {
+            let (nav, as_of) = self.rows.get(&format!("mf:{}", scheme_code?))?;
+            Some((*nav, as_of.clone()))
+        }
+    }
+}
+
+/// A scaled quantity written out plainly, for error messages.
+fn fmt_qty(q_e4: Scaled) -> String {
+    let whole = q_e4 / 10_000;
+    let frac = (q_e4 % 10_000).abs();
+    let s = format!("{whole}.{frac:04}");
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+fn account_kind(conn: &Connection, id: &str) -> Result<String> {
+    conn.query_row("SELECT kind FROM accounts WHERE id = ?1", params![id], |r| {
+        r.get(0)
+    })
+    .optional()
+    .map_err(oops)?
+    .ok_or_else(|| "That account no longer exists.".to_string())
+}
+
+/// Grams or units on hand, optionally ignoring one lot — the one being edited,
+/// whose old quantity must not be counted against its new one.
+fn units_held(conn: &Connection, holding_id: &str, except: Option<&str>) -> Result<Scaled> {
+    conn.query_row(
+        "SELECT COALESCE(SUM(CASE WHEN kind = 'buy' THEN quantity_e4
+                                  ELSE -quantity_e4 END), 0)
+         FROM investment_lots
+         WHERE holding_id = ?1 AND (?2 IS NULL OR id <> ?2)",
+        params![holding_id, except],
+        |r| r.get(0),
+    )
+    .map_err(oops)
+}
+
+pub fn list_holdings(conn: &Connection) -> Result<Vec<Holding>> {
+    let book = PriceBook::load(conn)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT h.id, h.kind, h.name, h.account_id, a.name, h.scheme_code, h.isin,
+                    h.purity_e4, h.note, h.closed_at, h.created_at,
+                    CASE WHEN h.kind = 'gold' THEN h.grams_e4 ELSE
+                      COALESCE((SELECT SUM(CASE WHEN l.kind = 'buy' THEN l.quantity_e4
+                                                ELSE -l.quantity_e4 END)
+                                FROM investment_lots l WHERE l.holding_id = h.id), 0) END,
+                    COALESCE((SELECT SUM(l.amount) FROM investment_lots l
+                              WHERE l.holding_id = h.id AND l.kind = 'buy'), 0),
+                    COALESCE((SELECT SUM(l.amount) FROM investment_lots l
+                              WHERE l.holding_id = h.id AND l.kind = 'sell'), 0)
+             FROM holdings h
+             LEFT JOIN accounts a ON a.id = h.account_id
+             ORDER BY h.closed_at IS NOT NULL, h.kind, h.created_at DESC",
+        )
+        .map_err(oops)?;
+    let mut holdings = stmt
+        .query_map([], |r| {
+            let kind: String = r.get(1)?;
+            let is_gold = kind == "gold";
+            let scheme_code: Option<String> = r.get(5)?;
+            let purity_e4: Option<Scaled> = r.get(7)?;
+            let closed_at: Option<String> = r.get(9)?;
+            let units_e4: Scaled = r.get(11)?;
+            let invested: Paise = r.get(12)?;
+            let realised: Paise = r.get(13)?;
+            let priced = book.price_for(&kind, scheme_code.as_deref(), purity_e4);
+            let market_value = priced
+                .as_ref()
+                .map(|(price, _)| market_value_paise(units_e4.max(0), *price))
+                .unwrap_or(0);
+            Ok(Holding {
+                id: r.get(0)?,
+                kind,
+                name: r.get(2)?,
+                account_id: r.get(3)?,
+                account_name: r.get(4)?,
+                scheme_code,
+                isin: r.get(6)?,
+                purity_e4,
+                note: r.get(8)?,
+                closed: closed_at.is_some(),
+                closed_at,
+                created_at: r.get(10)?,
+                units_e4,
+                invested,
+                realised,
+                price_e4: priced.as_ref().map(|(price, _)| *price),
+                price_as_of: priced.map(|(_, as_of)| as_of),
+                market_value,
+                // What the position has made overall: what it is worth now,
+                // plus what selling already returned, less what it all cost.
+                // Gold has none of that behind it — it is weighed, not bought
+                // and sold — so it reports no return rather than a fake one.
+                total_return: if is_gold { 0 } else { market_value + realised - invested },
+                lots: Vec::new(),
+            })
+        })
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?;
+
+    let sql = format!(
+        "SELECT l.id, l.holding_id, l.kind, l.quantity_e4, l.amount, l.occurred_at,
+                l.allotted_at, l.transaction_id, {TX_LABEL} l.transaction_id),
+                CASE WHEN t.account_id = h.account_id THEN t.to_account_id
+                     ELSE t.account_id END,
+                l.owns_transaction, l.note, l.created_at
+         FROM investment_lots l
+         JOIN holdings h ON h.id = l.holding_id
+         LEFT JOIN transactions t ON t.id = l.transaction_id
+         ORDER BY COALESCE(l.allotted_at, l.occurred_at) DESC, l.created_at DESC"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(oops)?;
+    let lots = stmt
+        .query_map([], |r| {
+            Ok(InvestmentLot {
+                id: r.get(0)?,
+                holding_id: r.get(1)?,
+                kind: r.get(2)?,
+                quantity_e4: r.get(3)?,
+                amount: r.get(4)?,
+                occurred_at: r.get(5)?,
+                allotted_at: r.get(6)?,
+                transaction_id: r.get(7)?,
+                transaction_label: r.get(8)?,
+                cash_account_id: r.get(9)?,
+                owns_transaction: r.get::<_, i64>(10)? != 0,
+                note: r.get(11)?,
+                created_at: r.get(12)?,
+            })
+        })
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?;
+
+    for lot in lots {
+        if let Some(holding) = holdings.iter_mut().find(|h| h.id == lot.holding_id) {
+            holding.lots.push(lot);
+        }
+    }
+    Ok(holdings)
+}
+
+pub fn save_holding(conn: &Connection, input: HoldingInput) -> Result<()> {
+    if input.name.trim().is_empty() {
+        return Err("Give the holding a name.".into());
+    }
+    if input.kind != "gold" && input.kind != "fund" {
+        return Err("A holding is either gold or a fund.".into());
+    }
+
+    // Each kind carries only its own fields, so changing a holding's kind can
+    // never leave a scheme code on a gold bar. Account credit limits are kept
+    // tidy the same way.
+    let (scheme_code, isin, purity_e4, grams_e4) = if input.kind == "fund" {
+        let code = input
+            .scheme_code
+            .map(|c| c.trim().to_string())
+            .filter(|c| !c.is_empty())
+            .ok_or("Pick the fund's scheme, so its NAV can be fetched.")?;
+        (Some(code), input.isin, None, 0)
+    } else {
+        let purity = input.purity_e4.unwrap_or(10_000);
+        if purity <= 0 || purity > 10_000 {
+            return Err("Purity runs from 1 up to 24 carat.".into());
+        }
+        // Weight is the whole of a gold holding. Without it there is nothing
+        // to value, so it is asked for rather than defaulted to nothing.
+        let grams = input.grams_e4.unwrap_or(0);
+        if grams <= 0 {
+            return Err("How many grams? Gold is tracked by weight.".into());
+        }
+        (None, None, Some(purity), grams)
+    };
+
+    // Gold sits in a locker, not in an account: nothing posts on its behalf,
+    // so there is no investment account for it to move money through.
+    let account_id = input
+        .account_id
+        .filter(|a| !a.is_empty() && input.kind == "fund");
+    if let Some(id) = &account_id {
+        if account_kind(conn, id)? != "investment" {
+            return Err("Purchases post into an investment account — pick one of those.".into());
+        }
+    }
+
+    match input.id {
+        Some(id) => {
+            // A fund's entries have nowhere to go once it becomes gold, and
+            // silently dropping them would take their postings' basis with
+            // them. Say so instead of losing the history.
+            if input.kind == "gold" {
+                let entries: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM investment_lots WHERE holding_id = ?1",
+                        params![id],
+                        |r| r.get(0),
+                    )
+                    .map_err(oops)?;
+                if entries > 0 {
+                    return Err(
+                        "This holding has purchases recorded against it. Delete those first, or keep it a fund."
+                            .into(),
+                    );
+                }
+            }
+            // Preserve when it was closed unless the flag itself changed.
+            let previous: Option<String> = conn
+                .query_row(
+                    "SELECT closed_at FROM holdings WHERE id = ?1",
+                    params![id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(oops)?
+                .flatten();
+            let closed_at = match input.closed {
+                Some(true) => previous.clone().or_else(|| Some(now())),
+                Some(false) => None,
+                None => previous,
+            };
+            conn.execute(
+                "UPDATE holdings SET kind = ?2, name = ?3, account_id = ?4, scheme_code = ?5,
+                        isin = ?6, purity_e4 = ?7, grams_e4 = ?8, note = ?9, closed_at = ?10
+                 WHERE id = ?1",
+                params![
+                    id,
+                    input.kind,
+                    input.name.trim(),
+                    account_id,
+                    scheme_code,
+                    isin,
+                    purity_e4,
+                    grams_e4,
+                    input.note,
+                    closed_at
+                ],
+            )
+        }
+        None => conn.execute(
+            "INSERT INTO holdings (id, kind, name, account_id, scheme_code, isin,
+                                   purity_e4, grams_e4, note, closed_at, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                new_id(),
+                input.kind,
+                input.name.trim(),
+                account_id,
+                scheme_code,
+                isin,
+                purity_e4,
+                grams_e4,
+                input.note,
+                if input.closed == Some(true) { Some(now()) } else { None },
+                now()
+            ],
+        ),
+    }
+    .map_err(oops)?;
+    Ok(())
+}
+
+/// Drops the holding and its lots. The transfers those lots posted are real
+/// entries in your book — money did leave the bank — so they stay put.
+pub fn delete_holding(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute("DELETE FROM holdings WHERE id = ?1", params![id])
+        .map_err(oops)?;
+    Ok(())
+}
+
+pub fn save_investment_lot(conn: &Connection, input: InvestmentLotInput) -> Result<()> {
+    if input.quantity_e4 <= 0 {
+        return Err("How much was bought? Enter a quantity above zero.".into());
+    }
+    if input.amount < 0 {
+        return Err("An amount cannot be negative.".into());
+    }
+    if input.kind != "buy" && input.kind != "sell" {
+        return Err("A lot is either a buy or a sell.".into());
+    }
+
+    // The money moves on one day and the units land on another: an SIP debited
+    // on the 5th is allotted at the NAV of whatever day the AMC processed it,
+    // and a redemption pays out days after the units leave. The cash date is
+    // what the ledger posts on; the allotment date is what the unit price
+    // belongs to. Same day, which is most of them, stores nothing.
+    let paid_on = day_of(&input.occurred_at, "The date the money moved")?;
+    let allotted_at = match input.allotted_at.as_deref().map(str::trim) {
+        Some(text) if !text.is_empty() => {
+            let day = day_of(text, "The allotment date")?;
+            (day != paid_on).then_some(day)
+        }
+        _ => None,
+    };
+
+    let (holding_name, holding_account, holding_kind) = conn
+        .query_row(
+            "SELECT name, account_id, kind FROM holdings WHERE id = ?1",
+            params![input.holding_id],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(oops)?
+        .ok_or("That holding no longer exists.")?;
+
+    // Gold is weighed, not traded. There is nothing to buy or sell against
+    // it — the grams on the holding are the whole record.
+    if holding_kind == "gold" {
+        return Err(
+            "Gold is tracked by the gram — edit the holding to change how much you hold.".into(),
+        );
+    }
+
+    // Selling more than is held would drive the position negative, and every
+    // valuation from here on assumes it never is.
+    if input.kind == "sell" {
+        let held = units_held(conn, &input.holding_id, input.id.as_deref())?;
+        if input.quantity_e4 > held {
+            return Err(format!(
+                "You hold {} of {holding_name} — that is less than the {} being sold.",
+                fmt_qty(held),
+                fmt_qty(input.quantity_e4)
+            ));
+        }
+    }
+
+    let cash = input.cash_account_id.filter(|a| !a.is_empty());
+    let linked = input.transaction_id.filter(|t| !t.is_empty());
+    if cash.is_some() && linked.is_some() {
+        return Err(
+            "A purchase either posts a new transfer or points at one you already have — not both."
+                .into(),
+        );
+    }
+
+    // What this lot was attached to before, and whether it wrote that itself.
+    let (had_tx, had_own) = match &input.id {
+        Some(id) => conn
+            .query_row(
+                "SELECT transaction_id, owns_transaction FROM investment_lots WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, i64>(1)? != 0)),
+            )
+            .optional()
+            .map_err(oops)?
+            .unwrap_or((None, false)),
+        None => (None, false),
+    };
+    /// Drops the posting a lot wrote for itself. One that was linked belongs
+    /// to the book, not to us, so it is only ever detached.
+    fn drop_owned(conn: &Connection, tx: &Option<String>, owned: bool) -> Result<()> {
+        match (owned, tx) {
+            (true, Some(id)) => delete_transaction(conn, id),
+            _ => Ok(()),
+        }
+    }
+
+    let (transaction_id, owns) = match (&cash, &linked) {
+        // Pointing at a record that is already in the book. Nothing is written
+        // to the ledger — the money moved when you recorded it the first time.
+        (_, Some(tx_id)) => {
+            let tx = get_transaction(conn, tx_id)
+                .map_err(|_| "That record is no longer in your book.".to_string())?;
+
+            // One posting backs one lot; sharing would count its cost twice.
+            let taken: Option<String> = conn
+                .query_row(
+                    "SELECT id FROM investment_lots
+                     WHERE transaction_id = ?1 AND (?2 IS NULL OR id <> ?2)",
+                    params![tx_id, input.id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(oops)?;
+            if taken.is_some() {
+                return Err("That record is already attached to another entry.".into());
+            }
+
+            // Attaching a transfer says "this posting is the purchase", so the
+            // transfer follows the holding: its investment side is repointed at
+            // the holding's account. Left alone, the cash would sit in whatever
+            // account it went to while the units were counted on top of it —
+            // the same money twice.
+            //
+            // An expense needs no such fix: that money genuinely left the book,
+            // so the units are new to the balance sheet on their own.
+            if tx.kind == "transfer" {
+                let account_id = holding_account.clone().ok_or(
+                    "Give this holding an investment account first — that is where this transfer would be pointed.",
+                )?;
+                let cash_side = if input.kind == "buy" {
+                    tx.account_id.clone()
+                } else {
+                    tx.to_account_id.clone().unwrap_or_default()
+                };
+                let already_right = if input.kind == "buy" {
+                    tx.to_account_id.as_deref() == Some(account_id.as_str())
+                } else {
+                    tx.account_id == account_id
+                };
+                if !already_right {
+                    if cash_side == account_id {
+                        return Err(format!(
+                            "That transfer already uses {} on its other side, and a transfer needs two different accounts.",
+                            get_account(conn, &account_id)
+                                .map(|a| a.name)
+                                .unwrap_or_else(|_| "this account".into())
+                        ));
+                    }
+                    let (from, to) = if input.kind == "buy" {
+                        (cash_side, account_id)
+                    } else {
+                        (account_id, cash_side)
+                    };
+                    save_transaction(
+                        conn,
+                        TransactionInput {
+                            id: Some(tx.id.clone()),
+                            kind: "transfer".into(),
+                            amount: tx.amount,
+                            account_id: from,
+                            to_account_id: Some(to),
+                            category_id: None,
+                            merchant: tx.merchant.clone(),
+                            note: tx.note.clone(),
+                            occurred_at: tx.occurred_at.clone(),
+                        },
+                    )?;
+                }
+            }
+
+            if had_tx.as_deref() != Some(tx_id.as_str()) {
+                drop_owned(conn, &had_tx, had_own)?;
+            }
+            (Some(tx_id.clone()), false)
+        }
+
+        // Writing the transfer ourselves. Buying moves cash into the investment
+        // account, selling brings it back; either way it nets to zero across the
+        // book, which is the point — cash became an asset rather than was spent.
+        (Some(cash_id), None) => {
+            let account_id = holding_account
+                .clone()
+                .ok_or("Give this holding an investment account before posting purchases to it.")?;
+            if *cash_id == account_id {
+                return Err("Pick a different account for the money to come from.".into());
+            }
+            if input.amount == 0 {
+                return Err(
+                    "There is no money to move — leave this blank for a lot that cost nothing."
+                        .into(),
+                );
+            }
+            let (from, to) = if input.kind == "buy" {
+                (cash_id.clone(), account_id)
+            } else {
+                (account_id, cash_id.clone())
+            };
+            let day = &paid_on;
+            // Only a posting this lot wrote may be rewritten; a linked one is
+            // the user's record and is left exactly as they entered it.
+            let reuse = if had_own { had_tx.clone() } else { None };
+            let tx = save_transaction(
+                conn,
+                TransactionInput {
+                    id: reuse,
+                    kind: "transfer".into(),
+                    amount: input.amount,
+                    account_id: from,
+                    to_account_id: Some(to),
+                    category_id: None,
+                    merchant: holding_name,
+                    note: None,
+                    occurred_at: format!("{day}T12:00"),
+                },
+            )?;
+            (Some(tx.id), true)
+        }
+
+        // Recorded without touching the ledger, for anything that predates it.
+        (None, None) => {
+            drop_owned(conn, &had_tx, had_own)?;
+            (None, false)
+        }
+    };
+
+    match input.id {
+        Some(id) => conn.execute(
+            "UPDATE investment_lots SET kind = ?2, quantity_e4 = ?3, amount = ?4,
+                    occurred_at = ?5, allotted_at = ?6, transaction_id = ?7,
+                    owns_transaction = ?8, note = ?9
+             WHERE id = ?1",
+            params![
+                id,
+                input.kind,
+                input.quantity_e4,
+                input.amount,
+                input.occurred_at,
+                allotted_at,
+                transaction_id,
+                owns as i64,
+                input.note
+            ],
+        ),
+        None => conn.execute(
+            "INSERT INTO investment_lots (id, holding_id, kind, quantity_e4, amount,
+                                          occurred_at, allotted_at, transaction_id,
+                                          owns_transaction, note, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                new_id(),
+                input.holding_id,
+                input.kind,
+                input.quantity_e4,
+                input.amount,
+                input.occurred_at,
+                allotted_at,
+                transaction_id,
+                owns as i64,
+                input.note,
+                now()
+            ],
+        ),
+    }
+    .map_err(oops)?;
+    Ok(())
+}
+
+/// A transfer this lot wrote goes with it — it only ever existed because the
+/// lot did. A record you linked stays: it was in your book first.
+pub fn delete_investment_lot(conn: &Connection, id: &str) -> Result<()> {
+    let owned: Option<String> = conn
+        .query_row(
+            "SELECT transaction_id FROM investment_lots
+             WHERE id = ?1 AND owns_transaction = 1",
+            params![id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(oops)?
+        .flatten();
+    conn.execute("DELETE FROM investment_lots WHERE id = ?1", params![id])
+        .map_err(oops)?;
+    if let Some(tx) = owned {
+        delete_transaction(conn, &tx)?;
+    }
+    Ok(())
+}
+
+/// What needs fetching: whether any gold is held at all, and every distinct
+/// scheme code across the funds. Closed positions are included — they can be
+/// reopened, and a stale price on one reads worse than a wasted request.
+pub fn price_keys_needed(conn: &Connection) -> Result<(bool, Vec<String>)> {
+    let gold: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM holdings WHERE kind = 'gold'",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(oops)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT DISTINCT scheme_code FROM holdings
+             WHERE kind = 'fund' AND scheme_code IS NOT NULL AND scheme_code <> ''",
+        )
+        .map_err(oops)?;
+    let schemes = stmt
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?;
+    Ok((gold > 0, schemes))
+}
+
+pub fn store_prices(conn: &Connection, quotes: &[Quote]) -> Result<()> {
+    let mut stmt = conn
+        .prepare(
+            "INSERT INTO price_cache (key, price_e4, as_of, fetched_at, source)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(key) DO UPDATE SET price_e4 = excluded.price_e4,
+                    as_of = excluded.as_of, fetched_at = excluded.fetched_at,
+                    source = excluded.source",
+        )
+        .map_err(oops)?;
+    let fetched_at = now();
+    for q in quotes {
+        stmt.execute(params![q.key, q.price_e4, q.as_of, fetched_at, q.source])
+            .map_err(oops)?;
+    }
+    Ok(())
+}
+
+/// Holdings are worth what they would fetch today, but a purchase posts a
+/// transfer, so its cost is already standing inside the investment account.
+/// Only the revaluation on top of that basis is new money — hence an
+/// adjustment rather than the whole market value.
+///
+/// Returns `(adjustment, market value)`.
+fn investment_positions(conn: &Connection) -> Result<(Paise, Paise)> {
+    let book = PriceBook::load(conn)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT h.kind, h.scheme_code, h.purity_e4,
+                    CASE WHEN h.kind = 'gold' THEN h.grams_e4 ELSE
+                      COALESCE((SELECT SUM(CASE WHEN l.kind = 'buy' THEN l.quantity_e4
+                                                ELSE -l.quantity_e4 END)
+                                FROM investment_lots l WHERE l.holding_id = h.id), 0) END,
+                    -- Exactly what this holding's postings contribute to its own
+                    -- account's balance, read back off the ledger rather than off
+                    -- the lots. Edit one of those transactions afterwards and both
+                    -- sides move together instead of the basis being left behind.
+                    COALESCE((SELECT SUM(CASE
+                        WHEN t.kind = 'income'   AND t.account_id    = h.account_id THEN  t.amount
+                        WHEN t.kind = 'expense'  AND t.account_id    = h.account_id THEN -t.amount
+                        WHEN t.kind = 'transfer' AND t.account_id    = h.account_id THEN -t.amount
+                        WHEN t.kind = 'transfer' AND t.to_account_id = h.account_id THEN  t.amount
+                        ELSE 0 END)
+                      FROM investment_lots l JOIN transactions t ON t.id = l.transaction_id
+                      WHERE l.holding_id = h.id), 0),
+                    COALESCE((SELECT a.archived FROM accounts a WHERE a.id = h.account_id), 0)
+             FROM holdings h",
+        )
+        .map_err(oops)?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, Option<Scaled>>(2)?,
+                r.get::<_, Scaled>(3)?,
+                r.get::<_, Paise>(4)?,
+                r.get::<_, i64>(5)? != 0,
+            ))
+        })
+        .map_err(oops)?;
+
+    let mut adjustment: Paise = 0;
+    let mut value: Paise = 0;
+    for row in rows {
+        let (kind, scheme_code, purity_e4, units_e4, posted_net, archived) = row.map_err(oops)?;
+        // Nothing fetched for it yet — leave the basis standing rather than
+        // marking the position down to nothing on a first offline launch.
+        let Some((price_e4, _)) = book.price_for(&kind, scheme_code.as_deref(), purity_e4) else {
+            continue;
+        };
+        let market = market_value_paise(units_e4.max(0), price_e4);
+        // An archived account is already out of the account sum above, so
+        // there is no basis left there to cancel.
+        adjustment += market - if archived { 0 } else { posted_net };
+        value += market;
+    }
+    Ok((adjustment, value))
+}
+
+// ---------------------------------------------------------------- overview
+
+/// The YYYY-MM-DD day out of a date or datetime, refusing anything that is
+/// not a real one. Dates arrive from a form, so they are checked before they
+/// are stored rather than blowing up in a later comparison.
+fn day_of(text: &str, what: &str) -> Result<String> {
+    let day = text.get(..10).unwrap_or(text);
+    NaiveDate::parse_from_str(day, "%Y-%m-%d")
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .map_err(|_| format!("{what} is not a date Midas can read."))
+}
+
+fn month_bounds(month: &str) -> Result<(NaiveDate, NaiveDate)> {
+    let start = NaiveDate::parse_from_str(&format!("{month}-01"), "%Y-%m-%d")
+        .map_err(|_| format!("`{month}` is not a YYYY-MM month."))?;
+    let next = if start.month() == 12 {
+        NaiveDate::from_ymd_opt(start.year() + 1, 1, 1)
+    } else {
+        NaiveDate::from_ymd_opt(start.year(), start.month() + 1, 1)
+    }
+    .ok_or("Could not resolve the end of that month.")?;
+    Ok((start, next.pred_opt().unwrap_or(next)))
+}
+
+fn shift_month(month: &str, delta: i32) -> Result<String> {
+    let (start, _) = month_bounds(month)?;
+    let total = start.year() * 12 + start.month() as i32 - 1 + delta;
+    Ok(format!("{:04}-{:02}", total.div_euclid(12), total.rem_euclid(12) + 1))
+}
+
+/// Sum of income minus expense across every account within a window. Transfers
+/// are internal movements, so they cancel out and are excluded entirely.
+fn net_flow_before(conn: &Connection, before: &str) -> Result<Paise> {
+    conn.query_row(
+        "SELECT COALESCE(SUM(CASE WHEN kind = 'income' THEN amount
+                                  WHEN kind = 'expense' THEN -amount
+                                  ELSE 0 END), 0)
+         FROM transactions WHERE occurred_at < ?1",
+        params![before],
+        |r| r.get(0),
+    )
+    .map_err(oops)
+}
+
+fn flow_for(conn: &Connection, from: &str, to: &str) -> Result<(Paise, Paise)> {
+    conn.query_row(
+        "SELECT COALESCE(SUM(CASE WHEN kind = 'income'  THEN amount ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN kind = 'expense' THEN amount ELSE 0 END), 0)
+         FROM transactions WHERE occurred_at >= ?1 AND occurred_at <= ?2",
+        params![from, to],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .map_err(oops)
+}
+
+/// Spend for the window, grouped by top-level category with the leaf
+/// categories kept underneath. Charts read the groups; the expandable
+/// breakdown reads the children.
+fn spend_by_category(conn: &Connection, from: &str, to: &str) -> Result<Vec<CategorySlice>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT c.id, c.name, c.icon, c.color,
+                    COALESCE(p.id, c.id)   AS group_id,
+                    COALESCE(p.name, c.name),
+                    COALESCE(p.icon, c.icon),
+                    COALESCE(p.color, c.color),
+                    SUM(t.amount), COUNT(*)
+             FROM transactions t
+             JOIN categories c ON c.id = t.category_id
+             LEFT JOIN categories p ON p.id = c.parent_id
+             WHERE t.kind = 'expense' AND t.occurred_at >= ?1 AND t.occurred_at <= ?2
+             GROUP BY c.id
+             ORDER BY SUM(t.amount) DESC",
+        )
+        .map_err(oops)?;
+
+    struct Leaf {
+        slice: CategorySlice,
+        group: (String, String, String, String),
+    }
+
+    let leaves: Vec<Leaf> = stmt
+        .query_map(params![from, to], |r| {
+            Ok(Leaf {
+                slice: CategorySlice {
+                    category_id: r.get(0)?,
+                    name: r.get(1)?,
+                    icon: r.get(2)?,
+                    color: r.get(3)?,
+                    total: r.get(8)?,
+                    count: r.get(9)?,
+                    children: Vec::new(),
+                },
+                group: (r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?),
+            })
+        })
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?;
+
+    // Rows arrive largest-first, so groups keep that order as they appear.
+    let mut order: Vec<String> = Vec::new();
+    let mut groups: std::collections::HashMap<String, CategorySlice> =
+        std::collections::HashMap::new();
+
+    for leaf in leaves {
+        let (gid, gname, gicon, gcolor) = leaf.group;
+        let entry = groups.entry(gid.clone()).or_insert_with(|| {
+            order.push(gid.clone());
+            CategorySlice {
+                category_id: gid.clone(),
+                name: gname,
+                icon: gicon,
+                color: gcolor,
+                total: 0,
+                count: 0,
+                children: Vec::new(),
+            }
+        });
+        entry.total += leaf.slice.total;
+        entry.count += leaf.slice.count;
+        // A parent that also holds transactions directly is not its own child.
+        if leaf.slice.category_id != gid {
+            entry.children.push(leaf.slice);
+        }
+    }
+
+    let mut out: Vec<CategorySlice> = order
+        .into_iter()
+        .filter_map(|id| groups.remove(&id))
+        .collect();
+    out.sort_by(|a, b| b.total.cmp(&a.total));
+    for group in &mut out {
+        group.children.sort_by(|a, b| b.total.cmp(&a.total));
+    }
+    Ok(out)
+}
+
+/// `month` is the *last* month of the window and `span` how many months it
+/// covers, so a single month, a quarter, a whole year and an arbitrary run of
+/// months are all the same query with a different start.
+pub fn overview(conn: &Connection, month: &str, span: u32) -> Result<Overview> {
+    let span = span.max(1) as i32;
+    let first_month = shift_month(month, -(span - 1))?;
+    let (start, _) = month_bounds(&first_month)?;
+    let (_, end) = month_bounds(month)?;
+    let start_s = start.format("%Y-%m-%d").to_string();
+    let end_s = format!("{}T23:59:59", end.format("%Y-%m-%d"));
+
+    let accounts = list_accounts(conn)?;
+    let live: Vec<&Account> = accounts.iter().filter(|a| !a.archived).collect();
+    let net_worth: Paise = live.iter().map(|a| a.balance).sum();
+    // An investment account holds the cost of what was bought rather than
+    // money you could spend, so it is neither liquid nor — when a profitable
+    // sale leaves it negative — anything you owe.
+    let liquid: Paise = live
+        .iter()
+        .filter(|a| a.kind != "credit" && a.kind != "investment")
+        .map(|a| a.balance)
+        .sum();
+    let account_debt: Paise = live
+        .iter()
+        .filter(|a| a.balance < 0 && a.kind != "investment")
+        .map(|a| -a.balance)
+        .sum();
+
+    // Debts sit on the balance sheet too: what you are owed is an asset, what
+    // you owe is a liability. Holdings sit there at what they are worth today.
+    let (lent_outstanding, borrowed_outstanding) = debt_positions(conn)?;
+    let (revaluation, investments) = investment_positions(conn)?;
+    let net_worth = net_worth + lent_outstanding - borrowed_outstanding + revaluation;
+    let debt = account_debt + borrowed_outstanding;
+
+    let (income, expense) = flow_for(conn, &start_s, &end_s)?;
+    // The window immediately before this one, of the same length, so a year is
+    // compared against the year before it rather than against a single month.
+    let prev_month = shift_month(month, -span)?;
+    let (pstart, _) = month_bounds(&shift_month(&prev_month, -(span - 1))?)?;
+    let (_, pend) = month_bounds(&prev_month)?;
+    let (prev_income, prev_expense) = flow_for(
+        conn,
+        &pstart.format("%Y-%m-%d").to_string(),
+        &format!("{}T23:59:59", pend.format("%Y-%m-%d")),
+    )?;
+
+    // Per-day income/expense inside the window, then folded into a running balance.
+    let mut stmt = conn
+        .prepare(
+            "SELECT substr(occurred_at, 1, 10) AS day,
+                    COALESCE(SUM(CASE WHEN kind = 'income'  THEN amount ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN kind = 'expense' THEN amount ELSE 0 END), 0)
+             FROM transactions
+             WHERE occurred_at >= ?1 AND occurred_at <= ?2
+             GROUP BY day ORDER BY day",
+        )
+        .map_err(oops)?;
+    let per_day: HashMap<String, (Paise, Paise)> = stmt
+        .query_map(params![start_s, end_s], |r| {
+            Ok((r.get(0)?, (r.get(1)?, r.get(2)?)))
+        })
+        .map_err(oops)?
+        .collect::<rusqlite::Result<HashMap<_, _>>>()
+        .map_err(oops)?;
+
+    let opening_total: Paise = accounts.iter().map(|a| a.opening_balance).sum();
+    let mut running = opening_total + net_flow_before(conn, &start_s)?;
+    let mut daily_flow = Vec::new();
+    let mut balance_series = Vec::new();
+    let mut day = start;
+    while day <= end {
+        let key = day.format("%Y-%m-%d").to_string();
+        let (inc, exp) = per_day.get(&key).copied().unwrap_or((0, 0));
+        running += inc - exp;
+        balance_series.push(running);
+        daily_flow.push(FlowPoint {
+            bucket: key,
+            income: inc,
+            expense: exp,
+        });
+        day += Duration::days(1);
+    }
+
+    // Trailing twelve months of cash flow for the insights chart — or the
+    // whole window, when it reaches back further than that.
+    let months_back = span.max(12);
+    let mut monthly_flow = Vec::new();
+    for back in (0..months_back).rev() {
+        let m = shift_month(month, -back)?;
+        let (ms, me) = month_bounds(&m)?;
+        let (i, e) = flow_for(
+            conn,
+            &ms.format("%Y-%m-%d").to_string(),
+            &format!("{}T23:59:59", me.format("%Y-%m-%d")),
+        )?;
+        monthly_flow.push(FlowPoint {
+            bucket: m,
+            income: i,
+            expense: e,
+        });
+    }
+
+    let top_categories = spend_by_category(conn, &start_s, &end_s)?;
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT merchant, SUM(amount), COUNT(*)
+             FROM transactions
+             WHERE kind = 'expense' AND merchant <> '' AND occurred_at >= ?1 AND occurred_at <= ?2
+             GROUP BY LOWER(merchant) ORDER BY SUM(amount) DESC LIMIT 6",
+        )
+        .map_err(oops)?;
+    let top_merchants = stmt
+        .query_map(params![start_s, end_s], |r| {
+            Ok(MerchantSlice {
+                merchant: r.get(0)?,
+                total: r.get(1)?,
+                count: r.get(2)?,
+            })
+        })
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?;
+
+    Ok(Overview {
+        month: month.to_string(),
+        span: span as u32,
+        net_worth,
+        liquid,
+        debt,
+        lent_outstanding,
+        borrowed_outstanding,
+        investments,
+        income,
+        expense,
+        prev_income,
+        prev_expense,
+        balance_series,
+        daily_flow,
+        monthly_flow,
+        top_categories,
+        top_merchants,
+    })
+}
+
+// ------------------------------------------------------------------ demo
+
+pub fn has_any_data(conn: &Connection) -> Result<bool> {
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0))
+        .map_err(oops)?;
+    Ok(n > 0)
+}
+
+pub fn setting(conn: &Connection, key: &str) -> Result<Option<String>> {
+    conn.query_row(
+        "SELECT value FROM settings WHERE key = ?1",
+        params![key],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(oops)
+}
+
+pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )
+    .map_err(oops)?;
+    Ok(())
+}
+
+pub fn reset(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        // Lots go before transactions so SQLite has no SET NULL sweep to run
+        // over them. `price_cache` stays: it is fetched data, not your book,
+        // and keeping it means an offline relaunch can still value holdings.
+        "DELETE FROM investment_lots; DELETE FROM holdings;
+         DELETE FROM debt_payments; DELETE FROM debts; DELETE FROM transactions;
+         DELETE FROM accounts; DELETE FROM categories; DELETE FROM settings;",
+    )
+    .map_err(oops)?;
+    seed_categories(conn)
+}
+
+// ----------------------------------------------------------------- tests
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The rule every one of these is circling: cash that has already been
+    /// posted into an investment account is on the balance sheet once, so a
+    /// holding may only ever add what it is worth *over* that basis.
+    fn book() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        migrate(&conn).unwrap();
+        conn
+    }
+
+    fn account(conn: &Connection, name: &str, kind: &str, opening: Paise) -> String {
+        save_account(
+            conn,
+            AccountInput {
+                id: None,
+                name: name.into(),
+                kind: kind.into(),
+                institution: None,
+                opening_balance: opening,
+                color: "#000000".into(),
+                icon: "wallet".into(),
+                credit_limit: 0,
+            },
+        )
+        .unwrap()
+        .id
+    }
+
+    /// A fund holding priced at a round ₹100 a unit, so the arithmetic in each
+    /// test is checkable by eye.
+    fn fund(conn: &Connection, account_id: Option<String>) -> String {
+        save_holding(
+            conn,
+            HoldingInput {
+                id: None,
+                kind: "fund".into(),
+                name: "Test Fund".into(),
+                account_id,
+                scheme_code: Some("999".into()),
+                isin: None,
+                purity_e4: None,
+                grams_e4: None,
+                note: None,
+                closed: None,
+            },
+        )
+        .unwrap();
+        conn.query_row("SELECT id FROM holdings LIMIT 1", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    fn price_at(conn: &Connection, rupees_per_unit: i64) {
+        store_prices(
+            conn,
+            &[Quote {
+                key: "mf:999".into(),
+                price_e4: rupees_per_unit * 10_000,
+                as_of: "2026-08-29".into(),
+                source: "test".into(),
+            }],
+        )
+        .unwrap();
+    }
+
+    fn buy(conn: &Connection, holding: &str, units: i64, paid: Paise, from: Option<&str>) {
+        save_investment_lot(
+            conn,
+            InvestmentLotInput {
+                id: None,
+                holding_id: holding.into(),
+                kind: "buy".into(),
+                quantity_e4: units * 10_000,
+                amount: paid,
+                occurred_at: "2026-08-01".into(),
+                allotted_at: None,
+                note: None,
+                cash_account_id: from.map(str::to_string),
+                transaction_id: None,
+            },
+        )
+        .unwrap();
+    }
+
+    fn net_worth(conn: &Connection) -> Paise {
+        overview(conn, "2026-08", 1).unwrap().net_worth
+    }
+
+    /// 24K gold at a spot price that lands on ₹100 a gram once duty, GST and
+    /// the rupee are folded in, so the weight is the only moving part.
+    fn gold(conn: &Connection, grams_e4: Scaled) -> String {
+        save_holding(
+            conn,
+            HoldingInput {
+                id: None,
+                kind: "gold".into(),
+                name: "Coins".into(),
+                account_id: None,
+                scheme_code: None,
+                isin: None,
+                purity_e4: Some(10_000),
+                grams_e4: Some(grams_e4),
+                note: None,
+                closed: None,
+            },
+        )
+        .unwrap();
+        conn.query_row("SELECT id FROM holdings WHERE kind = 'gold'", [], |r| {
+            r.get(0)
+        })
+        .unwrap()
+    }
+
+    /// Spot dollars an ounce and the rupee, chosen so a gram of 24K comes to
+    /// ₹100 flat at the default landed markup.
+    fn gold_price_at(conn: &Connection, rupees_per_gram: i64) {
+        let landed = gold_landed_e4(conn).unwrap();
+        // Invert `gold_price_e4` for one ounce: price × troy grams ÷ landed.
+        let usd_oz_e4 = rupees_per_gram * 311_035 * 10_000 / landed;
+        store_prices(
+            conn,
+            &[
+                Quote {
+                    key: KEY_GOLD.into(),
+                    price_e4: usd_oz_e4,
+                    as_of: "2026-08-29".into(),
+                    source: "test".into(),
+                },
+                Quote {
+                    key: KEY_FX.into(),
+                    price_e4: 10_000,
+                    as_of: "2026-08-29".into(),
+                    source: "test".into(),
+                },
+            ],
+        )
+        .unwrap();
+    }
+
+    /// A book written before gold stopped being traded: its lots fold into
+    /// the holding's weight on the way in, rather than the metal vanishing.
+    #[test]
+    fn old_gold_lots_become_the_holdings_weight() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE holdings (
+                 id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL,
+                 account_id TEXT, scheme_code TEXT, isin TEXT, purity_e4 INTEGER,
+                 note TEXT, closed_at TEXT, created_at TEXT NOT NULL);
+             CREATE TABLE investment_lots (
+                 id TEXT PRIMARY KEY, holding_id TEXT NOT NULL, kind TEXT NOT NULL,
+                 quantity_e4 INTEGER NOT NULL, amount INTEGER NOT NULL,
+                 occurred_at TEXT NOT NULL, transaction_id TEXT,
+                 note TEXT, created_at TEXT NOT NULL);
+             INSERT INTO holdings (id, kind, name, purity_e4, created_at)
+                 VALUES ('g', 'gold', 'Coins', 10000, '2026-01-01');
+             INSERT INTO investment_lots
+                 (id, holding_id, kind, quantity_e4, amount, occurred_at, created_at)
+                 VALUES ('l1', 'g', 'buy', 200000, 100000, '2026-01-02', '2026-01-02'),
+                        ('l2', 'g', 'sell', 50000, 40000, '2026-02-02', '2026-02-02');",
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+
+        let grams: Scaled = conn
+            .query_row("SELECT grams_e4 FROM holdings WHERE id = 'g'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(grams, 150_000); // 20 g bought, 5 g sold.
+        let left: i64 = conn
+            .query_row("SELECT COUNT(*) FROM investment_lots", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 0);
+    }
+
+    #[test]
+    fn gold_is_valued_off_the_grams_you_typed() {
+        let conn = book();
+        account(&conn, "Savings", "bank", 500_000);
+        gold(&conn, 250_000); // 25 g
+        gold_price_at(&conn, 100);
+
+        let holding = list_holdings(&conn).unwrap().pop().unwrap();
+        assert_eq!(holding.units_e4, 250_000);
+        assert_eq!(holding.market_value, 250_000);
+        // There is no cost behind an object you were given or inherited, so
+        // it reports no return rather than pretending its whole value is gain.
+        assert_eq!(holding.invested, 0);
+        assert_eq!(holding.total_return, 0);
+        assert!(holding.lots.is_empty());
+
+        // Nothing in the ledger backs it, so all ₹2,500 is new to the sheet.
+        assert_eq!(net_worth(&conn), 500_000 + 250_000);
+    }
+
+    #[test]
+    fn gold_cannot_be_bought_or_sold_in_lots() {
+        let conn = book();
+        let holding = gold(&conn, 100_000);
+        let err = save_investment_lot(
+            &conn,
+            InvestmentLotInput {
+                id: None,
+                holding_id: holding,
+                kind: "buy".into(),
+                quantity_e4: 10_000,
+                amount: 100_000,
+                occurred_at: "2026-08-01".into(),
+                allotted_at: None,
+                note: None,
+                cash_account_id: None,
+                transaction_id: None,
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("tracked by the gram"), "{err}");
+    }
+
+    #[test]
+    fn gold_needs_a_weight() {
+        let conn = book();
+        let err = save_holding(
+            &conn,
+            HoldingInput {
+                id: None,
+                kind: "gold".into(),
+                name: "Coins".into(),
+                account_id: None,
+                scheme_code: None,
+                isin: None,
+                purity_e4: Some(9_160),
+                grams_e4: None,
+                note: None,
+                closed: None,
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("How many grams"), "{err}");
+    }
+
+    #[test]
+    fn a_holding_that_never_touched_the_ledger_adds_its_whole_value() {
+        let conn = book();
+        account(&conn, "Savings", "bank", 500_000);
+        let holding = fund(&conn, None);
+        buy(&conn, &holding, 10, 90_000, None);
+        price_at(&conn, 100);
+        // Nothing was posted, so the ₹1,000 of units is new to the book.
+        assert_eq!(net_worth(&conn), 500_000 + 100_000);
+    }
+
+    #[test]
+    fn a_posted_purchase_only_converts_cash() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 500_000);
+        let invest = account(&conn, "Funds", "investment", 0);
+        let holding = fund(&conn, Some(invest));
+        buy(&conn, &holding, 10, 100_000, Some(&bank));
+        price_at(&conn, 100);
+        // Units worth exactly what they cost: rupees moved, nothing was made.
+        assert_eq!(net_worth(&conn), 500_000);
+
+        // ...and that cost is no longer money you could spend.
+        assert_eq!(overview(&conn, "2026-08", 1).unwrap().liquid, 400_000);
+    }
+
+    #[test]
+    fn a_profitable_exit_keeps_its_gain() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 500_000);
+        let invest = account(&conn, "Funds", "investment", 0);
+        let holding = fund(&conn, Some(invest.clone()));
+        buy(&conn, &holding, 10, 100_000, Some(&bank));
+        save_investment_lot(
+            &conn,
+            InvestmentLotInput {
+                id: None,
+                holding_id: holding.clone(),
+                kind: "sell".into(),
+                quantity_e4: 100_000,
+                amount: 120_000,
+                occurred_at: "2026-08-20".into(),
+                allotted_at: None,
+                note: None,
+                cash_account_id: Some(bank),
+                transaction_id: None,
+            },
+        )
+        .unwrap();
+        price_at(&conn, 100);
+
+        // The investment account is left ₹200 in the red — proceeds exceeded
+        // the basis recorded against it — and that residue *is* the profit.
+        assert_eq!(net_worth(&conn), 520_000);
+        // Which is a gain, not something owed.
+        assert_eq!(overview(&conn, "2026-08", 1).unwrap().debt, 0);
+    }
+
+    #[test]
+    fn archiving_the_investment_account_changes_nothing() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 500_000);
+        let invest = account(&conn, "Funds", "investment", 0);
+        let holding = fund(&conn, Some(invest.clone()));
+        buy(&conn, &holding, 10, 100_000, Some(&bank));
+        price_at(&conn, 100);
+
+        set_account_archived(&conn, &invest, true).unwrap();
+        // The basis left the account sum with the account, so there is none
+        // left to cancel — the units are simply worth what they are worth.
+        assert_eq!(net_worth(&conn), 500_000);
+    }
+
+    #[test]
+    fn a_holding_with_no_price_is_left_where_it_stands() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 500_000);
+        let invest = account(&conn, "Funds", "investment", 0);
+        let holding = fund(&conn, Some(invest));
+        buy(&conn, &holding, 10, 100_000, Some(&bank));
+        // No price fetched: valuing it at nothing would wipe the basis out.
+        assert_eq!(net_worth(&conn), 500_000);
+    }
+
+    #[test]
+    fn editing_the_posting_moves_the_basis_with_it() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 500_000);
+        let invest = account(&conn, "Funds", "investment", 0);
+        let holding = fund(&conn, Some(invest));
+        buy(&conn, &holding, 10, 100_000, Some(&bank));
+        price_at(&conn, 100);
+
+        // Correct the transfer from the Transactions screen: ₹1,000 → ₹1,200.
+        let tx = list_transactions(&conn, TransactionQuery::default()).unwrap();
+        let transfer = tx.iter().find(|t| t.kind == "transfer").unwrap();
+        save_transaction(
+            &conn,
+            TransactionInput {
+                id: Some(transfer.id.clone()),
+                kind: "transfer".into(),
+                amount: 120_000,
+                account_id: transfer.account_id.clone(),
+                to_account_id: transfer.to_account_id.clone(),
+                category_id: None,
+                merchant: transfer.merchant.clone(),
+                note: None,
+                occurred_at: transfer.occurred_at.clone(),
+            },
+        )
+        .unwrap();
+
+        // ₹1,200 paid for units worth ₹1,000, so the book is ₹200 lighter.
+        // Reading the basis off the ledger is what keeps these in step.
+        assert_eq!(net_worth(&conn), 480_000);
+    }
+
+    #[test]
+    fn selling_more_than_is_held_is_refused() {
+        let conn = book();
+        let holding = fund(&conn, None);
+        buy(&conn, &holding, 10, 100_000, None);
+        let err = save_investment_lot(
+            &conn,
+            InvestmentLotInput {
+                id: None,
+                holding_id: holding,
+                kind: "sell".into(),
+                quantity_e4: 200_000,
+                amount: 100_000,
+                occurred_at: "2026-08-20".into(),
+                allotted_at: None,
+                note: None,
+                cash_account_id: None,
+                transaction_id: None,
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("10"), "{err}");
+    }
+
+    /// The sample book is the first thing a new user sees, so its SIP history
+    /// and the holding it feeds have to agree with each other exactly.
+    #[test]
+    fn the_sample_book_does_not_count_its_sips_twice() {
+        let conn = book();
+        crate::demo::seed(&conn).unwrap();
+        let month = Utc::now().format("%Y-%m").to_string();
+
+        let holdings = list_holdings(&conn).unwrap();
+        assert_eq!(holdings.len(), 2);
+        let gold = holdings.iter().find(|h| h.kind == "gold").unwrap();
+        let sip = holdings.iter().find(|h| h.kind == "fund").unwrap();
+
+        // Every SIP lot is backed by the transfer that paid for it...
+        assert!(sip.lots.len() >= 12);
+        assert!(sip.lots.iter().all(|l| l.transaction_id.is_some()));
+        // ...and the gold predates the book, so none of its lots are.
+        assert!(gold.lots.iter().all(|l| l.transaction_id.is_none()));
+
+        // The investment account holds precisely what the SIPs put in, which
+        // is what lets the revaluation cancel it cleanly.
+        let account = list_accounts(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|a| a.id == *sip.account_id.as_ref().unwrap())
+            .unwrap();
+        assert_eq!(account.balance, sip.invested);
+
+        // With no NAV yet, the fund contributes nothing over its basis.
+        let before = overview(&conn, &month, 1).unwrap().net_worth;
+        store_prices(
+            &conn,
+            &[Quote {
+                key: format!("mf:{}", sip.scheme_code.as_ref().unwrap()),
+                price_e4: 1_702_276,
+                as_of: "2026-08-28".into(),
+                source: "test".into(),
+            }],
+        )
+        .unwrap();
+        let after = overview(&conn, &month, 1).unwrap();
+        let repriced = list_holdings(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|h| h.kind == "fund")
+            .unwrap();
+
+        // Pricing it moves net worth by the gain alone — never by the ₹1.95L
+        // of cash that the SIP transfers already accounted for.
+        assert_eq!(after.net_worth - before, repriced.market_value - account.balance);
+        assert!(repriced.market_value > account.balance, "the sample book should show a gain");
+    }
+
+    /// Several funds can sit behind one investment account. Each lot's posting
+    /// belongs to exactly one holding, so the basis partitions rather than
+    /// being claimed twice.
+    #[test]
+    fn one_investment_account_can_back_many_funds() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 1_000_000);
+        let invest = account(&conn, "Coin", "investment", 0);
+
+        let make = |scheme: &str, name: &str| {
+            save_holding(
+                &conn,
+                HoldingInput {
+                    id: None,
+                    kind: "fund".into(),
+                    name: name.into(),
+                    account_id: Some(invest.clone()),
+                    scheme_code: Some(scheme.into()),
+                    isin: None,
+                    purity_e4: None,
+                    grams_e4: None,
+                    note: None,
+                    closed: None,
+                },
+            )
+            .unwrap();
+            conn.query_row(
+                "SELECT id FROM holdings WHERE scheme_code = ?1",
+                params![scheme],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap()
+        };
+        let flexi = make("111", "Flexi Cap");
+        let index = make("222", "Nifty 50");
+
+        buy(&conn, &flexi, 10, 100_000, Some(&bank)); // ₹1,000
+        buy(&conn, &index, 20, 200_000, Some(&bank)); // ₹2,000
+
+        // One account now holds ₹3,000 of basis for two different funds.
+        let held = list_accounts(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|a| a.id == invest)
+            .unwrap();
+        assert_eq!(held.balance, 300_000);
+
+        store_prices(
+            &conn,
+            &[
+                Quote { key: "mf:111".into(), price_e4: 1_200_000, as_of: "2026-08-29".into(), source: "t".into() },
+                Quote { key: "mf:222".into(), price_e4: 900_000, as_of: "2026-08-29".into(), source: "t".into() },
+            ],
+        )
+        .unwrap();
+
+        // 10 units at ₹120 = ₹1,200 (up ₹200); 20 at ₹90 = ₹1,800 (down ₹200).
+        // They cancel, so net worth is exactly the cash it started with.
+        assert_eq!(net_worth(&conn), 1_000_000);
+
+        // And each fund reports its own position, not a share of the pot.
+        let holdings = list_holdings(&conn).unwrap();
+        let f = holdings.iter().find(|h| h.name == "Flexi Cap").unwrap();
+        let i = holdings.iter().find(|h| h.name == "Nifty 50").unwrap();
+        assert_eq!((f.market_value, f.total_return), (120_000, 20_000));
+        assert_eq!((i.market_value, i.total_return), (180_000, -20_000));
+    }
+
+    /// Attaching a lot to a transfer you already recorded — the SIP you have
+    /// been entering by hand — must value it exactly as if the lot had posted
+    /// that transfer itself.
+    #[test]
+    fn linking_an_existing_transfer_counts_it_once() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 500_000);
+        let invest = account(&conn, "Funds", "investment", 0);
+
+        // The transfer already in the book, recorded by hand months ago.
+        let tx = save_transaction(
+            &conn,
+            TransactionInput {
+                id: None,
+                kind: "transfer".into(),
+                amount: 100_000,
+                account_id: bank,
+                to_account_id: Some(invest.clone()),
+                category_id: None,
+                merchant: "SIP".into(),
+                note: None,
+                occurred_at: "2026-08-05T08:00".into(),
+            },
+        )
+        .unwrap();
+
+        let holding = fund(&conn, Some(invest));
+        save_investment_lot(
+            &conn,
+            InvestmentLotInput {
+                id: None,
+                holding_id: holding.clone(),
+                kind: "buy".into(),
+                quantity_e4: 100_000,
+                amount: 100_000,
+                occurred_at: "2026-08-05".into(),
+                allotted_at: None,
+                note: None,
+                cash_account_id: None,
+                transaction_id: Some(tx.id.clone()),
+            },
+        )
+        .unwrap();
+        price_at(&conn, 100);
+
+        // No second transfer was written, and the units are worth what they
+        // cost, so the book is exactly where it started.
+        assert_eq!(list_transactions(&conn, TransactionQuery::default()).unwrap().len(), 1);
+        assert_eq!(net_worth(&conn), 500_000);
+
+        // Deleting the lot must leave that record alone — it was there first.
+        let lot = list_holdings(&conn).unwrap()[0].lots[0].clone();
+        assert!(!lot.owns_transaction);
+        delete_investment_lot(&conn, &lot.id).unwrap();
+        assert_eq!(list_transactions(&conn, TransactionQuery::default()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_record_cannot_back_two_lots() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 500_000);
+        let invest = account(&conn, "Funds", "investment", 0);
+        let tx = save_transaction(
+            &conn,
+            TransactionInput {
+                id: None,
+                kind: "transfer".into(),
+                amount: 100_000,
+                account_id: bank,
+                to_account_id: Some(invest.clone()),
+                category_id: None,
+                merchant: "SIP".into(),
+                note: None,
+                occurred_at: "2026-08-05T08:00".into(),
+            },
+        )
+        .unwrap();
+        let holding = fund(&conn, Some(invest));
+        let mut link = |amount| {
+            save_investment_lot(
+                &conn,
+                InvestmentLotInput {
+                    id: None,
+                    holding_id: holding.clone(),
+                    kind: "buy".into(),
+                    quantity_e4: 50_000,
+                    amount,
+                    occurred_at: "2026-08-05".into(),
+                    allotted_at: None,
+                    note: None,
+                    cash_account_id: None,
+                    transaction_id: Some(tx.id.clone()),
+                },
+            )
+        };
+        link(100_000).unwrap();
+        // Sharing one posting would count its cost basis twice over.
+        assert!(link(100_000).unwrap_err().contains("already attached"));
+    }
+
+    /// Attaching a transfer that went somewhere else — an import placeholder,
+    /// the wrong investment account — repoints it at the holding rather than
+    /// refusing. Otherwise that cash would sit in the other account while the
+    /// units were counted on top of it.
+    #[test]
+    fn linking_a_transfer_repoints_it_at_the_holding() {
+        let conn = book();
+        let bank = account(&conn, "HDFC", "bank", 500_000);
+        let unlinked = account(&conn, "Unlinked", "bank", 0);
+        let invest = account(&conn, "Mutual Funds", "investment", 0);
+        let tx = save_transaction(
+            &conn,
+            TransactionInput {
+                id: None,
+                kind: "transfer".into(),
+                amount: 100_000,
+                account_id: bank.clone(),
+                to_account_id: Some(unlinked),
+                category_id: None,
+                merchant: "Transfer".into(),
+                note: None,
+                occurred_at: "2026-08-05T08:00".into(),
+            },
+        )
+        .unwrap();
+
+        let holding = fund(&conn, Some(invest.clone()));
+        save_investment_lot(
+            &conn,
+            InvestmentLotInput {
+                id: None,
+                holding_id: holding,
+                kind: "buy".into(),
+                quantity_e4: 100_000,
+                amount: 100_000,
+                occurred_at: "2026-08-05".into(),
+                allotted_at: None,
+                note: None,
+                cash_account_id: None,
+                transaction_id: Some(tx.id.clone()),
+            },
+        )
+        .unwrap();
+
+        // The transfer now runs HDFC → Mutual Funds, and nothing else about it
+        // moved: same amount, same day, same description.
+        let moved = list_transactions(&conn, TransactionQuery::default())
+            .unwrap()
+            .into_iter()
+            .find(|t| t.id == tx.id)
+            .unwrap();
+        assert_eq!(moved.account_id, bank);
+        assert_eq!(moved.to_account_id, Some(invest));
+        assert_eq!(moved.amount, 100_000);
+        assert_eq!(moved.occurred_at, "2026-08-05T08:00");
+        assert_eq!(moved.merchant, "Transfer");
+
+        // And it is counted once: units worth what they cost leave the book
+        // exactly where it started.
+        price_at(&conn, 100);
+        assert_eq!(net_worth(&conn), 500_000);
+    }
+
+    /// Repointing cannot turn a transfer into one that starts and ends in the
+    /// same account.
+    #[test]
+    fn repointing_onto_its_own_other_side_is_refused() {
+        let conn = book();
+        let invest = account(&conn, "Mutual Funds", "investment", 0);
+        let bank = account(&conn, "HDFC", "bank", 500_000);
+        let tx = save_transaction(
+            &conn,
+            TransactionInput {
+                id: None,
+                kind: "transfer".into(),
+                amount: 100_000,
+                account_id: invest.clone(),
+                to_account_id: Some(bank),
+                category_id: None,
+                merchant: "Transfer".into(),
+                note: None,
+                occurred_at: "2026-08-05T08:00".into(),
+            },
+        )
+        .unwrap();
+        let holding = fund(&conn, Some(invest));
+        let err = save_investment_lot(
+            &conn,
+            InvestmentLotInput {
+                id: None,
+                holding_id: holding,
+                kind: "buy".into(),
+                quantity_e4: 100_000,
+                amount: 100_000,
+                occurred_at: "2026-08-05".into(),
+                allotted_at: None,
+                note: None,
+                cash_account_id: None,
+                transaction_id: Some(tx.id),
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("two different accounts"), "{err}");
+    }
+
+    /// Finding the SIP you want to attach a lot to means searching by where
+    /// the money went, or by what it was — not just by the merchant line.
+    #[test]
+    fn transfers_are_findable_by_destination_and_amount() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 500_000);
+        let invest = account(&conn, "Index Funds", "investment", 0);
+        save_transaction(
+            &conn,
+            TransactionInput {
+                id: None,
+                kind: "transfer".into(),
+                amount: 1_500_000, // ₹15,000
+                account_id: bank,
+                to_account_id: Some(invest),
+                category_id: None,
+                merchant: "SIP — Nifty 50".into(),
+                note: None,
+                occurred_at: "2026-08-05T08:00".into(),
+            },
+        )
+        .unwrap();
+
+        let find = |term: &str| {
+            list_transactions(
+                &conn,
+                TransactionQuery { search: Some(term.into()), ..Default::default() },
+            )
+            .unwrap()
+            .len()
+        };
+
+        assert_eq!(find("Nifty"), 1, "by merchant");
+        assert_eq!(find("Savings"), 1, "by the account it left");
+        assert_eq!(find("Index Funds"), 1, "by the account it landed in");
+        assert_eq!(find("15000"), 1, "by amount");
+        assert_eq!(find("15,000"), 1, "by amount as it is printed");
+        assert_eq!(find("14000"), 0, "a different amount matches nothing");
+    }
+
+    /// "Money out of savings" and "money into it" are different questions, and
+    /// only the side of the posting tells transfers apart.
+    #[test]
+    fn transfers_filter_by_which_side_the_account_is_on() {
+        let conn = book();
+        let savings = account(&conn, "Savings", "bank", 500_000);
+        let funds = account(&conn, "Index Funds", "investment", 0);
+        let mut transfer = |from: &str, to: &str, amount: Paise, what: &str| {
+            save_transaction(
+                &conn,
+                TransactionInput {
+                    id: None,
+                    kind: "transfer".into(),
+                    amount,
+                    account_id: from.into(),
+                    to_account_id: Some(to.into()),
+                    category_id: None,
+                    merchant: what.into(),
+                    note: None,
+                    occurred_at: "2026-08-05T08:00".into(),
+                },
+            )
+            .unwrap();
+        };
+        transfer(&savings, &funds, 100_000, "SIP");
+        transfer(&funds, &savings, 40_000, "Redemption");
+
+        let ask = |side: Option<&str>| {
+            list_transactions(
+                &conn,
+                TransactionQuery {
+                    account_ids: Some(vec![savings.clone()]),
+                    account_side: side.map(str::to_string),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .into_iter()
+            .map(|t| t.merchant)
+            .collect::<Vec<_>>()
+        };
+
+        assert_eq!(ask(None).len(), 2, "either side");
+        assert_eq!(ask(Some("from")), vec!["SIP"], "money leaving savings");
+        assert_eq!(ask(Some("to")), vec!["Redemption"], "money arriving in it");
+    }
+
+    /// The totals above the ledger describe the filter, not the page. Loading
+    /// a slice of the rows must not change what they say.
+    #[test]
+    fn totals_cover_every_match_not_just_the_loaded_page() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 0);
+        for i in 0..10 {
+            save_transaction(
+                &conn,
+                TransactionInput {
+                    id: None,
+                    kind: if i % 2 == 0 { "expense" } else { "income" }.into(),
+                    amount: 1_000,
+                    account_id: bank.clone(),
+                    to_account_id: None,
+                    category_id: None,
+                    merchant: format!("Row {i}"),
+                    note: None,
+                    occurred_at: format!("2026-08-{:02}T10:00", i + 1),
+                },
+            )
+            .unwrap();
+        }
+
+        let paged = TransactionQuery { limit: Some(3), ..Default::default() };
+        assert_eq!(list_transactions(&conn, paged.clone()).unwrap().len(), 3);
+
+        // Same query, and the summary still describes all ten.
+        let summary = transaction_summary(&conn, paged).unwrap();
+        assert_eq!(summary.count, 10);
+        assert_eq!(summary.income, 5_000);
+        assert_eq!(summary.expense, 5_000);
+
+        // Paging walks the whole ledger without repeating or skipping a row.
+        let mut seen = Vec::new();
+        for page in 0..4 {
+            seen.extend(
+                list_transactions(
+                    &conn,
+                    TransactionQuery {
+                        limit: Some(3),
+                        offset: Some(page * 3),
+                        ..Default::default()
+                    },
+                )
+                .unwrap()
+                .into_iter()
+                .map(|t| t.id),
+            );
+        }
+        let unique: std::collections::HashSet<_> = seen.iter().collect();
+        assert_eq!(seen.len(), 10);
+        assert_eq!(unique.len(), 10);
+
+        // And a filter narrows the totals with it.
+        let only_income = transaction_summary(
+            &conn,
+            TransactionQuery { kinds: Some(vec!["income".into()]), ..Default::default() },
+        )
+        .unwrap();
+        assert_eq!(only_income.count, 5);
+        assert_eq!(only_income.expense, 0);
+    }
+
+    /// A window is `span` months ending at `month`, and it is compared against
+    /// the same length of time immediately before it — a year against a year.
+    #[test]
+    fn a_window_sums_its_own_months_and_compares_with_the_one_before() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 0);
+        let spend = |month: &str, amount: Paise| {
+            save_transaction(
+                &conn,
+                TransactionInput {
+                    id: None,
+                    kind: "expense".into(),
+                    amount,
+                    account_id: bank.clone(),
+                    to_account_id: None,
+                    category_id: None,
+                    merchant: "Shop".into(),
+                    note: None,
+                    occurred_at: format!("{month}-15T10:00"),
+                },
+            )
+            .unwrap();
+        };
+        // ₹100 a month through 2025, ₹200 a month through 2026 to date.
+        for m in 1..=12 {
+            spend(&format!("2025-{m:02}"), 10_000);
+        }
+        for m in 1..=8 {
+            spend(&format!("2026-{m:02}"), 20_000);
+        }
+
+        let august = overview(&conn, "2026-08", 1).unwrap();
+        assert_eq!(august.expense, 20_000);
+        assert_eq!(august.prev_expense, 20_000, "July, the month before");
+
+        // The whole of 2025, against the twelve months before it.
+        let year = overview(&conn, "2025-12", 12).unwrap();
+        assert_eq!(year.expense, 120_000);
+        assert_eq!(year.prev_expense, 0, "nothing was spent in 2024");
+        assert_eq!(year.daily_flow.len(), 365, "a day per day of the window");
+        assert_eq!(year.balance_series.last(), Some(&-120_000));
+
+        // An arbitrary run of months — Nov 2025 through Feb 2026 — against the
+        // four months before it, which were ₹100 apiece.
+        let straddling = overview(&conn, "2026-02", 4).unwrap();
+        assert_eq!(straddling.expense, 20_000 + 20_000 + 10_000 + 10_000);
+        assert_eq!(straddling.prev_expense, 40_000);
+        // Cash flow reaches back at least as far as the window itself does.
+        assert!(overview(&conn, "2026-08", 20).unwrap().monthly_flow.len() >= 20);
+    }
+
+    /// An SIP is debited on one date and allotted at another day's NAV. The
+    /// ledger posting belongs to the day the money moved; the units — and so
+    /// the price they were bought at — belong to the day they landed.
+    #[test]
+    fn a_lot_keeps_the_allotment_date_apart_from_the_payment_date() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 500_000);
+        let invest = account(&conn, "Funds", "investment", 0);
+        let holding = fund(&conn, Some(invest));
+        save_investment_lot(
+            &conn,
+            InvestmentLotInput {
+                id: None,
+                holding_id: holding.clone(),
+                kind: "buy".into(),
+                quantity_e4: 100_000,
+                amount: 100_000,
+                occurred_at: "2026-08-05".into(),
+                allotted_at: Some("2026-08-07".into()),
+                note: None,
+                cash_account_id: Some(bank),
+                transaction_id: None,
+            },
+        )
+        .unwrap();
+
+        let lot = list_holdings(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|h| h.id == holding)
+            .unwrap()
+            .lots
+            .remove(0);
+        assert_eq!(lot.occurred_at, "2026-08-05");
+        assert_eq!(lot.allotted_at.as_deref(), Some("2026-08-07"));
+
+        // The transfer this lot wrote is dated when the money actually left.
+        let tx = get_transaction(&conn, lot.transaction_id.as_deref().unwrap()).unwrap();
+        assert!(tx.occurred_at.starts_with("2026-08-05"), "{}", tx.occurred_at);
+
+        // Allotted the same day is the ordinary case, and stores no second date.
+        save_investment_lot(
+            &conn,
+            InvestmentLotInput {
+                id: Some(lot.id.clone()),
+                holding_id: holding.clone(),
+                kind: "buy".into(),
+                quantity_e4: 100_000,
+                amount: 100_000,
+                occurred_at: "2026-08-05".into(),
+                allotted_at: Some("2026-08-05".into()),
+                note: None,
+                cash_account_id: None,
+                transaction_id: None,
+            },
+        )
+        .unwrap();
+        let same_day: Option<String> = conn
+            .query_row(
+                "SELECT allotted_at FROM investment_lots WHERE id = ?1",
+                params![lot.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(same_day, None);
+
+        // And a date that is not one is refused rather than stored.
+        let err = save_investment_lot(
+            &conn,
+            InvestmentLotInput {
+                id: None,
+                holding_id: holding,
+                kind: "buy".into(),
+                quantity_e4: 10_000,
+                amount: 10_000,
+                occurred_at: "2026-08-05".into(),
+                allotted_at: Some("the 7th".into()),
+                note: None,
+                cash_account_id: None,
+                transaction_id: None,
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("allotment date"), "{err}");
+    }
+
+    #[test]
+    fn gold_folds_spot_the_rupee_and_purity_into_a_gram() {
+        // $4456.3999/oz at ₹95.39, marked up 9%, at 22K.
+        let price = gold_price_e4(44_563_999, 953_900, 10_900, 9_160);
+        assert_eq!(price, 136_458_224); // ₹13,645.8224 a gram
+        // 20.5 g of it, in paise.
+        assert_eq!(market_value_paise(205_000, price), 27_973_936);
+
+        // And the reason this is i128: the numerator alone is 500-odd times
+        // what an i64 can hold.
+        assert!(
+            44_563_999_i128 * 953_900 * 10_900 * 9_160 > i64::MAX as i128,
+            "the i128 in gold_price_e4 is load-bearing"
+        );
+    }
+
+    #[test]
+    fn quantities_round_once_rather_than_per_lot() {
+        // A third of a unit, three times over, at ₹90 — where valuing each lot
+        // on its own and adding up would gain a paisa out of nowhere.
+        let lots = [3_333, 3_333, 3_334];
+        let per_lot: Paise = lots.iter().map(|q| market_value_paise(*q, 900_000)).sum();
+        let once = market_value_paise(lots.iter().sum::<Scaled>(), 900_000);
+        assert_eq!(per_lot, 9_001);
+        assert_eq!(once, 9_000);
+    }
+}
