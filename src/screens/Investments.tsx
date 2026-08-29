@@ -29,15 +29,17 @@ const TINTS: Record<HoldingKind, string> = {
 };
 
 export function Investments({
-  onNewHolding, onEditHolding, onAddLot, onEditLot,
+  initialTab = 'fund', onNewHolding, onEditHolding, onAddLot, onEditLot,
 }: {
+  /** Which kind to open on, for arrivals from elsewhere in the app. */
+  initialTab?: HoldingKind;
   onNewHolding: (kind: HoldingKind) => void;
   onEditHolding: (holding: Holding) => void;
   onAddLot: (holding: Holding) => void;
   onEditLot: (holding: Holding, lot: InvestmentLot) => void;
 }) {
   const { holdings, refreshPrices, pricesRefreshing } = useStore();
-  const [tab, setTab] = useState<HoldingKind>('fund');
+  const [tab, setTab] = useState<HoldingKind>(initialTab);
   const [showClosed, setShowClosed] = useState(false);
   // Held by id rather than by object: the store hands back fresh holdings
   // after every write, and the open page should follow them.

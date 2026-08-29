@@ -183,11 +183,20 @@ export interface SelectOption {
   icon?: string;
   color?: string;
   group?: string;
+  /** Renders one step in, as a child of the option above it. */
+  child?: boolean;
+  /**
+   * The option this one sits under. Unlike `group` it starts no section — the
+   * list stays in tree order — but it is searched, and stands in as the hint
+   * once filtering has flattened the indent away.
+   */
+  under?: string;
 }
 
 /** Custom listbox — the native one can't carry colour swatches or groups. */
 export function Select({
-  options, value, onChange, placeholder = 'Select…', disabled, allowClear,
+  options, value, onChange, placeholder = 'Select…', disabled, allowClear, searchable,
+  searchPlaceholder = 'Type to filter…',
 }: {
   options: SelectOption[];
   value: string | null;
@@ -195,11 +204,25 @@ export function Select({
   placeholder?: string;
   disabled?: boolean;
   allowClear?: boolean;
+  /** Puts a filter box at the top of the menu, for a long list. */
+  searchable?: boolean;
+  searchPlaceholder?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [rect, setRect] = useState<DOMRect | null>(null);
+  const [query, setQuery] = useState('');
   const root = useRef<HTMLDivElement>(null);
+  const search = useRef<HTMLInputElement>(null);
   const selected = options.find((o) => o.value === value) ?? null;
+
+  // Each opening starts from the whole list, and the box takes the keys so
+  // the filter is there the moment the menu is.
+  useEffect(() => {
+    if (!open) return setQuery('');
+    if (!searchable) return;
+    const focus = window.setTimeout(() => search.current?.focus(), 40);
+    return () => window.clearTimeout(focus);
+  }, [open, searchable]);
 
   // The menu is portalled to <body>, so the sheet's scroll container can never
   // clip it. That means measuring the trigger ourselves, and re-measuring on
@@ -236,7 +259,16 @@ export function Select({
     };
   }, [open]);
 
-  const groups = options.reduce<Record<string, SelectOption[]>>((acc, o) => {
+  const term = query.trim().toLowerCase();
+  const shown = term
+    ? options.filter((o) =>
+        `${o.label} ${o.hint ?? ''} ${o.group ?? ''} ${o.under ?? ''}`
+          .toLowerCase()
+          .includes(term),
+      )
+    : options;
+
+  const groups = shown.reduce<Record<string, SelectOption[]>>((acc, o) => {
     const key = o.group ?? '';
     (acc[key] ??= []).push(o);
     return acc;
@@ -267,7 +299,28 @@ export function Select({
         ),
       }}
     >
-      {allowClear && (
+      {searchable && (
+        <div className="select-search">
+          <Icon name="search" size={14} />
+          <input
+            ref={search}
+            value={query}
+            placeholder={searchPlaceholder}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              // Enter takes the first thing still standing, which after two or
+              // three letters is almost always the one being looked for.
+              if (e.key !== 'Enter') return;
+              e.preventDefault();
+              const first = shown[0];
+              if (!first) return;
+              onChange(first.value);
+              setOpen(false);
+            }}
+          />
+        </div>
+      )}
+      {allowClear && !term && (
         <button
           type="button"
           className="select-option"
@@ -277,6 +330,7 @@ export function Select({
           <span className="select-option-label">None</span>
         </button>
       )}
+      {shown.length === 0 && <p className="select-empty">Nothing matches “{query.trim()}”.</p>}
       {Object.entries(groups).map(([group, items]) => (
         <div key={group} className="select-group">
           {group && <div className="select-group-label">{group}</div>}
@@ -284,7 +338,9 @@ export function Select({
             <button
               key={option.value}
               type="button"
-              className={`select-option ${option.value === value ? 'is-active' : ''}`}
+              className={`select-option ${option.value === value ? 'is-active' : ''} ${
+                option.child && !term ? 'is-child' : ''
+              }`}
               onClick={() => { onChange(option.value); setOpen(false); }}
             >
               <span
@@ -294,7 +350,9 @@ export function Select({
                 {option.icon && <Icon name={option.icon} size={12} strokeWidth={2.2} />}
               </span>
               <span className="select-option-label">{option.label}</span>
-              {option.hint && <span className="select-option-hint">{option.hint}</span>}
+              {(option.hint ?? (term ? option.under : null)) && (
+                <span className="select-option-hint">{option.hint ?? option.under}</span>
+              )}
               {option.value === value && <Icon name="check" size={15} />}
             </button>
           ))}

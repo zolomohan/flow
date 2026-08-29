@@ -65,9 +65,11 @@ function rangeBounds(range: Range, month: string) {
 }
 
 export function Transactions({
-  onOpenTransaction, onAddTransaction, accountFocus, picking,
+  onOpenTransaction, onSplitTransaction, onAddTransaction, accountFocus, picking,
 }: {
   onOpenTransaction: (tx: Transaction) => void;
+  /** Opens a row straight into its split editor. Absent while picking. */
+  onSplitTransaction?: (tx: Transaction) => void;
   onAddTransaction?: () => void;
   /** Set when arriving from an account elsewhere in the app. */
   accountFocus?: { ids: string[]; token: number };
@@ -474,7 +476,16 @@ export function Transactions({
                 </header>
                 <motion.div className="tx-list" variants={listing}>
                   {day.items.map((tx) => (
-                    <TransactionRow key={tx.id} tx={tx} onClick={() => onOpenTransaction(tx)} />
+                    <TransactionRow
+                      key={tx.id}
+                      tx={tx}
+                      onClick={() => onOpenTransaction(tx)}
+                      onSplit={
+                        picking || !onSplitTransaction
+                          ? undefined
+                          : () => onSplitTransaction(tx)
+                      }
+                    />
                   ))}
                 </motion.div>
               </section>

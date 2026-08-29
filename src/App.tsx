@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Sidebar, type Route } from './components/Sidebar';
 import { CommandPalette } from './components/CommandPalette';
-import { TransactionSheet, type TxDraft } from './components/TransactionSheet';
+import {
+  TransactionSheet, type SplitFocus, type TxDraft,
+} from './components/TransactionSheet';
 import { AccountSheet } from './components/AccountSheet';
 import { DebtSheet, DebtPaymentSheet } from './components/DebtSheet';
 import { HoldingSheet, LotSheet } from './components/HoldingSheet';
@@ -45,6 +47,7 @@ function Shell() {
   const [txOpen, setTxOpen] = useState(false);
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
   const [draft, setDraft] = useState<TxDraft | undefined>();
+  const [splitFocus, setSplitFocus] = useState<SplitFocus | null>(null);
   const [accountOpen, setAccountOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const [debtOpen, setDebtOpen] = useState(false);
@@ -54,6 +57,10 @@ function Shell() {
   const [holdingOpen, setHoldingOpen] = useState(false);
   const [editingHolding, setEditingHolding] = useState<Holding | null>(null);
   const [holdingKind, setHoldingKind] = useState<HoldingKind>('fund');
+  // Which tab Investments opens on. The screen remounts with the route, so
+  // arriving from a gold card lands on gold rather than on whatever was last
+  // looked at.
+  const [investmentTab, setInvestmentTab] = useState<HoldingKind>('fund');
   // One target for both paths: the holding a new entry belongs to, and the
   // existing entry when one is being corrected.
   const [lotTarget, setLotTarget] = useState<{
@@ -70,12 +77,22 @@ function Shell() {
   const newTransaction = useCallback((next?: TxDraft) => {
     setEditingTx(null);
     setDraft(next);
+    setSplitFocus(null);
     setTxOpen(true);
   }, []);
 
   const openTransaction = useCallback((tx: Transaction) => {
     setDraft(undefined);
     setEditingTx(tx);
+    setSplitFocus(null);
+    setTxOpen(true);
+  }, []);
+
+  // Splitting is the same sheet, opened with its people panel already down.
+  const splitTransaction = useCallback((tx: Transaction) => {
+    setDraft(undefined);
+    setEditingTx(tx);
+    setSplitFocus('people');
     setTxOpen(true);
   }, []);
 
@@ -87,6 +104,11 @@ function Shell() {
   const openAccountTransactions = useCallback((accountId: string) => {
     setAccountFocus((f) => ({ ids: [accountId], token: f.token + 1 }));
     setRoute('transactions');
+  }, []);
+
+  const openInvestments = useCallback((kind: HoldingKind) => {
+    setInvestmentTab(kind);
+    setRoute('investments');
   }, []);
 
   const newDebt = useCallback((direction: DebtDirection) => {
@@ -216,10 +238,12 @@ function Shell() {
                 onAddTransaction={() => newTransaction()}
                 onGoTransactions={() => setRoute('transactions')}
                 onOpenAccount={openAccountTransactions}
+                onGoInvestments={openInvestments}
               />
             ) : route === 'transactions' ? (
               <Transactions
                 onOpenTransaction={openTransaction}
+                onSplitTransaction={splitTransaction}
                 onAddTransaction={() => newTransaction()}
                 accountFocus={accountFocus}
               />
@@ -233,6 +257,7 @@ function Shell() {
               />
             ) : route === 'investments' ? (
               <Investments
+                initialTab={investmentTab}
                 onNewHolding={newHolding}
                 onEditHolding={editHolding}
                 onAddLot={(holding) => setLotTarget({ holding, lot: null })}
@@ -252,6 +277,7 @@ function Shell() {
         onClose={() => setTxOpen(false)}
         editing={editingTx}
         draft={draft}
+        splitFocus={splitFocus}
       />
       <AccountSheet
         open={accountOpen}

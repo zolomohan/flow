@@ -8,22 +8,40 @@ import { TransactionRow } from '../components/TransactionRow';
 import { Button, Card, CardHead, Empty, Meter } from '../components/ui';
 import { useStore } from '../lib/store';
 import {
-  compactMoney, dayLabel, money, monthKey, monthLabel, percentDelta,
+  accountWorth, compactMoney, dayLabel, money, monthKey, monthLabel, percentDelta,
 } from '../lib/format';
 import { itemVariants, listVariants, spring } from '../lib/motion';
-import type { FlowPoint, Transaction } from '../lib/types';
+import type { FlowPoint, HoldingKind, Paise, Transaction } from '../lib/types';
+
+/** One face on the wealth card: an account, or the holdings kept outside one. */
+interface Tile {
+  key: string;
+  name: string;
+  value: Paise;
+  icon: string;
+  color: string;
+  hint: string;
+  open: () => void;
+}
+
+const LOOSE: Record<HoldingKind, { name: string; icon: string; color: string }> = {
+  gold: { name: 'Gold', icon: 'coins', color: 'var(--amber)' },
+  fund: { name: 'Mutual funds', icon: 'trending-up', color: 'var(--violet)' },
+};
 
 export function Overview({
-  onOpenTransaction, onAddTransaction, onGoTransactions, onOpenAccount,
+  onOpenTransaction, onAddTransaction, onGoTransactions, onOpenAccount, onGoInvestments,
 }: {
   onOpenTransaction: (tx: Transaction) => void;
   onAddTransaction: () => void;
   onGoTransactions: () => void;
   /** Jump to Transactions filtered to one account. */
   onOpenAccount: (accountId: string) => void;
+  /** Jump to Investments, on the tab that holds what was clicked. */
+  onGoInvestments: (kind: HoldingKind) => void;
 }) {
   const {
-    overview, accounts, month, setMonth, span, setSpan, listTransactions, revision,
+    overview, accounts, holdings, month, setMonth, span, setSpan, listTransactions, revision,
   } = useStore();
   const [recent, setRecent] = useState<Transaction[]>([]);
 
@@ -32,6 +50,45 @@ export function Overview({
   }, [listTransactions, revision]);
 
   const live = useMemo(() => accounts.filter((a) => !a.archived), [accounts]);
+
+  // What money you have, whatever shape it is in. Accounts come first, and
+  // then the holdings that answer to no account — gold is kept in a locker
+  // rather than an account, so nothing in the ledger would otherwise carry it
+  // onto this card. Both lead to where the thing itself lives.
+  const tiles = useMemo<Tile[]>(() => {
+    const held = live.map<Tile>((account) => {
+      const investment = account.kind === 'investment';
+      const kind = holdings.find((h) => h.accountId === account.id)?.kind ?? 'fund';
+      return {
+        key: account.id,
+        name: account.name,
+        value: accountWorth(account),
+        icon: account.icon,
+        color: account.color,
+        hint: investment ? `See ${account.name} in investments` : `See ${account.name} transactions`,
+        open: () => (investment ? onGoInvestments(kind) : onOpenAccount(account.id)),
+      };
+    });
+
+    const loose = new Map<HoldingKind, Paise>();
+    for (const holding of holdings) {
+      if (holding.closed || holding.accountId || !holding.marketValue) continue;
+      loose.set(holding.kind, (loose.get(holding.kind) ?? 0) + holding.marketValue);
+    }
+
+    return [
+      ...held,
+      ...[...loose].map<Tile>(([kind, value]) => ({
+        key: `holdings-${kind}`,
+        name: LOOSE[kind].name,
+        value,
+        icon: LOOSE[kind].icon,
+        color: LOOSE[kind].color,
+        hint: `See ${LOOSE[kind].name.toLowerCase()} in investments`,
+        open: () => onGoInvestments(kind),
+      })),
+    ];
+  }, [live, holdings, onOpenAccount, onGoInvestments]);
 
   // A day a bar is readable; a year of days is 365 slivers. Anything longer
   // than a month is folded into one column per month instead.
@@ -123,23 +180,23 @@ export function Overview({
           </div>
 
           <div className="hero-accounts">
-            {live.map((account, i) => (
+            {tiles.map((tile, i) => (
               <motion.button
-                key={account.id}
+                key={tile.key}
                 className="hero-account"
-                onClick={() => onOpenAccount(account.id)}
-                title={`See ${account.name} transactions`}
+                onClick={tile.open}
+                title={tile.hint}
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ ...spring, delay: 0.05 + i * 0.03 }}
               >
-                <span className="hero-account-glyph" style={{ background: account.color }}>
-                  <Icon name={account.icon} size={14} />
+                <span className="hero-account-glyph" style={{ background: tile.color }}>
+                  <Icon name={tile.icon} size={14} />
                 </span>
                 <span className="hero-account-text">
-                  <strong>{account.name}</strong>
-                  <span className={account.balance < 0 ? 'is-owed' : undefined}>
-                    {money(account.balance)}
+                  <strong>{tile.name}</strong>
+                  <span className={tile.value < 0 ? 'is-owed' : undefined}>
+                    {money(tile.value)}
                   </span>
                 </span>
               </motion.button>

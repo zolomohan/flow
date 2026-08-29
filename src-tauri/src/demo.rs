@@ -3,6 +3,7 @@ use rusqlite::{params, Connection};
 use uuid::Uuid;
 
 use crate::db::{self, Result};
+use crate::models::{TransactionInput, TransactionShareInput, TransactionSplitInput};
 
 /// A tiny deterministic PRNG so the sample book looks hand-made but is
 /// reproducible, without pulling in the `rand` crate.
@@ -320,6 +321,58 @@ pub fn seed(conn: &Connection) -> Result<()> {
         }
         day += Duration::days(1);
     }
+
+    // One bill that shows both halves of splitting: a dinner filed under two
+    // categories at once, and shared with the two people who were at it. The
+    // ledger still sees a single ₹4,800 expense — being owed ₹3,200 of it back
+    // is two debts on the Debts screen, not a smaller night out.
+    let dinner = today - Duration::days(9);
+    db::save_transaction(
+        conn,
+        TransactionInput {
+            id: None,
+            kind: "expense".into(),
+            amount: rupees(4_800),
+            account_id: card.clone(),
+            to_account_id: None,
+            category_id: cat_id("Food & Drink"),
+            merchant: "Toit — birthday dinner".into(),
+            note: Some("Split three ways".into()),
+            occurred_at: format!("{}T21:15", dinner.format("%Y-%m-%d")),
+            splits: Some(vec![
+                TransactionSplitInput {
+                    id: None,
+                    amount: rupees(3_300),
+                    category_id: cat_id("Food & Drink"),
+                    note: Some("Food and the tab".into()),
+                },
+                TransactionSplitInput {
+                    id: None,
+                    amount: rupees(1_500),
+                    category_id: cat_id("Entertainment"),
+                    note: Some("Cake and the cab home".into()),
+                },
+            ]),
+            shares: Some(vec![
+                TransactionShareInput {
+                    id: None,
+                    direction: "lent".into(),
+                    counterparty: "Suhruth".into(),
+                    amount: rupees(1_600),
+                    due_on: None,
+                    note: None,
+                },
+                TransactionShareInput {
+                    id: None,
+                    direction: "lent".into(),
+                    counterparty: "Nikhil".into(),
+                    amount: rupees(1_600),
+                    due_on: None,
+                    note: None,
+                },
+            ]),
+        },
+    )?;
 
     seed_holdings(conn, &investments, &sips)
 }

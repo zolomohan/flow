@@ -22,6 +22,12 @@ pub struct Account {
     pub credit_limit: Paise,
     /// Derived: opening balance folded with every posting that touches it.
     pub balance: Paise,
+    /// Derived: what the holdings parked in this account are worth today, less
+    /// the basis their own postings already put on `balance`. Add it to
+    /// `balance` for what the account is actually worth. Zero everywhere no
+    /// holding sits — and the whole market value of gold, which is weighed
+    /// rather than bought and so posts nothing to the ledger at all.
+    pub revaluation: Paise,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +93,69 @@ pub struct Transaction {
     pub category_color: Option<String>,
     pub category_group_id: Option<String>,
     pub category_group_name: Option<String>,
+    /// The line items this posting was split into. Empty for the ordinary
+    /// case: one bill, one category. When it is not, the parts add up to
+    /// `amount` exactly, so the ledger still sees a single posting.
+    pub splits: Vec<TransactionSplit>,
+    /// Who else was in on this bill. Each one is a debt of its own, opened by
+    /// this posting and repaid on the Debts screen like any other.
+    pub shares: Vec<TransactionShare>,
+}
+
+/// One line of a split bill: part of the money, filed on its own.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionSplit {
+    pub id: String,
+    pub transaction_id: String,
+    pub amount: Paise,
+    pub category_id: Option<String>,
+    pub note: Option<String>,
+    pub sort_order: i64,
+    // Denormalised, exactly as on the posting itself.
+    pub category_name: Option<String>,
+    pub category_icon: Option<String>,
+    pub category_color: Option<String>,
+    pub category_group_id: Option<String>,
+    pub category_group_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionSplitInput {
+    pub id: Option<String>,
+    pub amount: Paise,
+    pub category_id: Option<String>,
+    pub note: Option<String>,
+}
+
+/// One person's share of a split bill — a debt, seen from the posting that
+/// opened it, so a form can show who owes what without loading every debt.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionShare {
+    pub debt_id: String,
+    /// lent = they owe you · borrowed = you owe them
+    pub direction: String,
+    pub counterparty: String,
+    pub amount: Paise,
+    pub due_on: Option<String>,
+    pub note: Option<String>,
+    pub paid: Paise,
+    pub outstanding: Paise,
+    pub settled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionShareInput {
+    /// The debt this share already is, when the split is being edited.
+    pub id: Option<String>,
+    pub direction: String,
+    pub counterparty: String,
+    pub amount: Paise,
+    pub due_on: Option<String>,
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,6 +170,12 @@ pub struct TransactionInput {
     pub merchant: String,
     pub note: Option<String>,
     pub occurred_at: String,
+    /// Line items to file this posting under. `None` leaves whatever is
+    /// already there alone; an empty list clears it back to one category.
+    pub splits: Option<Vec<TransactionSplitInput>>,
+    /// Who owes what out of this bill. Same rule: `None` changes nothing,
+    /// empty clears every share the split opened.
+    pub shares: Option<Vec<TransactionShareInput>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -234,6 +309,9 @@ pub struct Debt {
     /// The posting that opened this debt, when it came from one.
     pub transaction_id: Option<String>,
     pub transaction_label: Option<String>,
+    /// True when this debt is one person's share of a split bill, rather than
+    /// something entered on its own. Re-splitting that bill owns it.
+    pub from_split: bool,
     // Derived.
     pub paid: Paise,
     pub outstanding: Paise,

@@ -17,6 +17,14 @@ export interface Account {
   sortOrder: number;
   createdAt: string;
   balance: Paise;
+  /**
+   * What the holdings parked in this account are worth today, less the basis
+   * their own postings already put on `balance`. Zero unless a holding sits
+   * here — and the whole of a holding whose entries posted nothing, which the
+   * ledger knows nothing about. Use `accountWorth` rather than adding it by
+   * hand.
+   */
+  revaluation: Paise;
   /** Credit limit for a card, in paise. Zero means it isn't tracked. */
   creditLimit: Paise;
 }
@@ -80,6 +88,59 @@ export interface Transaction {
   /** The top-level group this transaction's category rolls up into. */
   categoryGroupId: string | null;
   categoryGroupName: string | null;
+  /**
+   * The line items this bill was split into. Empty for the ordinary case —
+   * one bill, one category. When it isn't, the parts add up to `amount`
+   * exactly, so the ledger still sees a single posting.
+   */
+  splits: TransactionSplit[];
+  /** Who else was in on this bill. Each share is a debt of its own. */
+  shares: TransactionShare[];
+}
+
+/** One line of a split bill: part of the money, filed on its own. */
+export interface TransactionSplit {
+  id: string;
+  transactionId: string;
+  amount: Paise;
+  categoryId: string | null;
+  note: string | null;
+  sortOrder: number;
+  categoryName: string | null;
+  categoryIcon: string | null;
+  categoryColor: string | null;
+  categoryGroupId: string | null;
+  categoryGroupName: string | null;
+}
+
+export interface TransactionSplitInput {
+  id?: string | null;
+  amount: Paise;
+  categoryId: string | null;
+  note: string | null;
+}
+
+/** One person's share of a split bill, seen from the posting that opened it. */
+export interface TransactionShare {
+  debtId: string;
+  direction: DebtDirection;
+  counterparty: string;
+  amount: Paise;
+  dueOn: string | null;
+  note: string | null;
+  paid: Paise;
+  outstanding: Paise;
+  settled: boolean;
+}
+
+export interface TransactionShareInput {
+  /** The debt this share already is, when the split is being edited. */
+  id?: string | null;
+  direction: DebtDirection;
+  counterparty: string;
+  amount: Paise;
+  dueOn: string | null;
+  note: string | null;
 }
 
 export interface TransactionInput {
@@ -92,6 +153,13 @@ export interface TransactionInput {
   merchant: string;
   note: string | null;
   occurredAt: string;
+  /**
+   * Line items to file this posting under. Leave it off and whatever is
+   * already there is untouched; an empty list clears the split.
+   */
+  splits?: TransactionSplitInput[] | null;
+  /** Who owes what out of this bill. Same rule as `splits`. */
+  shares?: TransactionShareInput[] | null;
 }
 
 export interface TransactionQuery {
@@ -201,6 +269,8 @@ export interface Debt {
   createdAt: string;
   transactionId: string | null;
   transactionLabel: string | null;
+  /** True when this debt is one person's share of a split bill. */
+  fromSplit: boolean;
   paid: Paise;
   outstanding: Paise;
   settled: boolean;

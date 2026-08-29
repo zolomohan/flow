@@ -222,8 +222,10 @@ function DebtCard({
           )}
           {debt.transactionId && (
             <span className="debt-tag is-link">
-              <Icon name="arrow-left-right" size={11} />
-              {debt.transactionLabel ?? 'Linked'}
+              <Icon name={debt.fromSplit ? 'split' : 'arrow-left-right'} size={11} />
+              {debt.fromSplit
+                ? `Share of ${debt.transactionLabel ?? 'a split bill'}`
+                : (debt.transactionLabel ?? 'Linked')}
             </span>
           )}
           {debt.payments.length > 0 && (

@@ -1,4 +1,4 @@
-import type { Paise, Scaled } from './types';
+import type { Account, Paise, Scaled } from './types';
 
 const inr = new Intl.NumberFormat('en-IN', {
   minimumFractionDigits: 0,
@@ -177,4 +177,14 @@ export function unitPrice(e4: Scaled) {
 export function perUnit(amount: Paise, quantityE4: Scaled): Paise {
   if (!quantityE4) return 0;
   return Math.round((amount / quantityE4) * 10_000);
+}
+
+/**
+ * What an account is actually worth: its ledger balance plus whatever the
+ * holdings kept in it have grown to. Only an investment account ever differs
+ * from its balance — and it differs by the whole of a holding that was never
+ * paid for through the ledger.
+ */
+export function accountWorth(account: Account): Paise {
+  return account.balance + account.revaluation;
 }

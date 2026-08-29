@@ -6,8 +6,14 @@ import {
   Button, Field, IconButton, Segmented, Select, Sheet, TextInput,
   type SegmentOption, type SelectOption,
 } from './ui';
+import {
+  SplitLinesEditor, SplitPeopleEditor, SplitSection,
+  directionFor, emptyPeople, lineFromScratch, linesFor, linesToInput,
+  peopleFor, peopleToInput, restOf, shareAmounts,
+  type SplitLine, type SplitPeople,
+} from './SplitEditors';
 import { useStore } from '../lib/store';
-import { paiseToRupeeString, rupeesToPaise, toLocalInput } from '../lib/format';
+import { money, paiseToRupeeString, rupeesToPaise, toLocalInput } from '../lib/format';
 import { itemVariants, listVariants, spring } from '../lib/motion';
 import type { Transaction, TransactionInput, TxKind } from '../lib/types';
 
@@ -24,13 +30,18 @@ export interface TxDraft {
   categoryId?: string;
 }
 
+/** Which split panel the sheet opens showing, when it was opened to split. */
+export type SplitFocus = 'people' | 'categories';
+
 export function TransactionSheet({
-  open, onClose, editing, draft,
+  open, onClose, editing, draft, splitFocus,
 }: {
   open: boolean;
   onClose: () => void;
   editing?: Transaction | null;
   draft?: TxDraft;
+  /** Set when the sheet was opened by the Split action rather than by a row. */
+  splitFocus?: SplitFocus | null;
 }) {
   const { accounts, categories, saveTransaction, deleteTransaction, toast } = useStore();
   const live = useMemo(() => accounts.filter((a) => !a.archived), [accounts]);
@@ -45,6 +56,12 @@ export function TransactionSheet({
   const [occurredAt, setOccurredAt] = useState(toLocalInput());
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [lines, setLines] = useState<SplitLine[]>([]);
+  const [people, setPeople] = useState<SplitPeople>(emptyPeople);
+  const [panel, setPanel] = useState<SplitFocus | null>(null);
+  // True while the category rows are still the halves the panel seeded and
+  // nothing has been typed into them — so merely looking never splits a bill.
+  const [seeded, setSeeded] = useState(false);
   const amountRef = useRef<HTMLInputElement>(null);
 
   // Reset the form each time the sheet opens, from the edited row or the draft.
@@ -59,6 +76,9 @@ export function TransactionSheet({
       setMerchant(editing.merchant);
       setNote(editing.note ?? '');
       setOccurredAt(editing.occurredAt.slice(0, 16));
+      setLines(linesFor(editing));
+      setPeople(peopleFor(editing));
+      setSeeded(false);
     } else {
       setKind(draft?.kind ?? 'expense');
       setAmount('');
@@ -68,11 +88,20 @@ export function TransactionSheet({
       setMerchant('');
       setNote('');
       setOccurredAt(toLocalInput());
+      setLines([]);
+      setPeople(emptyPeople());
+      setSeeded(false);
     }
+    // A panel opens by itself when there is already something in it, or when
+    // the sheet was opened by the Split action rather than by the row.
+    setPanel(
+      splitFocus ??
+        (editing?.shares.length ? 'people' : editing?.splits.length ? 'categories' : null),
+    );
     setError(null);
     const focus = window.setTimeout(() => amountRef.current?.focus(), 220);
     return () => window.clearTimeout(focus);
-  }, [open, editing, draft, live]);
+  }, [open, editing, draft, live, splitFocus]);
 
   // Categories only apply to one side of the ledger at a time.
   const palette = useMemo(
@@ -88,6 +117,27 @@ export function TransactionSheet({
       children: palette.filter((c) => c.parentId === top.id),
     }));
   }, [palette]);
+
+  // What the editors below divide up. Typing in the amount well re-cuts the
+  // shares live, which is how a split is usually arrived at: the total lands
+  // first, the company second.
+  const paise = rupeesToPaise(amount);
+  // The parts always come to the bill — the last one takes whatever is left —
+  // so the only thing that can go wrong is the typed ones overrunning it.
+  const split = lines.length > 0;
+  const rest = restOf(lines, paise);
+  const shares = shareAmounts(people, paise);
+  const owed = people.people.reduce(
+    (sum, person, i) => sum + (person.you ? 0 : shares[i]),
+    0,
+  );
+
+  // With the picker hidden, the collapsed panel is the only place the split's
+  // categories are named — so it names them.
+  const partNames = lines
+    .map((l) => palette.find((c) => c.id === l.categoryId)?.name)
+    .filter(Boolean)
+    .join(', ');
 
   const selected = palette.find((c) => c.id === categoryId) ?? null;
   const openGroupId = selected ? (selected.parentId ?? selected.id) : null;
@@ -111,13 +161,51 @@ export function TransactionSheet({
     setToAccountId(accountId);
   };
 
+  // Opening the categories panel on an unsplit bill seeds two halves rather
+  // than two empty rows, so it starts balanced and is corrected downwards.
+  // Closing it again without touching them puts the bill back as it was:
+  // looking inside a panel is not the same as asking for a split.
+  const togglePanel = (which: SplitFocus) => {
+    const closing = panel === which;
+    setPanel(closing ? null : which);
+    if (which !== 'categories') return;
+    if (closing) {
+      if (seeded) {
+        setLines([]);
+        setSeeded(false);
+      }
+      return;
+    }
+    if (lines.length === 0) {
+      // An empty first part and a rest holding the whole bill: you type what
+      // one part came to and watch the rest come down, rather than being
+      // handed a division nobody asked for.
+      setLines([{ ...lineFromScratch(), categoryId }, lineFromScratch()]);
+      setSeeded(true);
+    }
+  };
+
+  const editLines = (next: SplitLine[]) => {
+    setLines(next);
+    setSeeded(false);
+  };
+
   const submit = async () => {
-    const paise = rupeesToPaise(amount);
     if (!paise) return setError('Enter an amount.');
     if (!accountId) return setError('Pick an account.');
     if (kind === 'transfer' && !toAccountId) return setError('Pick a destination account.');
     if (kind === 'transfer' && toAccountId === accountId)
       return setError('A transfer needs two different accounts.');
+
+    // A transfer moves money between your own accounts, so there is nothing to
+    // file under categories and nobody to owe a part of it.
+    const parts = kind === 'transfer' ? [] : linesToInput(lines, paise);
+    const owing = kind === 'transfer' ? [] : peopleToInput(people, paise, kind);
+    if (kind !== 'transfer' && split && rest < 0)
+      return setError(`The parts run ${money(-rest)} over the ${money(paise)} bill.`);
+    if (parts.length === 1) return setError('A split needs at least two parts.');
+    if (owed > paise)
+      return setError(`The shares come to ${money(owed)} — more than the bill.`);
 
     const input: TransactionInput = {
       id: editing?.id ?? null,
@@ -125,16 +213,34 @@ export function TransactionSheet({
       amount: paise,
       accountId,
       toAccountId: kind === 'transfer' ? toAccountId : null,
-      categoryId: kind === 'transfer' ? null : categoryId,
+      // A split bill has no single category of its own, but the ledger row
+      // still needs a colour and a glyph — so it takes the largest part's.
+      categoryId:
+        kind === 'transfer'
+          ? null
+          : parts.length
+            ? (parts.reduce((big, p) => (p.amount > big.amount ? p : big)).categoryId ??
+               categoryId)
+            : categoryId,
       merchant: merchant.trim(),
       note: note.trim() || null,
       occurredAt,
+      splits: parts,
+      shares: owing,
     };
 
     setSaving(true);
     try {
       await saveTransaction(input);
-      toast(editing ? 'Transaction updated' : 'Transaction added');
+      toast(
+        owing.length
+          ? `${editing ? 'Transaction updated' : 'Transaction added'} · ${owing.length} ${
+              owing.length === 1 ? 'debt' : 'debts'
+            } ${directionFor(kind) === 'lent' ? 'owed to you' : 'you owe'}`
+          : editing
+            ? 'Transaction updated'
+            : 'Transaction added',
+      );
       onClose();
     } catch {
       /* the store already raised an error toast */
@@ -261,7 +367,7 @@ export function TransactionSheet({
         </div>
 
         <AnimatePresence mode="popLayout">
-          {kind !== 'transfer' && (
+          {kind !== 'transfer' && !split && (
             <motion.div
               key="category"
               initial={{ opacity: 0, height: 0 }}
@@ -384,6 +490,63 @@ export function TransactionSheet({
             onChange={(e) => setNote(e.target.value)}
           />
         </Field>
+
+        <AnimatePresence initial={false}>
+          {kind !== 'transfer' && (
+            <motion.div
+              key="splits"
+              className="split-panels"
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={spring}
+            >
+              <SplitSection
+                icon="split"
+                title="Split transaction"
+                summary={
+                  split
+                    ? `${lines.length} parts of ${money(paise)} · ${partNames || 'pick categories'}`
+                    : 'File one bill under more than one category'
+                }
+                open={panel === 'categories'}
+                onToggle={() => togglePanel('categories')}
+              >
+                <SplitLinesEditor
+                  amount={paise}
+                  kind={kind}
+                  lines={lines}
+                  onChange={editLines}
+                />
+              </SplitSection>
+
+              <SplitSection
+                icon="users"
+                title="Split with people"
+                summary={
+                  owed > 0
+                    ? `${people.people.length - 1} ${
+                        people.people.length === 2 ? 'person' : 'people'
+                      } · ${money(owed)} ${
+                        directionFor(kind) === 'lent' ? 'owed back to you' : 'you owe them'
+                      }`
+                    : kind === 'income'
+                      ? 'Owe part of this to the people it was for'
+                      : 'Turn everyone else’s share into a debt they owe you'
+                }
+                open={panel === 'people'}
+                onToggle={() => togglePanel('people')}
+              >
+                <SplitPeopleEditor
+                  amount={paise}
+                  kind={kind}
+                  split={people}
+                  onChange={setPeople}
+                />
+              </SplitSection>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </Sheet>
   );

@@ -483,6 +483,14 @@ kbd {
 .input::placeholder { color: var(--ink-4); font-weight: 400; }
 .input:hover { border-color: var(--line-strong); }
 .input:focus { border-color: var(--blue); box-shadow: var(--ring); }
+/* A figure the app worked out for you: legible, but plainly not yours to type. */
+.input:disabled {
+  background: var(--surface-inset);
+  border-color: transparent;
+  color: var(--ink-3);
+  cursor: default;
+}
+.input:disabled:hover { border-color: transparent; }
 
 .rupee-input { position: relative; display: flex; align-items: center; }
 .rupee-input span {
@@ -553,6 +561,43 @@ kbd {
   box-shadow: var(--shadow-lg);
   transform-origin: top center;
 }
+
+/* Stuck to the menu's inner edge — the negative margins cancel the menu's own
+   padding, so it starts flush at offset zero and never scrolls away. */
+.select-search {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -5px -5px 4px;
+  padding: 9px 11px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line-soft);
+}
+.select-search > svg { color: var(--ink-4); flex-shrink: 0; }
+.select-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: inherit;
+}
+.select-search input::placeholder { color: var(--ink-4); font-weight: 400; }
+
+.select-empty {
+  padding: 12px 10px;
+  font-size: 12.5px;
+  color: var(--ink-4);
+}
+
+/* A leaf sits one step in from the group it belongs to. Filtering flattens
+   the list, so the indent goes and the group's name rides along as a hint. */
+.select-option.is-child { padding-left: 26px; }
 
 .select-group-label {
   padding: 8px 9px 4px;
@@ -899,7 +944,9 @@ kbd {
   bottom: 0;
   border-bottom: 1px solid var(--line-soft);
 }
-.tx-row:last-child::after { display: none; }
+.tx-bill:last-child .tx-row::after { display: none; }
+/* A split bill draws its own line under the strip instead. */
+.tx-bill:has(.tx-bill-strip) .tx-row::after { display: none; }
 .tx-row:hover { background: var(--surface-2); }
 .tx-row:hover .tx-chevron { opacity: 1; transform: translateX(0); }
 
@@ -956,6 +1003,135 @@ kbd {
   opacity: 0;
   transform: translateX(-4px);
   transition: opacity var(--fast) var(--ease), transform var(--fast) var(--ease);
+}
+
+/* ---------------------------------------------------------- a split bill */
+
+.tx-bill { position: relative; }
+.tx-bill.is-open { background: var(--surface-2); }
+
+/* Sits over the chevron, which is decoration — the whole row is the target. */
+.tx-split-action {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: var(--r-full);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow-sm);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(4px);
+  transition: opacity var(--fast) var(--ease), transform var(--fast) var(--ease),
+              color var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+.tx-bill:hover .tx-split-action { opacity: 1; pointer-events: auto; transform: translateX(0); }
+.tx-bill:hover .tx-chevron { opacity: 0; }
+.tx-split-action:hover { color: var(--blue); border-color: var(--blue); }
+
+.tx-bill-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 22px 9px 62px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-4);
+  text-align: left;
+  transition: color var(--fast) var(--ease);
+}
+.tx-bill-strip:hover { color: var(--ink-2); }
+.tx-bill-strip > span:first-of-type { display: grid; place-items: center; }
+
+.tx-bill-count {
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  background: var(--surface-inset);
+  color: var(--ink-3);
+}
+.tx-bill-owed {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tx-bill-owed.is-lent { color: var(--green); }
+.tx-bill-owed.is-borrowed { color: var(--amber); }
+.tx-bill-owed em { font-style: normal; color: var(--ink-4); font-weight: 500; }
+
+.tx-parts { overflow: hidden; }
+.tx-parts-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 22px 12px 62px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.tx-part {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 0;
+}
+.tx-part-dot {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  flex-shrink: 0;
+  color: var(--tint);
+  background: color-mix(in srgb, var(--tint) 14%, transparent);
+}
+.tx-part-mark {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 99px;
+  flex-shrink: 0;
+  background: var(--surface-inset);
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--ink-3);
+}
+.tx-part-name {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.tx-part-name em { font-style: normal; font-size: 11px; font-weight: 500; color: var(--ink-4); }
+.tx-part-note {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--ink-4);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tx-part-amount {
+  margin-left: auto;
+  padding-left: 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
 }
 
 .day-group + .day-group { border-top: 1px solid var(--line-soft); }
@@ -1745,11 +1921,20 @@ kbd {
   color: var(--red);
 }
 
-.tx-accounts { display: flex; align-items: flex-end; gap: 12px; }
-.tx-accounts > .field { flex: 1; min-width: 0; }
-.tx-transfer-to { display: flex; align-items: flex-end; gap: 12px; flex: 1; min-width: 0; }
+.tx-accounts { --swap: 34px; --gap: 12px; display: flex; align-items: flex-end; gap: var(--gap); }
+.tx-accounts > .field { flex: 1 1 0; min-width: 0; }
+/* The swap button rides in the second column, so its footprint comes out of
+   the basis before the two halves share what is left — otherwise "Into
+   account" ends up narrower than "From account" by exactly the button. */
+.tx-transfer-to {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--gap);
+  flex: 1 1 calc(var(--swap) + var(--gap));
+  min-width: 0;
+}
 .tx-transfer-to > .icon-btn { margin-bottom: 4px; flex-shrink: 0; }
-.tx-transfer-to > .field { flex: 1; min-width: 0; }
+.tx-transfer-to > .field { flex: 1 1 0; min-width: 0; }
 
 .cat-grid { display: flex; flex-wrap: wrap; gap: 6px; max-width: 100%; }
 
@@ -3306,4 +3491,243 @@ kbd {
     gap: 14px 18px;
   }
   .holding-summary { grid-template-columns: 1fr; }
+}
+
+
+/* ==================================================================
+   Splitting a bill — into categories, and between people
+   ================================================================== */
+
+.split-panels { display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
+
+.split-section {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  overflow: hidden;
+  transition: border-color var(--fast) var(--ease);
+}
+.split-section.is-open { border-color: var(--line-strong); }
+
+.split-section-head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 11px 13px;
+  text-align: left;
+  color: var(--ink-4);
+}
+.split-section-head:hover { background: var(--surface-2); }
+.split-section-glyph {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  background: var(--surface-inset);
+  color: var(--ink-3);
+}
+.split-section.is-open .split-section-glyph { background: var(--blue-soft); color: var(--blue); }
+.split-section-title {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.split-section-title em {
+  font-style: normal;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ink-4);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.split-section-body { overflow: hidden; }
+.split-section-inner { padding: 4px 13px 13px; border-top: 1px solid var(--line-soft); }
+
+/* ------------------------------------------------------- line items */
+
+.split-lines { display: flex; flex-direction: column; gap: 8px; }
+
+/* The rows and whatever acts on them, held together as one thing rather than
+   left as loose siblings of the panel. */
+.split-block {
+  padding: 4px 11px 11px;
+  border-radius: var(--r-md);
+  background: var(--surface-inset);
+  border: 1px solid var(--line-soft);
+}
+
+/* How the bill divides, in one glance and in the categories' own colours. */
+.split-bar {
+  display: flex;
+  gap: 2px;
+  height: 6px;
+  margin: 10px 0 4px;
+}
+.split-bar > span {
+  flex-basis: 0;
+  min-width: 3px;
+  border-radius: 99px;
+  background: var(--cat);
+}
+.split-bar > span.is-empty { display: none; }
+
+.split-line {
+  position: relative;
+  overflow: hidden;
+  margin-top: 6px;
+  padding: 9px 11px 9px 13px;
+  border-radius: var(--r-md);
+  background: var(--surface);
+  border: 1px solid transparent;
+  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+/* The category's colour, carried as a stripe rather than a second swatch —
+   the select trigger already shows one. */
+.split-line::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--cat);
+}
+.split-line:focus-within { border-color: var(--line-strong); }
+.split-line.is-over { border-color: var(--red); }
+
+.split-line-row { display: flex; align-items: center; gap: 8px; }
+.split-line-row .select { flex: 1; min-width: 0; }
+.split-line-index {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 99px;
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--cat) 16%, transparent);
+  color: var(--cat);
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.split-line-amount { width: 122px; flex-shrink: 0; }
+
+.split-line.is-over .split-line-amount .input { color: var(--red); }
+
+.split-line-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  /* Lines the note up under the category select, past the number badge. */
+  padding-left: 26px;
+}
+/* Stops short of the row's right edge so it lines up with the amount above
+   rather than running under the remove button. */
+.split-line-note { flex: 1; min-width: 0; height: 32px; margin-right: 42px; font-size: 12.5px; }
+
+.split-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.split-foot-gap { flex: 1; }
+
+/* ---------------------------------------------------------- people */
+
+.split-people { display: flex; flex-direction: column; gap: 9px; padding-top: 10px; }
+.person-list { display: flex; flex-direction: column; }
+
+/* One grid rather than a flex run, so the weight, the amount and the remove
+   button hold the same columns however the split is being worked out. The
+   weight column only exists in two of the four methods, so the list says
+   which shape its rows are rather than each row guessing. */
+.person-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 122px 34px;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 0;
+  overflow: hidden;
+}
+.person-list.is-weighted .person-row {
+  grid-template-columns: minmax(0, 1fr) auto 122px 34px;
+}
+.person-row + .person-row { border-top: 1px solid var(--line-soft); }
+.person-row.is-over .person-amount .input { color: var(--red); }
+
+.person-name {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+.person-name em { font-style: normal; font-size: 11px; font-weight: 500; color: var(--green); }
+
+.person-weight { display: flex; align-items: center; gap: 6px; }
+.person-weight .input { width: 56px; height: 32px; text-align: right; padding: 0 8px; }
+.person-weight span { font-size: 11.5px; font-weight: 500; color: var(--ink-4); }
+
+.person-amount .input { height: 32px; }
+.person-spacer { width: 34px; }
+
+.person-add {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
+}
+.person-add .input { flex: 1; min-width: 0; height: 34px; }
+
+/* Who you have split with before — chips rather than a native dropdown, which
+   looked foreign and behaved worse. */
+.person-suggest { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.person-suggest-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px 4px 7px;
+  border-radius: var(--r-full);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-3);
+  transition: border-color var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.person-suggest-chip:hover { border-color: var(--blue); color: var(--blue); }
+
+.split-due { display: flex; flex-direction: column; gap: 5px; }
+.split-tally {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 11px;
+  border-radius: var(--r-md);
+  background: var(--surface-inset);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+.split-tally.is-over { background: var(--red-soft); color: var(--red); }
+
+@media (max-width: 640px) {
+  .split-line-row { flex-wrap: wrap; }
+  .split-line-amount { width: 100%; }
 }

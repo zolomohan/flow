@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from './Icon';
 import { Amount } from './Money';
 import { useStore } from '../lib/store';
-import { dayLabel, money } from '../lib/format';
+import { accountWorth, dayLabel, money } from '../lib/format';
 import { sheetBackdrop, sheetPanel, spring } from '../lib/motion';
 import type { Transaction, TxKind } from '../lib/types';
 import type { Route } from './Sidebar';
@@ -84,7 +84,7 @@ export function CommandPalette({
     ).map((a) => ({
       id: `acct-${a.id}`,
       label: a.name,
-      hint: money(a.balance),
+      hint: money(accountWorth(a)),
       icon: a.icon,
       tint: a.color,
       section: 'Accounts',

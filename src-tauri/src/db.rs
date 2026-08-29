@@ -51,6 +51,18 @@ SELECT t.id, t.kind, t.amount, t.account_id, t.to_account_id, t.category_id,
        COALESCE(p.id, c.id), COALESCE(p.name, c.name)
 ";
 
+/// Every posting as its categories actually see it: an ordinary one once, and
+/// a split bill once per line item. Because the parts add up to the posting's
+/// own amount, anything summing over this sees the same total either way —
+/// only the category each rupee lands under changes.
+const ATTRIBUTED: &str = "
+SELECT t.id, t.kind, t.occurred_at, t.merchant,
+       COALESCE(s.category_id, t.category_id) AS category_id,
+       COALESCE(s.amount, t.amount)           AS amount
+FROM transactions t
+LEFT JOIN transaction_splits s ON s.transaction_id = t.id
+";
+
 pub fn open(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path).map_err(oops)?;
     conn.execute_batch(
@@ -102,6 +114,20 @@ fn migrate(conn: &Connection) -> Result<()> {
             occurred_at   TEXT NOT NULL,
             created_at    TEXT NOT NULL
         );
+
+        -- A bill filed under more than one category. The parts always add up
+        -- to the posting's own amount, so every balance and every total the
+        -- ledger computes is untouched by a split: only the attribution moves.
+        CREATE TABLE IF NOT EXISTS transaction_splits (
+            id             TEXT PRIMARY KEY,
+            transaction_id TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+            amount         INTEGER NOT NULL CHECK (amount > 0),
+            category_id    TEXT REFERENCES categories(id) ON DELETE SET NULL,
+            note           TEXT,
+            sort_order     INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_splits_tx ON transaction_splits(transaction_id);
 
         CREATE INDEX IF NOT EXISTS idx_tx_occurred ON transactions(occurred_at DESC);
         CREATE INDEX IF NOT EXISTS idx_tx_account  ON transactions(account_id);
@@ -200,6 +226,9 @@ fn migrate(conn: &Connection) -> Result<()> {
         "credit_limit",
         "credit_limit INTEGER NOT NULL DEFAULT 0",
     )?;
+    // Books that predate splitting have debts, but none of them came from a
+    // split — the default of 0 is exactly right for every one of them.
+    add_column_if_missing(conn, "debts", "from_split", "from_split INTEGER NOT NULL DEFAULT 0")?;
     migrate_gold_to_grams(conn)?;
     conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_cat_parent ON categories(parent_id);")
         .map_err(oops)?;
@@ -317,6 +346,9 @@ fn account_from_row(r: &Row) -> rusqlite::Result<Account> {
         created_at: r.get(9)?,
         balance: r.get(10)?,
         credit_limit: r.get(11)?,
+        // Filled in by `apply_marks`: the ledger alone knows nothing about
+        // what a holding is worth today.
+        revaluation: 0,
     })
 }
 
@@ -330,7 +362,9 @@ pub fn list_accounts(conn: &Connection) -> Result<Vec<Account>> {
     );
     let mut stmt = conn.prepare(&sql).map_err(oops)?;
     let rows = stmt.query_map([], account_from_row).map_err(oops)?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(oops)
+    let mut accounts = rows.collect::<rusqlite::Result<Vec<_>>>().map_err(oops)?;
+    apply_marks(conn, &mut accounts)?;
+    Ok(accounts)
 }
 
 fn get_account(conn: &Connection, id: &str) -> Result<Account> {
@@ -340,8 +374,11 @@ fn get_account(conn: &Connection, id: &str) -> Result<Account> {
                 a.credit_limit
          FROM accounts a WHERE a.id = ?1"
     );
-    conn.query_row(&sql, params![id], account_from_row)
-        .map_err(oops)
+    let mut one = vec![conn
+        .query_row(&sql, params![id], account_from_row)
+        .map_err(oops)?];
+    apply_marks(conn, &mut one)?;
+    Ok(one.remove(0))
 }
 
 pub fn save_account(conn: &Connection, input: AccountInput) -> Result<Account> {
@@ -534,8 +571,13 @@ pub fn save_category(conn: &Connection, input: CategoryInput) -> Result<Category
 pub fn category_usage(conn: &Connection) -> Result<HashMap<String, i64>> {
     let mut stmt = conn
         .prepare(
-            "SELECT category_id, COUNT(*) FROM transactions
-             WHERE category_id IS NOT NULL GROUP BY category_id",
+            // A split bill counts under every category it was filed against,
+            // not just the one on the posting — otherwise a category used only
+            // as part of a split looks unused and is offered up for deletion.
+            &format!(
+                "SELECT category_id, COUNT(*) FROM ({ATTRIBUTED})
+                 WHERE category_id IS NOT NULL GROUP BY category_id"
+            ),
         )
         .map_err(oops)?;
     let rows = stmt
@@ -576,7 +618,15 @@ fn move_transactions(conn: &Connection, from: &[String], to: Option<&str>) -> Re
     let mut args: Vec<Option<String>> = vec![to.map(str::to_string)];
     args.extend(from.iter().map(|f| Some(f.clone())));
     let moved = conn
-        .execute(&sql, params_from_iter(args))
+        .execute(&sql, params_from_iter(args.iter()))
+        .map_err(oops)?;
+    // A line item is filed under a category in its own right, so it moves with
+    // the postings rather than being orphaned by a reassignment.
+    let sql = format!(
+        "UPDATE transaction_splits SET category_id = ? WHERE category_id IN ({})",
+        placeholders(from.len())
+    );
+    conn.execute(&sql, params_from_iter(args.iter()))
         .map_err(oops)?;
     Ok(moved as i64)
 }
@@ -672,7 +722,105 @@ fn tx_from_row(r: &Row) -> rusqlite::Result<Transaction> {
         category_color: r.get(15)?,
         category_group_id: r.get(16)?,
         category_group_name: r.get(17)?,
+        // Filled in by `attach_parts`: both are their own tables, and reading
+        // them per row would turn one list into three hundred queries.
+        splits: Vec::new(),
+        shares: Vec::new(),
     })
+}
+
+/// The line items and the shares belonging to a page of postings, fetched in
+/// two queries however many rows are on screen and hung off the right ones.
+fn attach_parts(conn: &Connection, rows: &mut [Transaction]) -> Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<&str> = rows.iter().map(|t| t.id.as_str()).collect();
+    let ph = placeholders(ids.len());
+
+    let sql = format!(
+        "SELECT s.id, s.transaction_id, s.amount, s.category_id, s.note, s.sort_order,
+                c.name, c.icon, c.color, COALESCE(p.id, c.id), COALESCE(p.name, c.name)
+         FROM transaction_splits s
+         LEFT JOIN categories c ON c.id = s.category_id
+         LEFT JOIN categories p ON p.id = c.parent_id
+         WHERE s.transaction_id IN ({ph})
+         ORDER BY s.sort_order, s.id"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(oops)?;
+    let splits = stmt
+        .query_map(params_from_iter(ids.iter()), |r| {
+            Ok(TransactionSplit {
+                id: r.get(0)?,
+                transaction_id: r.get(1)?,
+                amount: r.get(2)?,
+                category_id: r.get(3)?,
+                note: r.get(4)?,
+                sort_order: r.get(5)?,
+                category_name: r.get(6)?,
+                category_icon: r.get(7)?,
+                category_color: r.get(8)?,
+                category_group_id: r.get(9)?,
+                category_group_name: r.get(10)?,
+            })
+        })
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?;
+
+    let sql = format!(
+        "SELECT d.transaction_id, d.id, d.direction, d.counterparty, d.principal,
+                d.due_on, d.note, d.settled_at,
+                COALESCE((SELECT SUM(p.amount) FROM debt_payments p WHERE p.debt_id = d.id), 0)
+         FROM debts d
+         WHERE d.from_split = 1 AND d.transaction_id IN ({ph})
+         ORDER BY d.created_at"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(oops)?;
+    let shares = stmt
+        .query_map(params_from_iter(ids.iter()), |r| {
+            let amount: Paise = r.get(4)?;
+            let paid: Paise = r.get(8)?;
+            let settled_at: Option<String> = r.get(7)?;
+            let outstanding = (amount - paid).max(0);
+            Ok((
+                r.get::<_, String>(0)?,
+                TransactionShare {
+                    debt_id: r.get(1)?,
+                    direction: r.get(2)?,
+                    counterparty: r.get(3)?,
+                    amount,
+                    due_on: r.get(5)?,
+                    note: r.get(6)?,
+                    paid,
+                    outstanding,
+                    settled: settled_at.is_some() || outstanding == 0,
+                },
+            ))
+        })
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?;
+
+    if splits.is_empty() && shares.is_empty() {
+        return Ok(());
+    }
+    let at: HashMap<String, usize> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, row)| (row.id.clone(), i))
+        .collect();
+    for split in splits {
+        if let Some(&i) = at.get(&split.transaction_id) {
+            rows[i].splits.push(split);
+        }
+    }
+    for (tx_id, share) in shares {
+        if let Some(&i) = at.get(&tx_id) {
+            rows[i].shares.push(share);
+        }
+    }
+    Ok(())
 }
 
 /// A typed amount as paise, when what was typed is only a number. Commas and
@@ -716,6 +864,18 @@ fn tx_filters(q: &TransactionQuery) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
         for _ in 0..5 {
             args.push(Box::new(like.clone()));
         }
+        // A split bill's parts carry notes and categories of their own, and
+        // "cab" written against one line of a dinner receipt has to be
+        // findable — the line has no row in the ledger to be found by itself.
+        clause.push_str(
+            " OR EXISTS (SELECT 1 FROM transaction_splits s
+                         LEFT JOIN categories sc ON sc.id = s.category_id
+                         WHERE s.transaction_id = t.id
+                           AND (s.note LIKE ? OR sc.name LIKE ?))",
+        );
+        for _ in 0..2 {
+            args.push(Box::new(like.clone()));
+        }
         // A bare number is almost always an amount — "15000" should find the
         // ₹15,000 SIP rather than nothing at all.
         if let Some(paise) = rupees_to_paise(term) {
@@ -753,9 +913,18 @@ fn tx_filters(q: &TransactionQuery) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
         }
     }
     if let Some(ids) = q.category_ids.as_ref().filter(|v| !v.is_empty()) {
-        wheres.push(format!("t.category_id IN ({})", placeholders(ids.len())));
-        for id in ids {
-            args.push(Box::new(id.clone()));
+        // A split bill belongs to every category it was filed against, so
+        // filtering by one of them has to find the whole bill — the line item
+        // has no existence of its own to return.
+        let ph = placeholders(ids.len());
+        wheres.push(format!(
+            "(t.category_id IN ({ph}) OR EXISTS (SELECT 1 FROM transaction_splits s
+                 WHERE s.transaction_id = t.id AND s.category_id IN ({ph})))"
+        ));
+        for _ in 0..2 {
+            for id in ids {
+                args.push(Box::new(id.clone()));
+            }
         }
     }
     if let Some(from) = q.from.as_ref() {
@@ -790,7 +959,9 @@ pub fn list_transactions(conn: &Connection, q: TransactionQuery) -> Result<Vec<T
     let rows = stmt
         .query_map(params_from_iter(args.iter().map(|b| b.as_ref())), tx_from_row)
         .map_err(oops)?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(oops)
+    let mut rows = rows.collect::<rusqlite::Result<Vec<_>>>().map_err(oops)?;
+    attach_parts(conn, &mut rows)?;
+    Ok(rows)
 }
 
 /// How many postings match, and what they come to. Deliberately ignores
@@ -822,7 +993,187 @@ pub fn transaction_summary(conn: &Connection, q: TransactionQuery) -> Result<Tra
 
 fn get_transaction(conn: &Connection, id: &str) -> Result<Transaction> {
     let sql = format!("{TX_SELECT}{TX_FROM} WHERE t.id = ?1");
-    conn.query_row(&sql, params![id], tx_from_row).map_err(oops)
+    let mut one = vec![conn
+        .query_row(&sql, params![id], tx_from_row)
+        .map_err(oops)?];
+    attach_parts(conn, &mut one)?;
+    Ok(one.remove(0))
+}
+
+/// Files a posting under several categories at once. The parts must come to
+/// exactly what the posting is for: anything else and the ledger would say one
+/// thing while the breakdown said another. An empty list clears the split and
+/// leaves the posting filed under its own category again.
+fn replace_splits(
+    conn: &Connection,
+    tx_id: &str,
+    amount: Paise,
+    kind: &str,
+    splits: &[TransactionSplitInput],
+) -> Result<()> {
+    if !splits.is_empty() {
+        if kind == "transfer" {
+            return Err("Transfers move money between your own accounts, so there is nothing to split.".into());
+        }
+        if splits.len() < 2 {
+            return Err("A split needs at least two parts.".into());
+        }
+        if splits.iter().any(|s| s.amount <= 0) {
+            return Err("Every part of a split needs an amount greater than zero.".into());
+        }
+        let total: Paise = splits.iter().map(|s| s.amount).sum();
+        if total != amount {
+            return Err(format!(
+                "The parts come to ₹{} but the transaction is ₹{}.",
+                total / 100,
+                amount / 100
+            ));
+        }
+    }
+
+    // Rewritten wholesale rather than diffed: a split carries nothing worth
+    // preserving across an edit — no payments, no history, just the shape the
+    // form last showed.
+    conn.execute(
+        "DELETE FROM transaction_splits WHERE transaction_id = ?1",
+        params![tx_id],
+    )
+    .map_err(oops)?;
+    for (i, split) in splits.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO transaction_splits (id, transaction_id, amount, category_id, note, sort_order)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                new_id(),
+                tx_id,
+                split.amount,
+                split.category_id.as_deref().filter(|c| !c.is_empty()),
+                split.note.as_deref().map(str::trim).filter(|n| !n.is_empty()),
+                i as i64
+            ],
+        )
+        .map_err(oops)?;
+    }
+    Ok(())
+}
+
+/// Turns the people on a bill into debts of their own. Each share is an
+/// ordinary debt — it shows on the Debts screen, takes repayments and counts
+/// towards net worth — that happens to know which posting opened it.
+///
+/// Shares already saved are matched by id and updated in place, so a
+/// repayment recorded against one survives the bill being re-split. Debts
+/// linked to this posting by hand are left alone: only the split's own are
+/// its to remove.
+fn replace_shares(
+    conn: &Connection,
+    tx_id: &str,
+    amount: Paise,
+    occurred_at: &str,
+    merchant: &str,
+    shares: &[TransactionShareInput],
+) -> Result<()> {
+    let opened_on = occurred_at.get(..10).unwrap_or(occurred_at).to_string();
+    let mut kept: Vec<String> = Vec::new();
+
+    if !shares.is_empty() {
+        let total: Paise = shares.iter().map(|s| s.amount).sum();
+        if total > amount {
+            return Err(format!(
+                "The shares come to ₹{} — more than the ₹{} bill.",
+                total / 100,
+                amount / 100
+            ));
+        }
+    }
+
+    for share in shares {
+        let who = share.counterparty.trim();
+        if who.is_empty() {
+            return Err("Every share needs a name.".into());
+        }
+        if share.amount <= 0 {
+            return Err(format!("{who}'s share needs an amount greater than zero."));
+        }
+        if share.direction != "lent" && share.direction != "borrowed" {
+            return Err("A share is either lent or borrowed.".into());
+        }
+        // A share with no note of its own says what it was for.
+        let note = share
+            .note
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                Some(if merchant.is_empty() {
+                    "Share of a split bill".to_string()
+                } else {
+                    format!("Share of {merchant}")
+                })
+            });
+
+        match share.id.as_deref() {
+            // Only a share this posting already owns may be updated through
+            // here; anything else would let a split quietly rewrite a debt
+            // that was entered by hand.
+            Some(id)
+                if conn
+                    .query_row(
+                        "SELECT 1 FROM debts WHERE id = ?1 AND from_split = 1 AND transaction_id = ?2",
+                        params![id, tx_id],
+                        |_| Ok(()),
+                    )
+                    .optional()
+                    .map_err(oops)?
+                    .is_some() =>
+            {
+                conn.execute(
+                    "UPDATE debts SET direction = ?2, counterparty = ?3, principal = ?4,
+                            opened_on = ?5, due_on = ?6, note = ?7
+                     WHERE id = ?1",
+                    params![id, share.direction, who, share.amount, opened_on, share.due_on, note],
+                )
+                .map_err(oops)?;
+                kept.push(id.to_string());
+            }
+            _ => {
+                let id = new_id();
+                conn.execute(
+                    "INSERT INTO debts (id, direction, counterparty, principal, opened_on,
+                                        due_on, note, settled_at, created_at, transaction_id, from_split)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, ?9, 1)",
+                    params![
+                        id,
+                        share.direction,
+                        who,
+                        share.amount,
+                        opened_on,
+                        share.due_on,
+                        note,
+                        now(),
+                        tx_id
+                    ],
+                )
+                .map_err(oops)?;
+                kept.push(id);
+            }
+        }
+    }
+
+    let sql = format!(
+        "DELETE FROM debts WHERE from_split = 1 AND transaction_id = ?1
+           AND id NOT IN ({})",
+        placeholders(kept.len())
+    );
+    let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(tx_id.to_string())];
+    args.extend(
+        kept.into_iter()
+            .map(|id| Box::new(id) as Box<dyn rusqlite::ToSql>),
+    );
+    conn.execute(&sql, params_from_iter(args.iter().map(|b| b.as_ref())))
+        .map_err(oops)?;
+    Ok(())
 }
 
 pub fn save_transaction(conn: &Connection, input: TransactionInput) -> Result<Transaction> {
@@ -850,6 +1201,10 @@ pub fn save_transaction(conn: &Connection, input: TransactionInput) -> Result<Tr
     } else {
         None
     };
+
+    // One savepoint over the whole save: a bill and the parts it was split
+    // into are one fact, and half of it landing would leave the two disagreeing.
+    let guard = conn.unchecked_transaction().map_err(oops)?;
 
     let id = match input.id {
         Some(id) => {
@@ -896,6 +1251,44 @@ pub fn save_transaction(conn: &Connection, input: TransactionInput) -> Result<Tr
             id
         }
     };
+
+    // A split that no longer describes its posting has to go: turning an
+    // expense into a transfer leaves nothing to divide, and changing the
+    // amount from anywhere that doesn't send the parts leaves them adding up
+    // to the old figure. Either way the breakdown would contradict the ledger.
+    if input.splits.is_none() {
+        let stale: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 AND COALESCE(SUM(amount), 0) <> ?2
+                 FROM transaction_splits WHERE transaction_id = ?1",
+                params![id, input.amount],
+                |r| r.get::<_, i64>(0),
+            )
+            .map_err(oops)?
+            != 0;
+        if stale || input.kind == "transfer" {
+            conn.execute(
+                "DELETE FROM transaction_splits WHERE transaction_id = ?1",
+                params![id],
+            )
+            .map_err(oops)?;
+        }
+    }
+    if let Some(splits) = input.splits.as_deref() {
+        replace_splits(conn, &id, input.amount, &input.kind, splits)?;
+    }
+    if let Some(shares) = input.shares.as_deref() {
+        replace_shares(
+            conn,
+            &id,
+            input.amount,
+            &input.occurred_at,
+            input.merchant.trim(),
+            shares,
+        )?;
+    }
+
+    guard.commit().map_err(oops)?;
     get_transaction(conn, &id)
 }
 
@@ -920,7 +1313,8 @@ pub fn list_debts(conn: &Connection) -> Result<Vec<Debt>> {
         "SELECT d.id, d.direction, d.counterparty, d.principal, d.opened_on, d.due_on,
                 d.note, d.settled_at, d.created_at, d.transaction_id,
                 {TX_LABEL} d.transaction_id),
-                COALESCE((SELECT SUM(p.amount) FROM debt_payments p WHERE p.debt_id = d.id), 0)
+                COALESCE((SELECT SUM(p.amount) FROM debt_payments p WHERE p.debt_id = d.id), 0),
+                d.from_split
          FROM debts d
          ORDER BY d.settled_at IS NOT NULL, d.opened_on DESC, d.created_at DESC"
     );
@@ -944,6 +1338,7 @@ pub fn list_debts(conn: &Connection) -> Result<Vec<Debt>> {
                 created_at: r.get(8)?,
                 transaction_id: r.get(9)?,
                 transaction_label: r.get(10)?,
+                from_split: r.get::<_, i64>(12)? != 0,
                 paid,
                 outstanding,
                 payments: Vec::new(),
@@ -1646,6 +2041,8 @@ pub fn save_investment_lot(conn: &Connection, input: InvestmentLotInput) -> Resu
                             merchant: tx.merchant.clone(),
                             note: tx.note.clone(),
                             occurred_at: tx.occurred_at.clone(),
+                            splits: None,
+                            shares: None,
                         },
                     )?;
                 }
@@ -1694,6 +2091,8 @@ pub fn save_investment_lot(conn: &Connection, input: InvestmentLotInput) -> Resu
                     merchant: holding_name,
                     note: None,
                     occurred_at: format!("{day}T12:00"),
+                    splits: None,
+                    shares: None,
                 },
             )?;
             (Some(tx.id), true)
@@ -1812,17 +2211,30 @@ pub fn store_prices(conn: &Connection, quotes: &[Quote]) -> Result<()> {
     Ok(())
 }
 
-/// Holdings are worth what they would fetch today, but a purchase posts a
-/// transfer, so its cost is already standing inside the investment account.
-/// Only the revaluation on top of that basis is new money — hence an
-/// adjustment rather than the whole market value.
-///
-/// Returns `(adjustment, market value)`.
-fn investment_positions(conn: &Connection) -> Result<(Paise, Paise)> {
+/// What one holding is worth today, beside the basis its own postings already
+/// put on the account it sits in.
+#[derive(Default, Clone, Copy)]
+struct Mark {
+    market: Paise,
+    posted: Paise,
+}
+
+/// Every holding valued at today's price and gathered by the account it sits
+/// in. A holding that sits in no account has nothing to cancel against, so its
+/// value goes to `unassigned` whole.
+#[derive(Default)]
+struct Marks {
+    by_account: HashMap<String, Mark>,
+    unassigned: Paise,
+    /// What every holding is worth today, wherever it is parked.
+    value: Paise,
+}
+
+fn holding_marks(conn: &Connection) -> Result<Marks> {
     let book = PriceBook::load(conn)?;
     let mut stmt = conn
         .prepare(
-            "SELECT h.kind, h.scheme_code, h.purity_e4,
+            "SELECT h.account_id, h.kind, h.scheme_code, h.purity_e4,
                     CASE WHEN h.kind = 'gold' THEN h.grams_e4 ELSE
                       COALESCE((SELECT SUM(CASE WHEN l.kind = 'buy' THEN l.quantity_e4
                                                 ELSE -l.quantity_e4 END)
@@ -1838,40 +2250,70 @@ fn investment_positions(conn: &Connection) -> Result<(Paise, Paise)> {
                         WHEN t.kind = 'transfer' AND t.to_account_id = h.account_id THEN  t.amount
                         ELSE 0 END)
                       FROM investment_lots l JOIN transactions t ON t.id = l.transaction_id
-                      WHERE l.holding_id = h.id), 0),
-                    COALESCE((SELECT a.archived FROM accounts a WHERE a.id = h.account_id), 0)
+                      WHERE l.holding_id = h.id), 0)
              FROM holdings h",
         )
         .map_err(oops)?;
     let rows = stmt
         .query_map([], |r| {
             Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, Option<String>>(1)?,
-                r.get::<_, Option<Scaled>>(2)?,
-                r.get::<_, Scaled>(3)?,
-                r.get::<_, Paise>(4)?,
-                r.get::<_, i64>(5)? != 0,
+                r.get::<_, Option<String>>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<Scaled>>(3)?,
+                r.get::<_, Scaled>(4)?,
+                r.get::<_, Paise>(5)?,
             ))
         })
         .map_err(oops)?;
 
-    let mut adjustment: Paise = 0;
-    let mut value: Paise = 0;
+    let mut marks = Marks::default();
     for row in rows {
-        let (kind, scheme_code, purity_e4, units_e4, posted_net, archived) = row.map_err(oops)?;
+        let (account_id, kind, scheme_code, purity_e4, units_e4, posted) = row.map_err(oops)?;
         // Nothing fetched for it yet — leave the basis standing rather than
         // marking the position down to nothing on a first offline launch.
         let Some((price_e4, _)) = book.price_for(&kind, scheme_code.as_deref(), purity_e4) else {
             continue;
         };
         let market = market_value_paise(units_e4.max(0), price_e4);
+        marks.value += market;
+        match account_id {
+            Some(id) => {
+                let entry = marks.by_account.entry(id).or_default();
+                entry.market += market;
+                entry.posted += posted;
+            }
+            None => marks.unassigned += market,
+        }
+    }
+    Ok(marks)
+}
+
+/// Hangs each account's holdings off the ledger balance already read for it.
+fn apply_marks(conn: &Connection, accounts: &mut [Account]) -> Result<()> {
+    let marks = holding_marks(conn)?;
+    for account in accounts.iter_mut() {
+        if let Some(mark) = marks.by_account.get(&account.id) {
+            account.revaluation = mark.market - mark.posted;
+        }
+    }
+    Ok(())
+}
+
+/// What the holdings add to net worth over the accounts they are already
+/// counted in, and what they are worth altogether.
+fn investment_positions(conn: &Connection, accounts: &[Account]) -> Result<(Paise, Paise)> {
+    let marks = holding_marks(conn)?;
+    let mut adjustment = marks.unassigned;
+    for account in accounts {
+        let Some(mark) = marks.by_account.get(&account.id) else {
+            continue;
+        };
         // An archived account is already out of the account sum above, so
         // there is no basis left there to cancel.
-        adjustment += market - if archived { 0 } else { posted_net };
-        value += market;
+        adjustment += mark.market - if account.archived { 0 } else { mark.posted };
     }
-    Ok((adjustment, value))
+    Ok((adjustment, marks.value))
 }
 
 // ---------------------------------------------------------------- overview
@@ -1935,18 +2377,20 @@ fn flow_for(conn: &Connection, from: &str, to: &str) -> Result<(Paise, Paise)> {
 fn spend_by_category(conn: &Connection, from: &str, to: &str) -> Result<Vec<CategorySlice>> {
     let mut stmt = conn
         .prepare(
+            &format!(
             "SELECT c.id, c.name, c.icon, c.color,
                     COALESCE(p.id, c.id)   AS group_id,
                     COALESCE(p.name, c.name),
                     COALESCE(p.icon, c.icon),
                     COALESCE(p.color, c.color),
                     SUM(t.amount), COUNT(*)
-             FROM transactions t
+             FROM ({ATTRIBUTED}) t
              JOIN categories c ON c.id = t.category_id
              LEFT JOIN categories p ON p.id = c.parent_id
              WHERE t.kind = 'expense' AND t.occurred_at >= ?1 AND t.occurred_at <= ?2
              GROUP BY c.id
-             ORDER BY SUM(t.amount) DESC",
+             ORDER BY SUM(t.amount) DESC"
+            ),
         )
         .map_err(oops)?;
 
@@ -2043,7 +2487,7 @@ pub fn overview(conn: &Connection, month: &str, span: u32) -> Result<Overview> {
     // Debts sit on the balance sheet too: what you are owed is an asset, what
     // you owe is a liability. Holdings sit there at what they are worth today.
     let (lent_outstanding, borrowed_outstanding) = debt_positions(conn)?;
-    let (revaluation, investments) = investment_positions(conn)?;
+    let (revaluation, investments) = investment_positions(conn, &accounts)?;
     let net_worth = net_worth + lent_outstanding - borrowed_outstanding + revaluation;
     let debt = account_debt + borrowed_outstanding;
 
@@ -2193,7 +2637,8 @@ pub fn reset(conn: &Connection) -> Result<()> {
         // over them. `price_cache` stays: it is fetched data, not your book,
         // and keeping it means an offline relaunch can still value holdings.
         "DELETE FROM investment_lots; DELETE FROM holdings;
-         DELETE FROM debt_payments; DELETE FROM debts; DELETE FROM transactions;
+         DELETE FROM debt_payments; DELETE FROM debts;
+         DELETE FROM transaction_splits; DELETE FROM transactions;
          DELETE FROM accounts; DELETE FROM categories; DELETE FROM settings;",
     )
     .map_err(oops)?;
@@ -2295,14 +2740,14 @@ mod tests {
 
     /// 24K gold at a spot price that lands on ₹100 a gram once duty, GST and
     /// the rupee are folded in, so the weight is the only moving part.
-    fn gold(conn: &Connection, grams_e4: Scaled) -> String {
+    fn gold(conn: &Connection, grams_e4: Scaled, account_id: Option<String>) -> String {
         save_holding(
             conn,
             HoldingInput {
                 id: None,
                 kind: "gold".into(),
                 name: "Coins".into(),
-                account_id: None,
+                account_id,
                 scheme_code: None,
                 isin: None,
                 purity_e4: Some(10_000),
@@ -2385,7 +2830,7 @@ mod tests {
     fn gold_is_valued_off_the_grams_you_typed() {
         let conn = book();
         account(&conn, "Savings", "bank", 500_000);
-        gold(&conn, 250_000); // 25 g
+        gold(&conn, 250_000, None); // 25 g
         gold_price_at(&conn, 100);
 
         let holding = list_holdings(&conn).unwrap().pop().unwrap();
@@ -2401,10 +2846,56 @@ mod tests {
         assert_eq!(net_worth(&conn), 500_000 + 250_000);
     }
 
+    /// Entries recorded against a holding need not post anything — units
+    /// bought before the book was started have no transaction behind them.
+    /// Read the account's ledger alone and it looks empty, which is what the
+    /// dashboard used to show for it.
+    #[test]
+    fn an_account_carries_what_the_holdings_in_it_are_worth() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 500_000);
+        let invest = account(&conn, "Coin", "investment", 0);
+        let holding = fund(&conn, Some(invest.clone()));
+        buy(&conn, &holding, 10, 90_000, None); // nothing posted for it
+        price_at(&conn, 100);
+
+        let accounts = list_accounts(&conn).unwrap();
+        let held = accounts.iter().find(|a| a.id == invest).unwrap();
+        // The ledger still says nothing, and the ₹1,000 rides on top of it.
+        assert_eq!(held.balance, 0);
+        assert_eq!(held.revaluation, 100_000);
+        // An account with no holding behind it is left exactly where it was.
+        assert_eq!(accounts.iter().find(|a| a.id == bank).unwrap().revaluation, 0);
+
+        // Counted once: the account's own worth is the whole of the change.
+        assert_eq!(net_worth(&conn), 500_000 + 100_000);
+    }
+
+    /// A fund's buy does post into its account, so the account's worth is the
+    /// units' market value — never the cost and the value both.
+    #[test]
+    fn a_funds_basis_is_cancelled_by_what_it_grew_into() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 500_000);
+        let invest = account(&conn, "Funds", "investment", 0);
+        let holding = fund(&conn, Some(invest.clone()));
+        buy(&conn, &holding, 10, 100_000, Some(&bank));
+        price_at(&conn, 120);
+
+        let held = list_accounts(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|a| a.id == invest)
+            .unwrap();
+        assert_eq!(held.balance, 100_000); // ₹1,000 of cash went in...
+        assert_eq!(held.revaluation, 20_000); // ...and is worth ₹1,200 today.
+        assert_eq!(net_worth(&conn), 500_000 + 20_000);
+    }
+
     #[test]
     fn gold_cannot_be_bought_or_sold_in_lots() {
         let conn = book();
-        let holding = gold(&conn, 100_000);
+        let holding = gold(&conn, 100_000, None);
         let err = save_investment_lot(
             &conn,
             InvestmentLotInput {
@@ -2554,6 +3045,8 @@ mod tests {
                 merchant: transfer.merchant.clone(),
                 note: None,
                 occurred_at: transfer.occurred_at.clone(),
+                splits: None,
+                shares: None,
             },
         )
         .unwrap();
@@ -2730,6 +3223,8 @@ mod tests {
                 merchant: "SIP".into(),
                 note: None,
                 occurred_at: "2026-08-05T08:00".into(),
+                splits: None,
+                shares: None,
             },
         )
         .unwrap();
@@ -2782,6 +3277,8 @@ mod tests {
                 merchant: "SIP".into(),
                 note: None,
                 occurred_at: "2026-08-05T08:00".into(),
+                splits: None,
+                shares: None,
             },
         )
         .unwrap();
@@ -2830,6 +3327,8 @@ mod tests {
                 merchant: "Transfer".into(),
                 note: None,
                 occurred_at: "2026-08-05T08:00".into(),
+                splits: None,
+                shares: None,
             },
         )
         .unwrap();
@@ -2890,6 +3389,8 @@ mod tests {
                 merchant: "Transfer".into(),
                 note: None,
                 occurred_at: "2026-08-05T08:00".into(),
+                splits: None,
+                shares: None,
             },
         )
         .unwrap();
@@ -2932,6 +3433,8 @@ mod tests {
                 merchant: "SIP — Nifty 50".into(),
                 note: None,
                 occurred_at: "2026-08-05T08:00".into(),
+                splits: None,
+                shares: None,
             },
         )
         .unwrap();
@@ -2973,6 +3476,8 @@ mod tests {
                     merchant: what.into(),
                     note: None,
                     occurred_at: "2026-08-05T08:00".into(),
+                    splits: None,
+                    shares: None,
                 },
             )
             .unwrap();
@@ -3019,6 +3524,8 @@ mod tests {
                     merchant: format!("Row {i}"),
                     note: None,
                     occurred_at: format!("2026-08-{:02}T10:00", i + 1),
+                    splits: None,
+                    shares: None,
                 },
             )
             .unwrap();
@@ -3083,6 +3590,8 @@ mod tests {
                     merchant: "Shop".into(),
                     note: None,
                     occurred_at: format!("{month}-15T10:00"),
+                    splits: None,
+                    shares: None,
                 },
             )
             .unwrap();
@@ -3214,6 +3723,293 @@ mod tests {
         assert!(
             44_563_999_i128 * 953_900 * 10_900 * 9_160 > i64::MAX as i128,
             "the i128 in gold_price_e4 is load-bearing"
+        );
+    }
+
+    /// A category to file things under, since the split tests are about where
+    /// money lands rather than about what it was spent on.
+    fn category(conn: &Connection, name: &str, parent: Option<String>) -> String {
+        save_category(
+            conn,
+            CategoryInput {
+                id: None,
+                kind: "expense".into(),
+                name: name.into(),
+                icon: "circle-dashed".into(),
+                color: "#000000".into(),
+                parent_id: parent,
+            },
+        )
+        .unwrap()
+        .id
+    }
+
+    fn bill(conn: &Connection, account_id: &str, amount: Paise, category: Option<String>) -> Transaction {
+        save_transaction(
+            conn,
+            TransactionInput {
+                id: None,
+                kind: "expense".into(),
+                amount,
+                account_id: account_id.into(),
+                to_account_id: None,
+                category_id: category,
+                merchant: "Toit".into(),
+                note: None,
+                occurred_at: "2026-08-15T20:00".into(),
+                splits: None,
+                shares: None,
+            },
+        )
+        .unwrap()
+    }
+
+    fn part(amount: Paise, category: &str) -> TransactionSplitInput {
+        TransactionSplitInput {
+            id: None,
+            amount,
+            category_id: Some(category.into()),
+            note: None,
+        }
+    }
+
+    fn share(who: &str, amount: Paise) -> TransactionShareInput {
+        TransactionShareInput {
+            id: None,
+            direction: "lent".into(),
+            counterparty: who.into(),
+            amount,
+            due_on: None,
+            note: None,
+        }
+    }
+
+    /// Re-saves a posting with new parts, leaving everything else as it was.
+    fn resplit(
+        conn: &Connection,
+        tx: &Transaction,
+        splits: Option<Vec<TransactionSplitInput>>,
+        shares: Option<Vec<TransactionShareInput>>,
+    ) -> Result<Transaction> {
+        save_transaction(
+            conn,
+            TransactionInput {
+                id: Some(tx.id.clone()),
+                kind: tx.kind.clone(),
+                amount: tx.amount,
+                account_id: tx.account_id.clone(),
+                to_account_id: tx.to_account_id.clone(),
+                category_id: tx.category_id.clone(),
+                merchant: tx.merchant.clone(),
+                note: tx.note.clone(),
+                occurred_at: tx.occurred_at.clone(),
+                splits,
+                shares,
+            },
+        )
+    }
+
+    #[test]
+    fn a_split_bill_is_still_one_posting() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 500_000);
+        let food = category(&conn, "Food", None);
+        let drinks = category(&conn, "Drinks", None);
+        let tx = bill(&conn, &bank, 300_000, Some(food.clone()));
+
+        let tx = resplit(&conn, &tx, Some(vec![part(200_000, &food), part(100_000, &drinks)]), None)
+            .unwrap();
+        assert_eq!(tx.splits.len(), 2);
+
+        // The balance and the totals only ever saw one ₹3,000 expense.
+        assert_eq!(get_account(&conn, &bank).unwrap().balance, 200_000);
+        let summary = transaction_summary(&conn, TransactionQuery::default()).unwrap();
+        assert_eq!(summary.count, 1);
+        assert_eq!(summary.expense, 300_000);
+    }
+
+    #[test]
+    fn the_parts_have_to_come_to_the_whole() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 500_000);
+        let food = category(&conn, "Food", None);
+        let drinks = category(&conn, "Drinks", None);
+        let tx = bill(&conn, &bank, 300_000, Some(food.clone()));
+
+        let short = resplit(&conn, &tx, Some(vec![part(100_000, &food), part(100_000, &drinks)]), None);
+        assert!(short.is_err(), "two thirds of a bill is not a split of it");
+        let alone = resplit(&conn, &tx, Some(vec![part(300_000, &food)]), None);
+        assert!(alone.is_err(), "one part is not a split");
+
+        // And the failed attempts left nothing behind.
+        assert!(get_transaction(&conn, &tx.id).unwrap().splits.is_empty());
+    }
+
+    #[test]
+    fn spend_lands_under_the_category_each_part_was_filed_against() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 500_000);
+        let food = category(&conn, "Food", None);
+        let drinks = category(&conn, "Drinks", None);
+        let tx = bill(&conn, &bank, 300_000, Some(food.clone()));
+        resplit(&conn, &tx, Some(vec![part(200_000, &food), part(100_000, &drinks)]), None).unwrap();
+
+        let slices = overview(&conn, "2026-08", 1).unwrap().top_categories;
+        let total: Paise = slices.iter().map(|s| s.total).sum();
+        assert_eq!(total, 300_000, "the bill is counted once, however it is cut");
+        let by_name = |name: &str| {
+            slices.iter().find(|s| s.name == name).map(|s| s.total).unwrap_or(0)
+        };
+        assert_eq!(by_name("Food"), 200_000);
+        assert_eq!(by_name("Drinks"), 100_000);
+    }
+
+    #[test]
+    fn a_split_bill_is_found_by_any_of_its_categories() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 500_000);
+        let food = category(&conn, "Food", None);
+        let drinks = category(&conn, "Drinks", None);
+        let tx = bill(&conn, &bank, 300_000, Some(food.clone()));
+        resplit(&conn, &tx, Some(vec![part(200_000, &food), part(100_000, &drinks)]), None).unwrap();
+
+        let by_drinks = list_transactions(
+            &conn,
+            TransactionQuery { category_ids: Some(vec![drinks]), ..Default::default() },
+        )
+        .unwrap();
+        assert_eq!(by_drinks.len(), 1, "the bill is filed under Drinks too");
+        assert_eq!(by_drinks[0].id, tx.id);
+    }
+
+    #[test]
+    fn splitting_with_people_opens_a_debt_each() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 500_000);
+        let tx = bill(&conn, &bank, 300_000, None);
+        let tx = resplit(&conn, &tx, None, Some(vec![share("Suhruth", 100_000), share("Nikhil", 100_000)]))
+            .unwrap();
+
+        assert_eq!(tx.shares.len(), 2, "your own third is not a debt");
+        let debts = list_debts(&conn).unwrap();
+        assert_eq!(debts.len(), 2);
+        assert!(debts.iter().all(|d| d.from_split && d.transaction_id.as_deref() == Some(tx.id.as_str())));
+        assert_eq!(debts.iter().map(|d| d.outstanding).sum::<Paise>(), 200_000);
+
+        // The money still left the account in full — being owed some of it back
+        // is an asset, not a smaller expense.
+        assert_eq!(get_account(&conn, &bank).unwrap().balance, 200_000);
+        assert_eq!(overview(&conn, "2026-08", 1).unwrap().lent_outstanding, 200_000);
+    }
+
+    #[test]
+    fn a_share_cannot_be_more_than_the_bill() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 500_000);
+        let tx = bill(&conn, &bank, 300_000, None);
+        assert!(resplit(&conn, &tx, None, Some(vec![share("Suhruth", 400_000)])).is_err());
+        assert!(list_debts(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn re_splitting_keeps_what_has_already_been_repaid() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 500_000);
+        let tx = bill(&conn, &bank, 300_000, None);
+        let tx = resplit(&conn, &tx, None, Some(vec![share("Suhruth", 100_000), share("Nikhil", 100_000)]))
+            .unwrap();
+        let suhruth = tx.shares.iter().find(|s| s.counterparty == "Suhruth").unwrap();
+        save_debt_payment(
+            &conn,
+            DebtPaymentInput {
+                id: None,
+                debt_id: suhruth.debt_id.clone(),
+                amount: 40_000,
+                occurred_at: "2026-08-20".into(),
+                note: None,
+                transaction_id: None,
+            },
+        )
+        .unwrap();
+
+        // Nikhil drops out and Suhruth's share is corrected upwards.
+        let tx = resplit(
+            &conn,
+            &tx,
+            None,
+            Some(vec![TransactionShareInput {
+                id: Some(suhruth.debt_id.clone()),
+                ..share("Suhruth", 150_000)
+            }]),
+        )
+        .unwrap();
+
+        assert_eq!(tx.shares.len(), 1);
+        assert_eq!(tx.shares[0].paid, 40_000, "the repayment survived the edit");
+        assert_eq!(tx.shares[0].outstanding, 110_000);
+        assert_eq!(list_debts(&conn).unwrap().len(), 1, "Nikhil's share went with him");
+    }
+
+    #[test]
+    fn a_debt_linked_by_hand_is_not_the_splits_to_remove() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 500_000);
+        let tx = bill(&conn, &bank, 300_000, None);
+        save_debt(
+            &conn,
+            DebtInput {
+                id: None,
+                direction: "lent".into(),
+                counterparty: "Amma".into(),
+                principal: 50_000,
+                opened_on: "2026-08-15".into(),
+                due_on: None,
+                note: None,
+                transaction_id: Some(tx.id.clone()),
+                settled: None,
+            },
+        )
+        .unwrap();
+
+        let tx = resplit(&conn, &tx, None, Some(vec![share("Suhruth", 100_000)])).unwrap();
+        assert_eq!(tx.shares.len(), 1, "only the split's own shares are listed");
+        resplit(&conn, &tx, None, Some(Vec::new())).unwrap();
+
+        let debts = list_debts(&conn).unwrap();
+        assert_eq!(debts.len(), 1);
+        assert_eq!(debts[0].counterparty, "Amma");
+    }
+
+    #[test]
+    fn changing_the_amount_drops_a_split_that_no_longer_describes_it() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 500_000);
+        let food = category(&conn, "Food", None);
+        let drinks = category(&conn, "Drinks", None);
+        let tx = bill(&conn, &bank, 300_000, Some(food.clone()));
+        let tx = resplit(&conn, &tx, Some(vec![part(200_000, &food), part(100_000, &drinks)]), None)
+            .unwrap();
+
+        let corrected = save_transaction(
+            &conn,
+            TransactionInput {
+                id: Some(tx.id.clone()),
+                kind: "expense".into(),
+                amount: 250_000,
+                account_id: bank.clone(),
+                to_account_id: None,
+                category_id: Some(food),
+                merchant: tx.merchant.clone(),
+                note: None,
+                occurred_at: tx.occurred_at.clone(),
+                splits: None,
+                shares: None,
+            },
+        )
+        .unwrap();
+        assert!(
+            corrected.splits.is_empty(),
+            "parts adding to the old figure would contradict the ledger"
         );
     }
 

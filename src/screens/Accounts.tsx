@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from '../components/Icon';
 import { Button, Card, Empty } from '../components/ui';
 import { useStore } from '../lib/store';
-import { money } from '../lib/format';
+import { accountWorth, money } from '../lib/format';
 import { itemVariants, listVariants, spring } from '../lib/motion';
 import type { Account } from '../lib/types';
 
@@ -39,7 +39,7 @@ export function Accounts({
   const live = useMemo(() => accounts.filter((a) => !a.archived), [accounts]);
   const archived = useMemo(() => accounts.filter((a) => a.archived), [accounts]);
 
-  const netWorth = live.reduce((sum, a) => sum + a.balance, 0);
+  const netWorth = live.reduce((sum, a) => sum + accountWorth(a), 0);
 
   const grouped = GROUPS.map((group) => ({
     ...group,
@@ -75,7 +75,7 @@ export function Accounts({
           <section key={group.kind} className="account-group">
             <h2 className="group-title">
               {group.label}
-              <span>{money(group.items.reduce((s, a) => s + a.balance, 0))}</span>
+              <span>{money(group.items.reduce((s, a) => s + accountWorth(a), 0))}</span>
             </h2>
             <Card padded={false} className="row-board">
               <motion.div
@@ -143,14 +143,20 @@ function AccountRow({ account, onEdit }: { account: Account; onEdit: () => void 
   const owed = account.kind === 'credit' && account.balance < 0;
   const limited = account.kind === 'credit' && account.creditLimit > 0;
   const utilisation = limited ? Math.max(0, -account.balance) / account.creditLimit : 0;
+  // An account holding funds or metal is worth what they would fetch today,
+  // which is a different number from the cash that went through it.
+  const worth = accountWorth(account);
 
-  // What is left on a card is the fact worth carrying; everywhere else the
-  // balance says it all on its own.
+  // What is left on a card is the fact worth carrying; an account whose figure
+  // came off a price rather than the ledger says where it came from; and
+  // everywhere else the balance says it all on its own.
   const note = limited
     ? `${money(Math.max(0, account.creditLimit + account.balance))} left of ${money(account.creditLimit)}`
     : owed
       ? 'outstanding'
-      : null;
+      : account.revaluation !== 0
+        ? "at today's price"
+        : null;
 
   const sub = [
     account.institution,
@@ -177,8 +183,8 @@ function AccountRow({ account, onEdit }: { account: Account; onEdit: () => void 
         <span className="account-sub">{sub}</span>
       </span>
       <span className="account-right">
-        <strong className={account.balance < 0 ? 'is-negative' : ''}>
-          {money(Math.abs(account.balance))}
+        <strong className={worth < 0 ? 'is-negative' : ''}>
+          {money(Math.abs(worth))}
         </strong>
         {note && <span className={limited && utilisation > 0.7 ? 'is-high' : ''}>{note}</span>}
       </span>
