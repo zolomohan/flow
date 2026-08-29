@@ -1,0 +1,318 @@
+export type TxKind = 'income' | 'expense' | 'transfer';
+export type AccountKind = 'bank' | 'credit' | 'cash' | 'wallet' | 'investment';
+export type CategoryKind = 'income' | 'expense';
+
+/** Every amount crossing the Rust boundary is an integer count of paise. */
+export type Paise = number;
+
+export interface Account {
+  id: string;
+  name: string;
+  kind: AccountKind;
+  institution: string | null;
+  openingBalance: Paise;
+  color: string;
+  icon: string;
+  archived: boolean;
+  sortOrder: number;
+  createdAt: string;
+  balance: Paise;
+  /** Credit limit for a card, in paise. Zero means it isn't tracked. */
+  creditLimit: Paise;
+}
+
+export interface AccountInput {
+  id?: string | null;
+  name: string;
+  kind: AccountKind;
+  institution: string | null;
+  openingBalance: Paise;
+  color: string;
+  icon: string;
+  creditLimit: Paise;
+}
+
+export interface Category {
+  id: string;
+  kind: CategoryKind;
+  name: string;
+  icon: string;
+  color: string;
+  sortOrder: number;
+  /** null for a top-level group. Nesting is exactly one level deep. */
+  parentId: string | null;
+}
+
+/** What happens to a category's transactions and children when it is deleted. */
+export interface CategoryDeleteOptions {
+  /** Category to file the transactions under; null leaves them uncategorised. */
+  reassignTo?: string | null;
+  /** Delete the sub-categories too, rather than promoting them. */
+  deleteChildren?: boolean;
+}
+
+export interface CategoryInput {
+  id?: string | null;
+  kind: CategoryKind;
+  name: string;
+  icon: string;
+  color: string;
+  parentId: string | null;
+}
+
+export interface Transaction {
+  id: string;
+  kind: TxKind;
+  amount: Paise;
+  accountId: string;
+  toAccountId: string | null;
+  categoryId: string | null;
+  merchant: string;
+  note: string | null;
+  occurredAt: string;
+  createdAt: string;
+  accountName: string;
+  accountColor: string;
+  toAccountName: string | null;
+  categoryName: string | null;
+  categoryIcon: string | null;
+  categoryColor: string | null;
+  /** The top-level group this transaction's category rolls up into. */
+  categoryGroupId: string | null;
+  categoryGroupName: string | null;
+}
+
+export interface TransactionInput {
+  id?: string | null;
+  kind: TxKind;
+  amount: Paise;
+  accountId: string;
+  toAccountId: string | null;
+  categoryId: string | null;
+  merchant: string;
+  note: string | null;
+  occurredAt: string;
+}
+
+export interface TransactionQuery {
+  search?: string | null;
+  kinds?: TxKind[] | null;
+  accountIds?: string[] | null;
+  /** Which side of a posting the accounts must be on. Only transfers differ. */
+  accountSide?: 'either' | 'from' | 'to' | null;
+  categoryIds?: string[] | null;
+  from?: string | null;
+  to?: string | null;
+  limit?: number | null;
+  /** Rows to skip, for paging a long ledger. */
+  offset?: number | null;
+}
+
+/** What a filtered ledger comes to, whatever slice of it is on screen. */
+export interface TransactionSummary {
+  count: number;
+  income: Paise;
+  expense: Paise;
+  transferred: Paise;
+}
+
+export interface CategorySlice {
+  categoryId: string;
+  name: string;
+  icon: string;
+  color: string;
+  total: Paise;
+  count: number;
+  /** Leaf categories rolled into this group, largest first. */
+  children: CategorySlice[];
+}
+
+export interface FlowPoint {
+  bucket: string;
+  income: Paise;
+  expense: Paise;
+}
+
+export interface MerchantSlice {
+  merchant: string;
+  total: Paise;
+  count: number;
+}
+
+export interface Overview {
+  /** Last month of the window, as YYYY-MM. */
+  month: string;
+  /** How many months the window covers, counting back from `month`. */
+  span: number;
+  /** Accounts plus what you are owed, minus what you owe. */
+  netWorth: Paise;
+  liquid: Paise;
+  /** Negative account balances plus borrowed debt. */
+  debt: Paise;
+  lentOutstanding: Paise;
+  borrowedOutstanding: Paise;
+  /** What the holdings on the Investments screen are worth today. */
+  investments: Paise;
+  income: Paise;
+  expense: Paise;
+  prevIncome: Paise;
+  prevExpense: Paise;
+  balanceSeries: Paise[];
+  dailyFlow: FlowPoint[];
+  monthlyFlow: FlowPoint[];
+  topCategories: CategorySlice[];
+  topMerchants: MerchantSlice[];
+}
+
+/* ------------------------------------------------------------------ debts */
+
+export type DebtDirection = 'lent' | 'borrowed';
+
+export interface DebtPayment {
+  id: string;
+  debtId: string;
+  amount: Paise;
+  occurredAt: string;
+  note: string | null;
+  transactionId: string | null;
+  transactionLabel: string | null;
+  createdAt: string;
+}
+
+export interface DebtPaymentInput {
+  id?: string | null;
+  debtId: string;
+  amount: Paise;
+  occurredAt: string;
+  note: string | null;
+  transactionId: string | null;
+}
+
+export interface Debt {
+  id: string;
+  /** lent = they owe you · borrowed = you owe them */
+  direction: DebtDirection;
+  counterparty: string;
+  principal: Paise;
+  openedOn: string;
+  dueOn: string | null;
+  note: string | null;
+  settledAt: string | null;
+  createdAt: string;
+  transactionId: string | null;
+  transactionLabel: string | null;
+  paid: Paise;
+  outstanding: Paise;
+  settled: boolean;
+  payments: DebtPayment[];
+}
+
+export interface DebtInput {
+  id?: string | null;
+  direction: DebtDirection;
+  counterparty: string;
+  principal: Paise;
+  openedOn: string;
+  dueOn: string | null;
+  note: string | null;
+  transactionId: string | null;
+  settled?: boolean | null;
+}
+
+/* ------------------------------------------------------------ investments */
+
+export type HoldingKind = 'gold' | 'fund';
+export type LotKind = 'buy' | 'sell';
+
+/**
+ * Grams, units and per-unit prices cross the wire as integers scaled by 10^4,
+ * for the same reason money crosses as paise: so nothing is ever a float.
+ */
+export type Scaled = number;
+
+export interface InvestmentLot {
+  id: string;
+  holdingId: string;
+  kind: LotKind;
+  quantityE4: Scaled;
+  amount: Paise;
+  /** When the money moved — the date the ledger posting carries. */
+  occurredAt: string;
+  /** When the units were credited, when that was another day. Null means the
+   *  units landed the day the money moved. */
+  allottedAt: string | null;
+  transactionId: string | null;
+  transactionLabel: string | null;
+  /** Where the money came from on a buy, or went to on a sale. */
+  cashAccountId: string | null;
+  /** Whether the lot wrote that posting itself, or you linked one of yours. */
+  ownsTransaction: boolean;
+  note: string | null;
+  createdAt: string;
+}
+
+export interface InvestmentLotInput {
+  id?: string | null;
+  holdingId: string;
+  kind: LotKind;
+  quantityE4: Scaled;
+  amount: Paise;
+  /** When the money moved. */
+  occurredAt: string;
+  /** When the units were credited, if that was another day — an SIP is
+   *  debited on one date and allotted at another day's NAV. */
+  allottedAt: string | null;
+  note: string | null;
+  /** Set it and the lot posts a transfer; leave it null and nothing moves. */
+  cashAccountId: string | null;
+  /** A posting already in your book that this lot describes. Exclusive with
+   *  `cashAccountId`: the lot either writes a transfer or points at one. */
+  transactionId: string | null;
+}
+
+export interface Holding {
+  id: string;
+  kind: HoldingKind;
+  name: string;
+  accountId: string | null;
+  accountName: string | null;
+  schemeCode: string | null;
+  isin: string | null;
+  /** 10000 is 24K, 9160 is 22K, 7500 is 18K. */
+  purityE4: Scaled | null;
+  note: string | null;
+  closedAt: string | null;
+  createdAt: string;
+  /** Grams for gold, units for a fund. */
+  unitsE4: Scaled;
+  /** Both are zero for gold: an object you own, not a position you traded. */
+  invested: Paise;
+  realised: Paise;
+  /** Rupees per gram or unit, scaled. null until a price has been fetched. */
+  priceE4: Scaled | null;
+  priceAsOf: string | null;
+  marketValue: Paise;
+  totalReturn: Paise;
+  closed: boolean;
+  lots: InvestmentLot[];
+}
+
+export interface HoldingInput {
+  id?: string | null;
+  kind: HoldingKind;
+  name: string;
+  accountId: string | null;
+  schemeCode: string | null;
+  isin: string | null;
+  purityE4: Scaled | null;
+  /** Grams of gold held, scaled. Gold is weighed, not traded, so this is the
+   *  whole of the position; a fund ignores it and counts its lots instead. */
+  gramsE4: Scaled | null;
+  note: string | null;
+  closed?: boolean | null;
+}
+
+export interface Scheme {
+  schemeCode: string;
+  schemeName: string;
+}
