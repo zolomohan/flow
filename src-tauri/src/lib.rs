@@ -154,13 +154,47 @@ fn delete_investment_lot(db: State<Db>, id: String) -> R<()> {
 /// compile, and holding it would freeze every other command besides.
 #[tauri::command]
 async fn refresh_prices(db: State<'_, Db>) -> R<()> {
-    let (want_gold, schemes) = {
+    let (want_gold, schemes, backfill_gold, backfill_schemes) = {
         let conn = db.0.lock().map_err(|e| e.to_string())?;
-        db::price_keys_needed(&conn)?
+        let (want_gold, schemes) = db::price_keys_needed(&conn)?;
+        let (backfill_gold, backfill_schemes) = db::price_backfill_needed(&conn)?;
+        (want_gold, schemes, backfill_gold, backfill_schemes)
     };
-    let quotes = prices::fetch(want_gold, &schemes).await?;
+    let fetched =
+        prices::fetch(want_gold, &schemes, backfill_gold, &backfill_schemes).await?;
     let conn = db.0.lock().map_err(|e| e.to_string())?;
-    db::store_prices(&conn, &quotes)
+    for series in &fetched.history {
+        db::store_history(&conn, &series.key, &series.points)?;
+    }
+    db::store_prices(&conn, &fetched.quotes)
+}
+
+/// One holding's price line, for its own page. `days` bounds the window;
+/// leaving it off asks for everything on file.
+#[tauri::command]
+fn holding_series(db: State<Db>, id: String, days: Option<i64>) -> R<Vec<PricePoint>> {
+    with_db(&db, |c| db::holding_series(c, &id, days))
+}
+
+/// Every holding's line at once, keyed by holding id — one call behind a
+/// screen full of sparklines.
+#[tauri::command]
+fn holding_series_all(
+    db: State<Db>,
+    days: Option<i64>,
+) -> R<std::collections::HashMap<String, Vec<PricePoint>>> {
+    with_db(&db, |c| db::holding_series_all(c, days))
+}
+
+/// What a gram has gone for at a given purity — the rate under every gold
+/// holding, which is one line however many pieces are valued off it.
+#[tauri::command]
+fn gold_rate_series(
+    db: State<Db>,
+    days: Option<i64>,
+    purity_e4: Option<i64>,
+) -> R<Vec<PricePoint>> {
+    with_db(&db, |c| db::gold_rate_series(c, days, purity_e4))
 }
 
 #[tauri::command]
@@ -243,6 +277,9 @@ pub fn run() {
             save_investment_lot,
             delete_investment_lot,
             refresh_prices,
+            holding_series,
+            holding_series_all,
+            gold_rate_series,
             search_schemes,
             get_setting,
             set_setting,

@@ -459,3 +459,14 @@ pub struct Scheme {
     pub scheme_code: String,
     pub scheme_name: String,
 }
+
+/// One day on a holding's price line: rupees per gram or per unit, on the
+/// date that price was published. Gold's points are computed rather than
+/// stored — spot and the rupee are kept separately and folded per day.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PricePoint {
+    /// ISO date (YYYY-MM-DD).
+    pub as_of: String,
+    pub price_e4: Scaled,
+}

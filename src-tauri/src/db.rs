@@ -205,6 +205,16 @@ fn migrate(conn: &Connection) -> Result<()> {
             source     TEXT NOT NULL
         );
 
+        -- Every price ever seen for an instrument, one row a day. The cache
+        -- above answers what a holding is worth now; this answers what it has
+        -- been doing, which is the only thing a chart can be drawn from.
+        CREATE TABLE IF NOT EXISTS price_history (
+            key      TEXT NOT NULL,
+            as_of    TEXT NOT NULL,
+            price_e4 INTEGER NOT NULL,
+            PRIMARY KEY (key, as_of)
+        ) WITHOUT ROWID;
+
         CREATE TABLE IF NOT EXISTS settings (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -2208,9 +2218,234 @@ pub fn store_prices(conn: &Connection, quotes: &[Quote]) -> Result<()> {
         stmt.execute(params![q.key, q.price_e4, q.as_of, fetched_at, q.source])
             .map_err(oops)?;
     }
+    drop(stmt);
+    // Today's quote is also tomorrow's history. Refreshing on a day already
+    // recorded overwrites it rather than piling a second row on the date.
+    //
+    // Gold is the exception: its line is London's daily fix, and the live spot
+    // quote this app values holdings at comes off another feed that runs a
+    // couple of percent apart from it. Filing one under the other would put a
+    // step in the line at the seam that no market ever made — so gold's
+    // history only ever comes from the fix, and today's spot is left to do
+    // what it is for, which is saying what the metal is worth right now.
+    for q in quotes.iter().filter(|q| q.key != KEY_GOLD) {
+        store_history(conn, &q.key, &[(q.as_of.clone(), q.price_e4)])?;
+    }
     Ok(())
 }
 
+/// Files a run of daily prices under one instrument. Dates already on file are
+/// overwritten, so a backfill can be run twice without doubling anything up.
+pub fn store_history(conn: &Connection, key: &str, points: &[(String, Scaled)]) -> Result<()> {
+    let mut stmt = conn
+        .prepare(
+            "INSERT INTO price_history (key, as_of, price_e4) VALUES (?1, ?2, ?3)
+             ON CONFLICT(key, as_of) DO UPDATE SET price_e4 = excluded.price_e4",
+        )
+        .map_err(oops)?;
+    for (as_of, price_e4) in points {
+        stmt.execute(params![key, as_of, price_e4]).map_err(oops)?;
+    }
+    Ok(())
+}
+
+/// The first and last day one instrument's history covers, if it has any.
+fn history_span(conn: &Connection, key: &str) -> Result<Option<(String, String)>> {
+    let row: (Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT MIN(as_of), MAX(as_of) FROM price_history WHERE key = ?1",
+            params![key],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(oops)?;
+    Ok(match row {
+        (Some(first), Some(last)) => Some((first, last)),
+        _ => None,
+    })
+}
+
+/// A daily quote only ever adds today. Anything whose line doesn't already
+/// reach a year back is worth fetching whole once — after which it never is
+/// again, because the stored history keeps reaching further back every day.
+///
+/// Returns `(gold wants its history, scheme codes that want theirs)`.
+pub fn price_backfill_needed(conn: &Connection) -> Result<(bool, Vec<String>)> {
+    let (want_gold, schemes) = price_keys_needed(conn)?;
+    let today = Utc::now().date_naive();
+    let cutoff = (today - Duration::days(330)).format("%Y-%m-%d").to_string();
+    let thin = |key: &str| -> Result<bool> {
+        Ok(history_span(conn, key)?.is_none_or(|(first, _)| first > cutoff))
+    };
+    // Nothing tops gold's line up day by day — the spot quote is another feed
+    // and stays out of it — so the fix is fetched again once its own end has
+    // fallen a few days behind.
+    let lagging = (today - Duration::days(3)).format("%Y-%m-%d").to_string();
+    let stale = history_span(conn, KEY_GOLD)?.is_none_or(|(_, last)| last < lagging);
+    // Gold's line is spot and the rupee folded together, so it is only as long
+    // as the shorter of the two.
+    let gold = want_gold && (thin(KEY_GOLD)? || stale || thin(KEY_FX)?);
+    let mut wanted = Vec::new();
+    for code in schemes {
+        if thin(&format!("mf:{code}"))? {
+            wanted.push(code);
+        }
+    }
+    Ok((gold, wanted))
+}
+
+/// The date `days` ago, or `None` for "everything on file".
+fn since_date(days: Option<i64>) -> Option<String> {
+    days.map(|d| {
+        (Utc::now().date_naive() - Duration::days(d.max(1)))
+            .format("%Y-%m-%d")
+            .to_string()
+    })
+}
+
+/// One instrument's stored line, oldest first.
+fn stored_series(conn: &Connection, key: &str, since: Option<&str>) -> Result<Vec<(String, Scaled)>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT as_of, price_e4 FROM price_history
+             WHERE key = ?1 AND (?2 IS NULL OR as_of >= ?2)
+             ORDER BY as_of",
+        )
+        .map_err(oops)?;
+    let rows = stmt
+        .query_map(params![key, since], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?;
+    Ok(rows)
+}
+
+/// Rupees a gram, day by day: spot gold in dollars folded with the rupee, the
+/// landed-cost markup and the metal's purity — the same arithmetic
+/// `PriceBook::price_for` does for today, run over the stored lines.
+///
+/// The two lines don't share holidays, so each gold fix takes the most recent
+/// rupee rate on or before its own date. A dollar price is never converted at
+/// a rate from the future.
+fn gold_series(conn: &Connection, purity_e4: Scaled, since: Option<&str>) -> Result<Vec<PricePoint>> {
+    // The rupee is read from the start of time regardless of the window, so
+    // the first day inside it still has a rate to carry forward.
+    let fx = stored_series(conn, KEY_FX, None)?;
+    if fx.is_empty() {
+        return Ok(Vec::new());
+    }
+    let landed = gold_landed_e4(conn)?;
+    let mut points = Vec::new();
+    let mut i = 0;
+    for (as_of, usd_oz) in stored_series(conn, KEY_GOLD, since)? {
+        while i + 1 < fx.len() && fx[i + 1].0 <= as_of {
+            i += 1;
+        }
+        let inr = fx[i].1;
+        points.push(PricePoint {
+            as_of,
+            price_e4: gold_price_e4(usd_oz, inr, landed, purity_e4),
+        });
+    }
+    Ok(points)
+}
+
+fn fund_series(conn: &Connection, scheme_code: &str, since: Option<&str>) -> Result<Vec<PricePoint>> {
+    Ok(stored_series(conn, &format!("mf:{scheme_code}"), since)?
+        .into_iter()
+        .map(|(as_of, price_e4)| PricePoint { as_of, price_e4 })
+        .collect())
+}
+
+/// What one holding's own price has done. Empty until prices have been
+/// fetched, and for a fund with no scheme behind it there is nothing to plot.
+pub fn holding_series(conn: &Connection, id: &str, days: Option<i64>) -> Result<Vec<PricePoint>> {
+    let row: Option<(String, Option<String>, Option<Scaled>)> = conn
+        .query_row(
+            "SELECT kind, scheme_code, purity_e4 FROM holdings WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .map_err(oops)?;
+    let Some((kind, scheme_code, purity_e4)) = row else {
+        return Ok(Vec::new());
+    };
+    let since = since_date(days);
+    if kind == "gold" {
+        gold_series(conn, purity_e4.unwrap_or(10_000), since.as_deref())
+    } else {
+        match scheme_code {
+            Some(code) if !code.is_empty() => fund_series(conn, &code, since.as_deref()),
+            _ => Ok(Vec::new()),
+        }
+    }
+}
+
+/// Every holding's line at once, keyed by holding id — one round trip for a
+/// screen full of sparklines rather than one per card.
+pub fn holding_series_all(conn: &Connection, days: Option<i64>) -> Result<HashMap<String, Vec<PricePoint>>> {
+    let mut stmt = conn
+        .prepare("SELECT id, kind, scheme_code, purity_e4 FROM holdings")
+        .map_err(oops)?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<Scaled>>(3)?,
+            ))
+        })
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?;
+    let since = since_date(days);
+    // Every gold holding rides the same two lines, so they are folded once and
+    // then rescaled per purity rather than re-read per holding.
+    let pure = if rows.iter().any(|(_, kind, _, _)| kind == "gold") {
+        gold_series(conn, 10_000, since.as_deref())?
+    } else {
+        Vec::new()
+    };
+    let mut out = HashMap::new();
+    for (id, kind, scheme_code, purity_e4) in rows {
+        let series = if kind == "gold" {
+            let purity = purity_e4.unwrap_or(10_000);
+            pure.iter()
+                .map(|p| PricePoint {
+                    as_of: p.as_of.clone(),
+                    price_e4: div_round(p.price_e4 as i128 * purity as i128, 10_000) as Scaled,
+                })
+                .collect()
+        } else {
+            match scheme_code {
+                Some(code) if !code.is_empty() => fund_series(conn, &code, since.as_deref())?,
+                _ => Vec::new(),
+            }
+        };
+        out.insert(id, series);
+    }
+    Ok(out)
+}
+
+/// What a gram has gone for, day by day, at whatever purity is asked for —
+/// the rate behind every gold holding, which is a fact about the market rather
+/// than about any one piece. `None` reads it as 24K.
+pub fn gold_rate_series(
+    conn: &Connection,
+    days: Option<i64>,
+    purity_e4: Option<Scaled>,
+) -> Result<Vec<PricePoint>> {
+    let purity = purity_e4.filter(|p| *p > 0 && *p <= 10_000).unwrap_or(10_000);
+    gold_series(conn, purity, since_date(days).as_deref())
+}
+
+/// Holdings are worth what they would fetch today, but a purchase posts a
+/// transfer, so its cost is already standing inside the investment account.
+/// Only the revaluation on top of that basis is new money — hence an
+/// adjustment rather than the whole market value.
+///
+/// Returns `(adjustment, market value)`.
 /// What one holding is worth today, beside the basis its own postings already
 /// put on the account it sits in.
 #[derive(Default, Clone, Copy)]
@@ -4011,6 +4246,116 @@ mod tests {
             corrected.splits.is_empty(),
             "parts adding to the old figure would contradict the ledger"
         );
+    }
+
+    /// The one thing the two stored lines can't be trusted to do is share a
+    /// calendar: London fixes gold on days the ECB doesn't publish a rate, and
+    /// the other way about. Each fix converts at the last rate on or before it
+    /// — never at one from a day that hadn't happened yet.
+    #[test]
+    fn a_gold_day_converts_at_the_last_rupee_on_or_before_it() {
+        let conn = book();
+        gold(&conn, 10 * 10_000, None);
+        let landed = gold_landed_e4(&conn).unwrap();
+        let ounce = |rupees_per_gram: i64| rupees_per_gram * 311_035 * 10_000 / landed;
+        store_history(
+            &conn,
+            KEY_GOLD,
+            &[
+                ("2026-08-24".into(), ounce(100)),
+                ("2026-08-25".into(), ounce(110)),
+                ("2026-08-26".into(), ounce(120)),
+            ],
+        )
+        .unwrap();
+        // No rate published on the 25th: that day carries the 24th's.
+        store_history(
+            &conn,
+            KEY_FX,
+            &[("2026-08-24".into(), 10_000), ("2026-08-26".into(), 20_000)],
+        )
+        .unwrap();
+
+        let line = gold_rate_series(&conn, None, None).unwrap();
+        let rates: Vec<Scaled> = line.iter().map(|p| p.price_e4).collect();
+        assert_eq!(
+            rates,
+            vec![100 * 10_000, 110 * 10_000, 240 * 10_000],
+            "the 25th holds the 24th's rupee; the 26th doubles on its own"
+        );
+        assert_eq!(line[0].as_of, "2026-08-24", "oldest first, for plotting");
+    }
+
+    /// A 22K piece is the same market, scaled — so its line is the pure rate
+    /// times its purity, to the paisa.
+    #[test]
+    fn a_holdings_line_is_scaled_by_its_purity() {
+        let conn = book();
+        save_holding(
+            &conn,
+            HoldingInput {
+                id: None,
+                kind: "gold".into(),
+                name: "Bangles".into(),
+                account_id: None,
+                scheme_code: None,
+                isin: None,
+                purity_e4: Some(9_160),
+                grams_e4: Some(20 * 10_000),
+                note: None,
+                closed: None,
+            },
+        )
+        .unwrap();
+        let id: String = conn
+            .query_row("SELECT id FROM holdings WHERE kind = 'gold'", [], |r| r.get(0))
+            .unwrap();
+        // The rupee comes with the quote; the metal's own line is the fix.
+        gold_price_at(&conn, 100);
+        let landed = gold_landed_e4(&conn).unwrap();
+        store_history(
+            &conn,
+            KEY_GOLD,
+            &[("2026-08-29".into(), 100 * 311_035 * 10_000 / landed)],
+        )
+        .unwrap();
+
+        let pure = gold_rate_series(&conn, None, None).unwrap();
+        let mine = holding_series(&conn, &id, None).unwrap();
+        assert_eq!(pure.len(), 1);
+        assert_eq!(mine[0].price_e4, pure[0].price_e4 * 9_160 / 10_000);
+    }
+
+    /// Spot and the fix are different feeds that sit a couple of percent apart.
+    /// Today's spot values the metal; it never joins the line, where it would
+    /// put a step at the seam that no market made.
+    #[test]
+    fn todays_spot_stays_out_of_the_fix_line() {
+        let conn = book();
+        gold(&conn, 10 * 10_000, None);
+        gold_price_at(&conn, 100);
+
+        assert!(list_holdings(&conn).unwrap()[0].price_e4.is_some(), "valued");
+        assert!(
+            gold_rate_series(&conn, None, None).unwrap().is_empty(),
+            "but not plotted — nothing has published a fix yet"
+        );
+    }
+
+    /// Every refresh files its quote under that day, so a line grows one point
+    /// at a time — and refreshing twice on one day still leaves one point.
+    #[test]
+    fn a_days_price_is_recorded_once_however_often_it_is_fetched() {
+        let conn = book();
+        let holding = fund(&conn, None);
+        price_at(&conn, 100);
+        price_at(&conn, 104);
+        store_history(&conn, "mf:999", &[("2026-08-28".into(), 950_000)]).unwrap();
+
+        let line = holding_series(&conn, &holding, None).unwrap();
+        assert_eq!(line.len(), 2, "two days, however many fetches");
+        assert_eq!(line[0].price_e4, 950_000);
+        assert_eq!(line[1].price_e4, 1_040_000, "the day's last fetch wins");
     }
 
     #[test]

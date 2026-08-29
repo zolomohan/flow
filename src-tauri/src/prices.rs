@@ -23,6 +23,21 @@ pub struct Quote {
     pub source: String,
 }
 
+/// A run of daily prices for one instrument, oldest first — what a chart is
+/// drawn from, as against the single `Quote` a holding is valued at.
+pub struct Series {
+    pub key: String,
+    pub points: Vec<(String, Scaled)>,
+}
+
+/// What one refresh came back with: today's prices, and any history that was
+/// fetched alongside them.
+#[derive(Default)]
+pub struct Fetched {
+    pub quotes: Vec<Quote>,
+    pub history: Vec<Series>,
+}
+
 const TIMEOUT: Duration = Duration::from_secs(10);
 /// Search happens while someone is typing, so it gets far less patience than a
 /// background price refresh does.
@@ -54,6 +69,17 @@ const MFAPI_URL: &str = "https://api.mfapi.in/mf";
 /// Every scheme AMFI publishes, in one semicolon-delimited file. The fallback
 /// when mfapi is unreachable, and what scheme search reads.
 const AMFI_URL: &str = "https://portal.amfiindia.com/spages/NAVAll.txt";
+/// The LBMA's daily gold price in dollars an ounce, published back to 1968.
+/// Keyless, and the benchmark the trade itself settles against — the live
+/// spot quote above is what today is worth, this is what every day before it
+/// was worth.
+const LBMA_URL: &str = "https://prices.lbma.org.uk/json/gold_pm.json";
+/// Frankfurter serves a date range of ECB rates in a single request.
+const FX_RANGE_URL: &str = "https://api.frankfurter.dev/v1";
+
+/// How far back a backfill reaches. Ten years outruns every range the charts
+/// offer and still costs one request per source, once.
+const HISTORY_YEARS: i64 = 10;
 
 /// reqwest's own message stops at "error sending request for url (…)", which
 /// says nothing about why. The cause underneath is the part worth reading.
@@ -146,6 +172,19 @@ struct GoldResponse {
 struct FxResponse {
     date: String,
     rates: HashMap<String, serde_json::Number>,
+}
+
+#[derive(Deserialize)]
+struct LbmaPoint {
+    d: String,
+    /// `[USD, GBP, EUR]` for the day. Only the dollar price is wanted, and it
+    /// is null on days the fix didn't run.
+    v: Vec<Option<serde_json::Number>>,
+}
+
+#[derive(Deserialize)]
+struct FxRangeResponse {
+    rates: HashMap<String, HashMap<String, serde_json::Number>>,
 }
 
 #[derive(Deserialize)]
@@ -245,46 +284,146 @@ fn parse_amfi(body: &str, wanted: &[String]) -> Vec<Quote> {
     quotes
 }
 
+/// The day `HISTORY_YEARS` ago, as the backfills' starting line.
+fn history_start() -> String {
+    (chrono::Utc::now().date_naive() - chrono::Duration::days(HISTORY_YEARS * 365))
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
+/// Every NAV a scheme has ever had, newest first from mfapi. The whole file
+/// arrives in one request, so the latest quote falls out of it too and the
+/// scheme costs no more to backfill than to reprice.
+async fn nav_history(client: &reqwest::Client, scheme_code: &str) -> Result<(Quote, Series)> {
+    let body: NavResponse = json_of(client, &format!("{MFAPI_URL}/{scheme_code}")).await?;
+    let key = format!("mf:{scheme_code}");
+    let mut points: Vec<(String, Scaled)> = body
+        .data
+        .iter()
+        .filter_map(|p| {
+            let price = decimal_to_e4(&p.nav).filter(|nav| *nav > 0)?;
+            Some((to_iso_date(&p.date)?, price))
+        })
+        .collect();
+    points.sort();
+    let (as_of, price_e4) = points
+        .last()
+        .cloned()
+        .ok_or("That scheme has no NAV published yet.")?;
+    Ok((
+        Quote {
+            key: key.clone(),
+            price_e4,
+            as_of,
+            source: "mfapi.in (AMFI)".into(),
+        },
+        Series { key, points },
+    ))
+}
+
+/// The LBMA's published fix and the ECB's rupee, over the same window. Both
+/// are needed: a line of dollar prices with no rates beside it converts to
+/// nothing, so a failure on either side throws the pair away.
+async fn gold_history(client: &reqwest::Client) -> Result<Vec<Series>> {
+    let start = history_start();
+    let fixes: Vec<LbmaPoint> = json_of(client, LBMA_URL).await?;
+    let metal: Vec<(String, Scaled)> = fixes
+        .iter()
+        .filter_map(|point| {
+            let as_of = to_iso_date(&point.d)?;
+            if as_of < start {
+                return None;
+            }
+            let usd = point.v.first()?.as_ref()?;
+            Some((as_of, decimal_to_e4(&usd.to_string()).filter(|p| *p > 0)?))
+        })
+        .collect();
+    if metal.is_empty() {
+        return Err("The gold price history came back empty.".into());
+    }
+
+    let url = format!("{FX_RANGE_URL}/{start}..?base=USD&symbols=INR");
+    let fx: FxRangeResponse = json_of(client, &url).await?;
+    let mut rupee: Vec<(String, Scaled)> = fx
+        .rates
+        .iter()
+        .filter_map(|(date, rates)| {
+            let inr = rates.get("INR")?;
+            Some((to_iso_date(date)?, decimal_to_e4(&inr.to_string())?))
+        })
+        .collect();
+    rupee.sort();
+    if rupee.is_empty() {
+        return Err("The rupee history came back empty.".into());
+    }
+
+    Ok(vec![
+        Series { key: KEY_GOLD.into(), points: metal },
+        Series { key: KEY_FX.into(), points: rupee },
+    ])
+}
+
 /// Fetches prices for what the book actually holds.
 ///
 /// A fund whose NAV won't load shouldn't stop gold from repricing, so partial
 /// failures are kept rather than thrown away. Only a clean sweep of failures
 /// is worth telling the user about.
-pub async fn fetch(want_gold: bool, schemes: &[String]) -> Result<Vec<Quote>> {
+///
+/// The two `backfill` arguments name what has no history on file yet. Those
+/// are asked for their whole published line rather than today's number; the
+/// rest are only topped up, because every past day is already stored.
+pub async fn fetch(
+    want_gold: bool,
+    schemes: &[String],
+    backfill_gold: bool,
+    backfill_schemes: &[String],
+) -> Result<Fetched> {
     if !want_gold && schemes.is_empty() {
-        return Ok(Vec::new());
+        return Ok(Fetched::default());
     }
     let client = client()?;
-    let mut quotes = Vec::new();
+    let mut out = Fetched::default();
 
     if want_gold {
         if let Ok(mut pair) = gold(&client).await {
-            quotes.append(&mut pair);
+            out.quotes.append(&mut pair);
+        }
+        if backfill_gold {
+            if let Ok(mut lines) = gold_history(&client).await {
+                out.history.append(&mut lines);
+            }
         }
     }
     for code in schemes {
+        if backfill_schemes.iter().any(|c| c == code) {
+            if let Ok((quote, series)) = nav_history(&client, code).await {
+                out.quotes.push(quote);
+                out.history.push(series);
+                continue;
+            }
+        }
         if let Ok(quote) = nav(&client, code).await {
-            quotes.push(quote);
+            out.quotes.push(quote);
         }
     }
 
     // mfapi republishes AMFI's numbers scheme by scheme. If it answered for
     // none of them, the published file itself is still there — one request
     // covers every fund at once.
-    let got_navs = quotes.iter().any(|q| q.key.starts_with("mf:"));
+    let got_navs = out.quotes.iter().any(|q| q.key.starts_with("mf:"));
     if !schemes.is_empty() && !got_navs {
         if let Ok(body) = text_of(&client, AMFI_URL).await {
-            quotes.append(&mut parse_amfi(&body, schemes));
+            out.quotes.append(&mut parse_amfi(&body, schemes));
         }
     }
 
-    if quotes.is_empty() {
+    if out.quotes.is_empty() {
         return Err(
             "Couldn't reach any price service. Holdings are showing the last prices fetched."
                 .into(),
         );
     }
-    Ok(quotes)
+    Ok(out)
 }
 
 /// Scheme search for the fund picker. Three characters in before it is worth
@@ -396,3 +535,4 @@ fn match_schemes(all: &[Scheme], query: &str) -> Vec<Scheme> {
         .cloned()
         .collect()
 }
+
