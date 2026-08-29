@@ -1,0 +1,32 @@
+[package]
+name = "midas"
+version = "0.1.0"
+description = "Midas — a beautiful personal expense tracker"
+authors = ["mohanraj"]
+edition = "2021"
+
+[lib]
+name = "midas_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
+# Prices are fetched from Rust rather than the webview: no CORS to work
+# around, and the cache lands in SQLite alongside everything else. Tauri gates
+# its own copy of reqwest to other targets, so it needs asking for by name.
+reqwest = { version = "0.13", default-features = false, features = [
+    "json",
+    "charset",
+    "http2",
+    "query",
+    "rustls",
+] }
