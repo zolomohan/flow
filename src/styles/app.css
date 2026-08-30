@@ -1881,12 +1881,15 @@ kbd {
    A transaction is a short form with one tall field in it — the category
    grid — and stacking everything under that leaves the rest below the fold
    for no reason. */
-/* The fields keep one width wherever they are — the form, either split page
-   — so moving between them changes what is beside them and nothing else. */
+/* Half the sheet each, with the rule down the middle of it: the gap belongs
+   inside the columns rather than between them, or the divider lands off
+   centre by half of it. The fields then keep one width wherever they are —
+   the form, either split page — and only what sits beside them changes. */
 .tx-form.is-two-pane {
-  grid-template-columns: 360px minmax(0, 1fr);
-  gap: 0 26px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0;
 }
+.tx-form.is-two-pane > .tx-pane:first-child { padding-right: 26px; }
 .tx-pane { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-content: start; }
 .tx-pane > * { min-width: 0; }
 /* A rule rather than a box: the two halves are one form, not two. It is only
@@ -1905,6 +1908,7 @@ kbd {
 /* Narrow enough that two columns would each be a squeeze — stack them. */
 @media (max-width: 980px) {
   .tx-form.is-two-pane { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .tx-form.is-two-pane > .tx-pane:first-child { padding-right: 0; }
   .tx-form.is-two-pane .tx-pane-detail { padding-left: 0; border-left: 0; }
 }
 
