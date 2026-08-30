@@ -2263,6 +2263,23 @@ kbd {
 }
 .cat-sub-chip.is-active svg { color: #fff; }
 
+/* The category that isn't there yet. */
+.cat-sub-chip.is-new {
+  border-style: dashed;
+  color: var(--ink-4);
+}
+.cat-sub-chip.is-new:hover { color: var(--cat); border-color: var(--cat); }
+.cat-sub-chip.is-new svg { color: inherit; }
+
+.cat-sub-new { display: inline-flex; align-items: center; gap: 4px; }
+.cat-sub-new .input {
+  width: 168px;
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+  border-radius: var(--r-full);
+}
+
 .tx-meta {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 190px);

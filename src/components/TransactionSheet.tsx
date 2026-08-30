@@ -18,7 +18,97 @@ import {
   toLocalInput,
 } from '../lib/format';
 import { itemVariants, listVariants, pageVariants, spring } from '../lib/motion';
-import type { Transaction, TransactionInput, TxKind } from '../lib/types';
+import type { Category, Transaction, TransactionInput, TxKind } from '../lib/types';
+
+/**
+ * Adding a sub-category from the sheet itself. Filing a bill is exactly when
+ * you find out the category you want doesn't exist, and going to another
+ * screen to make it means losing the half-typed transaction you were on.
+ */
+function NewSubCategory({
+  group, onAdded,
+}: {
+  group: Category;
+  onAdded: (categoryId: string) => void;
+}) {
+  const { saveCategory } = useStore();
+  const [naming, setNaming] = useState(false);
+  const [name, setName] = useState('');
+  const [saving, setSaving] = useState(false);
+  const field = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (naming) field.current?.focus();
+  }, [naming]);
+
+  const add = async () => {
+    const trimmed = name.trim();
+    if (!trimmed || saving) return;
+    setSaving(true);
+    try {
+      // A sub-category takes its group's colour whatever is asked for, and
+      // there is nowhere here to pick an icon — the group's reads honestly
+      // until it is given one of its own.
+      const made = await saveCategory({
+        id: null,
+        kind: group.kind,
+        name: trimmed,
+        icon: group.icon,
+        color: group.color,
+        parentId: group.id,
+      });
+      onAdded(made.id);
+      setName('');
+      setNaming(false);
+    } catch {
+      /* the store has already said what went wrong */
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!naming) {
+    return (
+      <button
+        type="button"
+        className="cat-sub-chip is-new"
+        onClick={() => setNaming(true)}
+        title={`Add a sub-category under ${group.name}`}
+      >
+        <Icon name="plus" size={13} strokeWidth={2.4} />
+        New
+      </button>
+    );
+  }
+
+  return (
+    <span className="cat-sub-new">
+      <input
+        ref={field}
+        className="input"
+        value={name}
+        placeholder={`Under ${group.name}`}
+        disabled={saving}
+        onChange={(e) => setName(e.target.value)}
+        onBlur={() => !name.trim() && setNaming(false)}
+        onKeyDown={(e) => {
+          // Enter is the sheet's own save; here it names the category.
+          e.stopPropagation();
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            void add();
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            setName('');
+            setNaming(false);
+          }
+        }}
+      />
+      <IconButton icon="check" label="Add it" size={28} onClick={() => void add()} />
+    </span>
+  );
+}
 
 const KINDS: SegmentOption<TxKind>[] = [
   { value: 'expense', label: 'Expense', icon: 'arrow-up-right', accent: 'var(--ink)' },
@@ -763,15 +853,22 @@ export function TransactionSheet({
                                     className={`cat-sub-chip ${active ? 'is-active' : ''}`}
                                     style={{ ['--cat' as any]: child.color }}
                                     onClick={() => {
-                                setBrowsing(openGroup.id);
-                                setCategoryId(active ? null : child.id);
-                              }}
+                                      setBrowsing(openGroup.id);
+                                      setCategoryId(active ? null : child.id);
+                                    }}
                                   >
                                     <Icon name={child.icon} size={13} strokeWidth={2.2} />
                                     {child.name}
                                   </button>
                                 );
                               })}
+                              {/* The one that isn't there yet. Filing is when
+                                  you find out a category is missing, so it can
+                                  be made here rather than in another screen. */}
+                              <NewSubCategory
+                                group={openGroup}
+                                onAdded={(id) => setCategoryId(id)}
+                              />
                             </div>
                           </div>
                         </motion.div>

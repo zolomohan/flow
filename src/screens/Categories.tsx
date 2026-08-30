@@ -176,9 +176,13 @@ function CategoryRow({
   onOpenCategory: (categoryId: string) => void;
 }) {
   const go = (mode: Mode) => () => onOpen({ category, kind: category.kind, mode });
+  // Nothing is filed on a group, so saying "0 transactions" of one says
+  // nothing: what it is worth knowing is how much sits under it.
   const meta = subCount
-    ? `${plural(count)} · ${subCount} sub-${subCount === 1 ? 'category' : 'categories'}`
-    : plural(count);
+    ? `${subCount} sub-${subCount === 1 ? 'category' : 'categories'} · ${plural(count + subTotal)}`
+    : count
+      ? plural(count)
+      : 'nothing filed here yet';
 
   return (
     <div className={`cat-row ${sub ? 'is-sub' : ''}`} style={{ ['--cat' as any]: category.color }}>
