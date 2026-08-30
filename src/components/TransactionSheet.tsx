@@ -484,7 +484,7 @@ export function TransactionSheet({
       onBack={page ? leavePage : undefined}
       title={heading.title}
       subtitle={heading.subtitle}
-      width={twoPane ? 940 : 600}
+      width={twoPane ? 1040 : 600}
       footer={
         <>
           <div className="foot-lead">

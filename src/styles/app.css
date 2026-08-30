@@ -1966,7 +1966,8 @@ kbd {
 .tx-page { min-height: 300px; }
 
 /* Narrow enough that two columns would each be a squeeze — stack them. */
-@media (max-width: 980px) {
+/* Stacked before the columns get tight enough to clip a tab's label. */
+@media (max-width: 1040px) {
   .tx-form.is-two-pane { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   .tx-form.is-two-pane > .tx-pane:first-child { padding-right: 0; }
   .tx-form.is-two-pane .tx-pane-detail { padding-left: 0; border-left: 0; }
