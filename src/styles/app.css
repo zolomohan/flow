@@ -1895,9 +1895,14 @@ kbd {
   border-left: 1px solid var(--line-soft);
 }
 
-/* A split has a page of the sheet to itself. The floor keeps the modal from
-   collapsing as one page leaves and the next arrives. */
-.tx-page { min-height: 320px; }
+/* A split has a page of the sheet to itself, with the form's own fields still
+   beside it — a bill divided is the same bill. The editor takes the wider
+   column, and the floor keeps the modal from collapsing between pages. */
+.tx-page { min-height: 300px; }
+.tx-form.is-split-page { grid-template-columns: minmax(280px, 5fr) minmax(0, 7fr); }
+@media (max-width: 940px) {
+  .tx-form.is-split-page { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* Anything that reads as a table rather than a field runs under both. */
 .tx-pane-wide { grid-column: 1 / -1; }

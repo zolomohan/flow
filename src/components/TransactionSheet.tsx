@@ -183,7 +183,18 @@ export function TransactionSheet({
   // than two empty rows, so it starts balanced and is corrected downwards.
   // Closing it again without touching them puts the bill back as it was:
   // looking inside a panel is not the same as asking for a split.
+  // Leaving the categories page having touched nothing puts the bill back as
+  // it was, whether you went back to the form or sideways to the people:
+  // looking at a split is not the same as asking for one.
+  const dropSeeded = () => {
+    if (page === 'categories' && seeded) {
+      setLines([]);
+      setSeeded(false);
+    }
+  };
+
   const openPage = (which: SplitFocus) => {
+    if (which !== page) dropSeeded();
     setBack(false);
     setPage(which);
     if (which !== 'categories') return;
@@ -196,13 +207,8 @@ export function TransactionSheet({
     }
   };
 
-  // Leaving the categories page having touched nothing puts the bill back as
-  // it was: looking at a split is not the same as asking for one.
   const leavePage = () => {
-    if (page === 'categories' && seeded) {
-      setLines([]);
-      setSeeded(false);
-    }
+    dropSeeded();
     setBack(true);
     setPage(null);
   };
@@ -286,6 +292,141 @@ export function TransactionSheet({
   const accentVar =
     kind === 'income' ? 'var(--green)' : kind === 'transfer' ? 'var(--blue)' : 'var(--ink)';
 
+  // The same column on every page of the sheet: what the money did. A split
+  // is a different way of reading the same bill, not a different bill, so the
+  // amount and the rest of it stay where they were rather than being left
+  // behind on a page you had to go back to.
+  const fields = (
+    <div className="tx-pane">
+      <Segmented options={KINDS} value={kind} onChange={setKind} name="tx-kind" size="lg" />
+
+      <div className="amount-well">
+        <span className="amount-symbol">₹</span>
+        <input
+          ref={amountRef}
+          className="amount-input"
+          inputMode="decimal"
+          placeholder="0"
+          value={amount}
+          onChange={(e) => {
+            setAmount(amountChars(e.target.value));
+            setError(null);
+          }}
+          onBlur={() => setAmount(settleAmount(amount))}
+        />
+        {/* A bill is often three things added up. The answer shows as it is
+            typed, and the sum settles into it when the field is left. */}
+        <AnimatePresence>
+          {typed !== null && (
+            <motion.span
+              className="amount-sum"
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.14 }}
+            >
+              = {money(Math.round(typed * 100))}
+            </motion.span>
+          )}
+        </AnimatePresence>
+      </div>
+
+      <AnimatePresence>
+        {error && (
+          <motion.p
+            className="form-error"
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+          >
+            <Icon name="alert-circle" size={14} />
+            {error}
+          </motion.p>
+        )}
+      </AnimatePresence>
+
+      <div className="tx-accounts">
+        <Field label={kind === 'income' ? 'Into account' : 'From account'}>
+          <Select
+            options={accountOptions}
+            value={accountId}
+            onChange={setAccountId}
+            placeholder="Choose an account"
+          />
+        </Field>
+        <AnimatePresence mode="popLayout">
+          {kind === 'transfer' && (
+            <motion.div
+              key="to"
+              className="tx-transfer-to"
+              initial={{ opacity: 0, x: 12 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 12 }}
+              transition={spring}
+            >
+              <IconButton icon="arrow-left-right" label="Swap accounts" onClick={swap} />
+              <Field label="Into account">
+                <Select
+                  options={accountOptions.filter((o) => o.value !== accountId)}
+                  value={toAccountId}
+                  onChange={setToAccountId}
+                  placeholder="Choose an account"
+                />
+              </Field>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      <Field label={kind === 'transfer' ? 'Description' : 'Merchant or payee'}>
+        <TextInput
+          value={merchant}
+          placeholder={kind === 'income' ? 'Monthly salary' : 'Swiggy'}
+          onChange={(e) => setMerchant(e.target.value)}
+        />
+      </Field>
+
+      <Field label="When">
+        <div className="when-row">
+          <DateField
+            value={occurredAt.slice(0, 10)}
+            onChange={(iso) => setOccurredAt(`${iso}T${occurredAt.slice(11, 16) || '12:00'}`)}
+          />
+          <TextInput
+            type="time"
+            className="time-input"
+            value={occurredAt.slice(11, 16)}
+            onChange={(e) =>
+              setOccurredAt(`${occurredAt.slice(0, 10)}T${e.target.value || '12:00'}`)
+            }
+          />
+        </div>
+      </Field>
+
+      <Field label="Note" hint="optional">
+        <TextInput
+          value={note}
+          placeholder="Anything worth remembering"
+          onChange={(e) => setNote(e.target.value)}
+        />
+      </Field>
+    </div>
+  );
+
+  const partsSummary = split
+    ? `${lines.length} parts of ${money(paise)} · ${partNames || 'pick categories'}`
+    : 'File one bill under more than one category';
+  const peopleSummary =
+    owed > 0
+      ? `${people.people.length - 1} ${
+          people.people.length === 2 ? 'person' : 'people'
+        } · ${money(owed)} ${
+          directionFor(kind) === 'lent' ? 'owed back to you' : 'you owe them'
+        }`
+      : kind === 'income'
+        ? 'Owe part of this to the people it was for'
+        : 'Turn everyone else’s share into a debt they owe you';
+
   const heading =
     page === 'categories'
       ? {
@@ -332,7 +473,7 @@ export function TransactionSheet({
       onBack={page ? leavePage : undefined}
       title={heading.title}
       subtitle={heading.subtitle}
-      width={page ? 760 : twoPane ? 900 : 600}
+      width={page ? 980 : twoPane ? 900 : 600}
       footer={
         <>
           {editing && !page ? (
@@ -366,7 +507,8 @@ export function TransactionSheet({
         {page ? (
           <motion.div
             key={page}
-            className="tx-page"
+            className="tx-form is-two-pane is-split-page"
+            style={{ ['--accent' as any]: accentVar }}
             custom={back ? -1 : 1}
             variants={pageVariants}
             initial="enter"
@@ -374,11 +516,41 @@ export function TransactionSheet({
             exit="leave"
             onKeyDown={onKeys}
           >
-            {page === 'categories' ? (
-              <SplitLinesEditor amount={paise} kind={kind} lines={lines} onChange={editLines} />
-            ) : (
-              <SplitPeopleEditor amount={paise} kind={kind} split={people} onChange={setPeople} />
-            )}
+            {fields}
+
+            <div className="tx-pane tx-pane-detail">
+              <div className="tx-page">
+                {page === 'categories' ? (
+                  <SplitLinesEditor amount={paise} kind={kind} lines={lines} onChange={editLines} />
+                ) : (
+                  <SplitPeopleEditor amount={paise} kind={kind} split={people} onChange={setPeople} />
+                )}
+              </div>
+            </div>
+
+            {/* The other way of dividing the same bill is one step sideways
+                rather than back out through the form. */}
+            <div className="tx-pane-wide">
+              <div className="split-panels">
+                {page === 'categories' ? (
+                  <SplitLink
+                    icon="users"
+                    title="Split with people"
+                    summary={peopleSummary}
+                    on={owed > 0}
+                    onOpen={() => openPage('people')}
+                  />
+                ) : (
+                  <SplitLink
+                    icon="split"
+                    title="Split transaction"
+                    summary={partsSummary}
+                    on={split}
+                    onOpen={() => openPage('categories')}
+                  />
+                )}
+              </div>
+            </div>
           </motion.div>
         ) : (
           <motion.div
@@ -395,120 +567,7 @@ export function TransactionSheet({
             {/* The form on the left, the category grid on the right: a grid of
                 chips reads as a block, and stacking it above the fields pushed
                 the date and the note off the bottom of the sheet. */}
-            <div className="tx-pane">
-              <Segmented options={KINDS} value={kind} onChange={setKind} name="tx-kind" size="lg" />
-
-              <div className="amount-well">
-                <span className="amount-symbol">₹</span>
-                <input
-                  ref={amountRef}
-                  className="amount-input"
-                  inputMode="decimal"
-                  placeholder="0"
-                  value={amount}
-                  onChange={(e) => {
-                    setAmount(amountChars(e.target.value));
-                    setError(null);
-                  }}
-                  onBlur={() => setAmount(settleAmount(amount))}
-                />
-                {/* A bill is often three things added up. The answer shows as it is
-                    typed, and the sum settles into it when the field is left. */}
-                <AnimatePresence>
-                  {typed !== null && (
-                    <motion.span
-                      className="amount-sum"
-                      initial={{ opacity: 0, y: 4 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0 }}
-                      transition={{ duration: 0.14 }}
-                    >
-                      = {money(Math.round(typed * 100))}
-                    </motion.span>
-                  )}
-                </AnimatePresence>
-              </div>
-
-              <AnimatePresence>
-                {error && (
-                  <motion.p
-                    className="form-error"
-                    initial={{ opacity: 0, y: -4 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0 }}
-                  >
-                    <Icon name="alert-circle" size={14} />
-                    {error}
-                  </motion.p>
-                )}
-              </AnimatePresence>
-
-              <div className="tx-accounts">
-                <Field label={kind === 'income' ? 'Into account' : 'From account'}>
-                  <Select
-                    options={accountOptions}
-                    value={accountId}
-                    onChange={setAccountId}
-                    placeholder="Choose an account"
-                  />
-                </Field>
-                <AnimatePresence mode="popLayout">
-                  {kind === 'transfer' && (
-                    <motion.div
-                      key="to"
-                      className="tx-transfer-to"
-                      initial={{ opacity: 0, x: 12 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      exit={{ opacity: 0, x: 12 }}
-                      transition={spring}
-                    >
-                      <IconButton icon="arrow-left-right" label="Swap accounts" onClick={swap} />
-                      <Field label="Into account">
-                        <Select
-                          options={accountOptions.filter((o) => o.value !== accountId)}
-                          value={toAccountId}
-                          onChange={setToAccountId}
-                          placeholder="Choose an account"
-                        />
-                      </Field>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
-
-              <Field label={kind === 'transfer' ? 'Description' : 'Merchant or payee'}>
-                <TextInput
-                  value={merchant}
-                  placeholder={kind === 'income' ? 'Monthly salary' : 'Swiggy'}
-                  onChange={(e) => setMerchant(e.target.value)}
-                />
-              </Field>
-
-              <Field label="When">
-                <div className="when-row">
-                  <DateField
-                    value={occurredAt.slice(0, 10)}
-                    onChange={(iso) => setOccurredAt(`${iso}T${occurredAt.slice(11, 16) || '12:00'}`)}
-                  />
-                  <TextInput
-                    type="time"
-                    className="time-input"
-                    value={occurredAt.slice(11, 16)}
-                    onChange={(e) =>
-                      setOccurredAt(`${occurredAt.slice(0, 10)}T${e.target.value || '12:00'}`)
-                    }
-                  />
-                </div>
-              </Field>
-
-              <Field label="Note" hint="optional">
-                <TextInput
-                  value={note}
-                  placeholder="Anything worth remembering"
-                  onChange={(e) => setNote(e.target.value)}
-                />
-              </Field>
-            </div>
+            {fields}
 
             <div className="tx-pane tx-pane-detail">
               <AnimatePresence mode="popLayout">
@@ -621,11 +680,7 @@ export function TransactionSheet({
                     <SplitLink
                       icon="split"
                       title="Split transaction"
-                      summary={
-                        split
-                          ? `${lines.length} parts of ${money(paise)} · ${partNames || 'pick categories'}`
-                          : 'File one bill under more than one category'
-                      }
+                      summary={partsSummary}
                       on={split}
                       onOpen={() => openPage('categories')}
                     />
@@ -633,17 +688,7 @@ export function TransactionSheet({
                     <SplitLink
                       icon="users"
                       title="Split with people"
-                      summary={
-                        owed > 0
-                          ? `${people.people.length - 1} ${
-                              people.people.length === 2 ? 'person' : 'people'
-                            } · ${money(owed)} ${
-                              directionFor(kind) === 'lent' ? 'owed back to you' : 'you owe them'
-                            }`
-                          : kind === 'income'
-                            ? 'Owe part of this to the people it was for'
-                            : 'Turn everyone else’s share into a debt they owe you'
-                      }
+                      summary={peopleSummary}
                       on={owed > 0}
                       onOpen={() => openPage('people')}
                     />
