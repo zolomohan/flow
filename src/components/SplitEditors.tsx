@@ -327,7 +327,9 @@ const you = (): Person => ({
   paid: 0,
 });
 
-/** You sit at the end of the list, because that is where the rest is taken. */
+/** You sit at the end of the list, because that is where the rest is taken —
+ *  when you are on it at all. A bill paid entirely for other people has no
+ *  row for you, and every paisa of it is owed back. */
 export const emptyPeople = (): SplitPeople => ({
   method: 'equal',
   dueOn: '',
@@ -355,14 +357,17 @@ export function peopleFor(tx: Transaction | null | undefined): SplitPeople {
         exact: paiseToRupeeString(s.amount),
         paid: s.paid,
       })),
-      { ...you(), exact: paiseToRupeeString(Math.max(mine, 0)) },
+      // None of it left for you means you were not on this bill: you paid it
+      // for other people, and reopening it should say so.
+      ...(mine > 0 ? [{ ...you(), exact: paiseToRupeeString(mine) }] : []),
     ],
   };
 }
 
 /**
  * What each person owes, in the order they are listed. Everyone else's share
- * comes from the method; yours is whatever is left of the bill afterwards.
+ * comes from the method; yours is whatever is left of the bill afterwards —
+ * and with no row of your own, the whole of it is owed back to you.
  *
  * That is the same bargain the parts of a split bill strike, and it holds in
  * every method rather than only in some — under `equally` and `shares` the
@@ -451,9 +456,18 @@ export function SplitPeopleEditor({
       key: nextKey(), debtId: null, name: trimmed, you: false, weight: '1', exact: '', paid: 0,
     };
     // Above your own row, never below it — the rest is always taken last.
-    set({ people: [...split.people.slice(0, -1), fresh, split.people[split.people.length - 1]] });
+    const last = split.people[split.people.length - 1];
+    set({
+      people: last?.you
+        ? [...split.people.slice(0, -1), fresh, last]
+        : [...split.people, fresh],
+    });
     setName('');
   };
+
+  const hasYou = split.people.some((person) => person.you);
+  // Back on a bill you took yourself off — at the end, where the rest is taken.
+  const addYourself = () => set({ people: [...split.people, you()] });
 
   return (
     <div className="split-people">
@@ -528,15 +542,13 @@ export function SplitPeopleEditor({
                 />
               </div>
 
-              {person.you ? (
-                <span className="person-spacer" />
-              ) : (
-                <IconButton
-                  icon="x"
-                  label={`Remove ${person.name}`}
-                  onClick={() => set({ people: split.people.filter((p) => p.key !== person.key) })}
-                />
-              )}
+              {/* Yours goes too: a bill you paid entirely for other people has
+                  no share of your own on it. */}
+              <IconButton
+                icon="x"
+                label={person.you ? 'Take yourself off this bill' : `Remove ${person.name}`}
+                onClick={() => set({ people: split.people.filter((p) => p.key !== person.key) })}
+              />
             </motion.div>
           ))}
         </AnimatePresence>
@@ -557,6 +569,11 @@ export function SplitPeopleEditor({
         <Button size="sm" onClick={() => add(name)} disabled={!name.trim()}>
           Add
         </Button>
+        {!hasYou && (
+          <Button size="sm" tone="ghost" icon="user-round" onClick={addYourself}>
+            Add me
+          </Button>
+        )}
       </div>
 
       </div>

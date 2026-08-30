@@ -4064,7 +4064,6 @@ kbd {
 .person-weight span { font-size: 11.5px; font-weight: 500; color: var(--ink-4); }
 
 .person-amount .input { height: 32px; }
-.person-spacer { width: 34px; }
 
 .person-add {
   display: flex;

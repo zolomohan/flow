@@ -195,6 +195,9 @@ export function TransactionSheet({
   const openPage = (which: SplitFocus) => {
     setBack(false);
     setPage(which);
+    // Emptied of everyone, including you, on a previous visit: start it over
+    // rather than opening on a list with nothing in it.
+    if (which === 'people' && people.people.length === 0) setPeople(emptyPeople());
     if (which !== 'categories') return;
     if (lines.length === 0) {
       // An empty first part and a rest holding the whole bill: you type what
