@@ -11,8 +11,14 @@ import type {
   Debt,
   DebtInput,
   DebtPaymentInput,
+  ImportCommitRow,
+  ImportPreviewRow,
+  ImportResult,
+  Label,
+  LabelInput,
   Overview,
   PricePoint,
+  StatementRow,
   ValuePoint,
   BulkResult,
   Transaction,
@@ -63,6 +69,23 @@ export const api = {
   deleteTransactions: (ids: string[]) => call<number>('delete_transactions', { ids }),
 
   overview: (month: string, span = 1) => call<Overview>('overview', { month, span }),
+
+  /** Reads a bank statement file into rows. Touches nothing. */
+  parseStatement: (path: string) => call<StatementRow[]>('parse_statement', { path }),
+  /** Holds parsed rows against one account: matched, or new with a guess. */
+  previewStatementImport: (accountId: string, rows: StatementRow[]) =>
+    call<ImportPreviewRow[]>('preview_statement_import', { accountId, rows }),
+  /** Posts the agreed rows, wearing the Triage label where asked. A row
+   *  marked as not affecting the balance is absorbed by the openings it
+   *  touches, so recording it moves nothing. */
+  commitStatementImport: (accountId: string, rows: ImportCommitRow[]) =>
+    call<ImportResult>('commit_statement_import', { accountId, rows }),
+  listLabels: () => call<Label[]>('list_labels'),
+  saveLabel: (input: LabelInput) => call<Label>('save_label', { input }),
+  /** The label goes and comes off every posting; the postings stay. */
+  deleteLabel: (id: string) => call<void>('delete_label', { id }),
+  /** "Filed right": clears Triage and teaches the importer the filing. */
+  confirmTriage: (ids: string[]) => call<number>('confirm_triage', { ids }),
 
   listDebts: () => call<Debt[]>('list_debts'),
   saveDebt: (input: DebtInput) => call<void>('save_debt', { input }),

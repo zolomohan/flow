@@ -11,7 +11,10 @@ import {
   accountWorth, compactMoney, dayLabel, money, monthKey, monthLabel, percentDelta,
 } from '../lib/format';
 import { itemVariants, listVariants, spring } from '../lib/motion';
-import type { FlowPoint, HoldingKind, Paise, Transaction } from '../lib/types';
+import { isDeposit } from '../lib/types';
+import type {
+  FlowPoint, HoldingKind, InvestmentTab, Paise, Transaction,
+} from '../lib/types';
 
 /** One face on the wealth card: an account, or the holdings kept outside one. */
 interface Tile {
@@ -24,7 +27,9 @@ interface Tile {
   open: () => void;
 }
 
-const LOOSE: Record<HoldingKind, { name: string; icon: string; color: string }> = {
+/** Holdings that sit in no account of their own are gathered under one tile
+ *  each. Only gold and funds can: a deposit's money always sits somewhere. */
+const LOOSE: Partial<Record<HoldingKind, { name: string; icon: string; color: string }>> = {
   gold: { name: 'Gold', icon: 'coins', color: 'var(--amber)' },
   fund: { name: 'Mutual funds', icon: 'trending-up', color: 'var(--violet)' },
 };
@@ -41,7 +46,7 @@ export function Overview({
   /** Opens the ledger filtered to one category, over all time. */
   onOpenCategory: (categoryId: string) => void;
   /** Jump to Investments, on the tab that holds what was clicked. */
-  onGoInvestments: (kind: HoldingKind) => void;
+  onGoInvestments: (tab: InvestmentTab) => void;
 }) {
   const {
     overview, accounts, holdings, month, setMonth, span, setSpan, listTransactions, revision,
@@ -61,7 +66,10 @@ export function Overview({
   const tiles = useMemo<Tile[]>(() => {
     const held = live.map<Tile>((account) => {
       const investment = account.kind === 'investment';
-      const kind = holdings.find((h) => h.accountId === account.id)?.kind ?? 'fund';
+      // Which tab this account's holdings live under, so the card lands
+      // where what it holds actually is.
+      const held = holdings.find((h) => h.accountId === account.id)?.kind ?? 'fund';
+      const kind: InvestmentTab = isDeposit(held) ? 'deposit' : held;
       return {
         key: account.id,
         name: account.name,
@@ -81,15 +89,21 @@ export function Overview({
 
     return [
       ...held,
-      ...[...loose].map<Tile>(([kind, value]) => ({
-        key: `holdings-${kind}`,
-        name: LOOSE[kind].name,
-        value,
-        icon: LOOSE[kind].icon,
-        color: LOOSE[kind].color,
-        hint: `See ${LOOSE[kind].name.toLowerCase()} in investments`,
-        open: () => onGoInvestments(kind),
-      })),
+      ...[...loose].flatMap<Tile>(([kind, value]) => {
+        // Only the priced kinds can sit outside an account, so anything else
+        // has no tile of its own to stand under.
+        const what = LOOSE[kind];
+        if (!what) return [];
+        return [{
+          key: `holdings-${kind}`,
+          name: what.name,
+          value,
+          icon: what.icon,
+          color: what.color,
+          hint: `See ${what.name.toLowerCase()} in investments`,
+          open: () => onGoInvestments(kind === 'gold' ? 'gold' : 'fund'),
+        }];
+      }),
     ];
   }, [live, holdings, onOpenAccount, onGoInvestments]);
 

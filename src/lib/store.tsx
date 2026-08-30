@@ -22,7 +22,11 @@ import type {
   DebtPaymentInput,
   Holding,
   HoldingInput,
+  ImportCommitRow,
+  ImportResult,
   InvestmentLotInput,
+  Label,
+  LabelInput,
   Overview,
   Transaction,
   TransactionInput,
@@ -37,6 +41,14 @@ import type {
  * obey a setting have no business importing the one that sets it.
  */
 export const REQUIRE_NOTE = 'require_note';
+
+/**
+ * The account the last transaction was written against, so the next one
+ * opens on it. Most people spend from the same account for weeks at a time,
+ * and picking it again every entry is the sort of work a book should do for
+ * itself.
+ */
+export const LAST_ACCOUNT = 'last_account';
 
 export interface Toast {
   id: number;
@@ -55,6 +67,8 @@ interface Store {
   categoryUsage: Record<string, number>;
   debts: Debt[];
   holdings: Holding[];
+  /** Every label in the book, with how many postings carry each. */
+  labels: Label[];
   overview: Overview | null;
   /** Last month of the period in view. */
   month: string;
@@ -94,6 +108,12 @@ interface Store {
   deleteTransactions: (ids: string[]) => Promise<number>;
   listTransactions: (query?: TransactionQuery) => Promise<Transaction[]>;
   transactionSummary: (query?: TransactionQuery) => Promise<TransactionSummary>;
+  /** Posts a statement's agreed rows into one account. */
+  commitStatementImport: (accountId: string, rows: ImportCommitRow[]) => Promise<ImportResult>;
+  /** Marks postings as verified: Triage off, their filing remembered. */
+  confirmTriage: (ids: string[]) => Promise<number>;
+  saveLabel: (input: LabelInput) => Promise<Label>;
+  deleteLabel: (id: string) => Promise<void>;
   resetAll: () => Promise<void>;
   /** Bumped after every write so screens can re-run their own queries. */
   revision: number;
@@ -115,6 +135,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [categoryUsage, setCategoryUsage] = useState<Record<string, number>>({});
   const [debts, setDebts] = useState<Debt[]>([]);
   const [holdings, setHoldings] = useState<Holding[]>([]);
+  const [labels, setLabels] = useState<Label[]>([]);
   const [pricesRefreshing, setPricesRefreshing] = useState(false);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [settings, setSettings] = useState<Record<string, string>>({});
@@ -154,7 +175,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     async (forMonth: string, forSpan: number) => {
       const [
         nextAccounts, nextCategories, nextUsage, nextDebts, nextHoldings, nextOverview,
-        nextSettings,
+        nextSettings, nextLabels,
       ] = await Promise.all([
         api.listAccounts(),
         api.listCategories(),
@@ -163,6 +184,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         api.listHoldings(),
         api.overview(forMonth, forSpan),
         api.listSettings(),
+        api.listLabels(),
       ]);
       setAccounts(nextAccounts);
       setCategories(nextCategories);
@@ -171,6 +193,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setHoldings(nextHoldings);
       setOverview(nextOverview);
       setSettings(nextSettings);
+      setLabels(nextLabels);
     },
     [],
   );
@@ -246,6 +269,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       categoryUsage,
       debts,
       holdings,
+      labels,
       overview,
       month,
       setMonth,
@@ -320,6 +344,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       deleteTransactions: (ids) => mutate(() => api.deleteTransactions(ids)),
       listTransactions: (query) => api.listTransactions(query),
       transactionSummary: (query) => api.transactionSummary(query),
+      commitStatementImport: (accountId, rows) =>
+        mutate(() => api.commitStatementImport(accountId, rows)),
+      confirmTriage: (ids) => mutate(() => api.confirmTriage(ids)),
+      saveLabel: (input) =>
+        mutate(() => api.saveLabel(input), input.id ? 'Label updated' : 'Label added'),
+      deleteLabel: (id) => mutate(() => api.deleteLabel(id), 'Label deleted'),
       resetAll: () => mutate(() => api.resetAll(), 'Everything cleared'),
     }),
     [
@@ -330,6 +360,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       categoryUsage,
       debts,
       holdings,
+      labels,
       overview,
       month,
       span,

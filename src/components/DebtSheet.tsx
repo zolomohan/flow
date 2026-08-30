@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { Icon } from './Icon';
 import { DateField } from './DateField';
 import { TransactionPicker } from './TransactionPicker';
-import { Button, Field, Segmented, Sheet, TextInput, type SegmentOption } from './ui';
+import {
+  Button, Field, Segmented, Select, Sheet, TextInput, type SegmentOption,
+} from './ui';
 import { useStore } from '../lib/store';
 import {
   amountChars, dayLabel, money, paiseToRupeeString, rupeesToPaise, settleAmount, toLocalInput,
@@ -230,12 +232,15 @@ export function DebtPaymentSheet({
   /** Opens the posting this repayment names, when it names one. */
   onOpenTransaction?: (id: string) => void;
 }) {
-  const { saveDebtPayment, deleteDebtPayment } = useStore();
+  const { accounts, saveDebtPayment, deleteDebtPayment } = useStore();
   const [amount, setAmount] = useState('');
   const [occurredAt, setOccurredAt] = useState(toLocalInput().slice(0, 10));
   const [note, setNote] = useState('');
   const [txId, setTxId] = useState<string | null>(null);
   const [txLabel, setTxLabel] = useState<string | null>(null);
+  // The account the money moved through, when the repayment should post a
+  // transfer of its own rather than name one already in the book.
+  const [cashId, setCashId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -247,6 +252,7 @@ export function DebtPaymentSheet({
     setNote(editing?.note ?? '');
     setTxId(editing?.transactionId ?? null);
     setTxLabel(editing?.transactionLabel ?? null);
+    setCashId(editing?.cashAccountId ?? null);
     setError(null);
   }, [open, debt, editing]);
 
@@ -262,6 +268,7 @@ export function DebtPaymentSheet({
       occurredAt,
       note: note.trim() || null,
       transactionId: txId,
+      cashAccountId: txId ? null : cashId,
     });
     onClose();
   };
@@ -335,20 +342,50 @@ export function DebtPaymentSheet({
           />
         </Field>
 
-        <div>
-          <span className="field-label">
-            Linked record
-            <span className="field-hint">optional</span>
-          </span>
-          <TransactionPicker
-            value={txId}
-            label={txLabel}
-            title="Which record was this repayment?"
-            subtitle={`${debt.counterparty} · search and filter your whole ledger`}
-            onChange={(id, label) => { setTxId(id); setTxLabel(label); }}
-            onOpen={onOpenTransaction}
-          />
-        </div>
+        {/* Where the money went, in one of two ways: post a transfer for it
+            now, or name the posting that already recorded it. Both would be
+            the same money twice, so choosing one puts the other away. */}
+        {!txId && (
+          <Field
+            label={debt.direction === 'lent' ? 'Money came into' : 'Money went out of'}
+            hint="optional — posts a transfer"
+          >
+            <Select
+              options={accounts
+                .filter((a) => !a.archived)
+                .map((a) => ({
+                  value: a.id,
+                  label: a.name,
+                  hint: a.institution ?? undefined,
+                  icon: a.icon,
+                  color: a.color,
+                }))}
+              value={cashId}
+              onChange={setCashId}
+              placeholder="Nothing posted to the ledger"
+              allowClear
+              searchable
+              searchPlaceholder="Find an account"
+            />
+          </Field>
+        )}
+
+        {!cashId && (
+          <div>
+            <span className="field-label">
+              Linked record
+              <span className="field-hint">optional</span>
+            </span>
+            <TransactionPicker
+              value={txId}
+              label={txLabel}
+              title="Which record was this repayment?"
+              subtitle={`${debt.counterparty} · search and filter your whole ledger`}
+              onChange={(id, label) => { setTxId(id); setTxLabel(label); }}
+              onOpen={onOpenTransaction}
+            />
+          </div>
+        )}
       </div>
     </Sheet>
   );

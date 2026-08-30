@@ -12,7 +12,7 @@ import {
   peopleFor, peopleToInput, restOf, shareAmounts,
   type SplitLine, type SplitPeople,
 } from './SplitEditors';
-import { REQUIRE_NOTE, useStore } from '../lib/store';
+import { LAST_ACCOUNT, REQUIRE_NOTE, useStore } from '../lib/store';
 import {
   amountChars, money, paiseToRupeeString, rupeesToPaise, settleAmount, sumPreview,
   toLocalInput,
@@ -110,6 +110,90 @@ function NewSubCategory({
   );
 }
 
+/** The label that isn't there yet. Pinning is when you find out one is
+ *  missing, so it can be made here rather than on the Labels screen. */
+function NewLabel({ onAdded }: { onAdded: (labelId: string) => void }) {
+  const { saveLabel, labels } = useStore();
+  const [naming, setNaming] = useState(false);
+  const [name, setName] = useState('');
+  const [saving, setSaving] = useState(false);
+  const field = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (naming) field.current?.focus();
+  }, [naming]);
+
+  const add = async () => {
+    const trimmed = name.trim();
+    if (!trimmed || saving) return;
+    setSaving(true);
+    try {
+      // Colours cycle through the palette, so a label made in a hurry still
+      // comes out distinct from the ones already there.
+      const made = await saveLabel({
+        id: null,
+        name: trimmed,
+        color: LABEL_SWATCHES[labels.length % LABEL_SWATCHES.length],
+      });
+      onAdded(made.id);
+      setName('');
+      setNaming(false);
+    } catch {
+      /* the store has already said what went wrong */
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!naming) {
+    return (
+      <button
+        type="button"
+        className="chip is-new"
+        onClick={() => setNaming(true)}
+        title="Make a label"
+      >
+        <Icon name="plus" size={12} strokeWidth={2.4} />
+        New
+      </button>
+    );
+  }
+
+  return (
+    <span className="cat-sub-new">
+      <input
+        ref={field}
+        className="input"
+        value={name}
+        placeholder="Name it"
+        disabled={saving}
+        onChange={(e) => setName(e.target.value)}
+        onBlur={() => !name.trim() && setNaming(false)}
+        onKeyDown={(e) => {
+          // Enter is the sheet's own save; here it names the label.
+          e.stopPropagation();
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            void add();
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            setName('');
+            setNaming(false);
+          }
+        }}
+      />
+      <IconButton icon="check" label="Add it" size={28} onClick={() => void add()} />
+    </span>
+  );
+}
+
+/** The palette the Labels screen offers, so one made in passing matches. */
+const LABEL_SWATCHES = [
+  '#F2724F', '#42C251', '#118AE4', '#A855F7', '#F0B429', '#5A87E6',
+  '#EC4899', '#8B5CF6', '#06B6D4', '#0EA5E9', '#14B8A6', '#676B89',
+];
+
 const KINDS: SegmentOption<TxKind>[] = [
   { value: 'expense', label: 'Expense', icon: 'arrow-up-right', accent: 'var(--ink)' },
   { value: 'income', label: 'Income', icon: 'arrow-down-left', accent: 'var(--green)' },
@@ -131,7 +215,7 @@ export interface TxDraft {
 export type SplitFocus = 'people' | 'categories' | 'debt';
 
 export function TransactionSheet({
-  open, onClose, editing, draft, splitFocus,
+  open, onClose, editing, draft, splitFocus, onSubmit,
 }: {
   open: boolean;
   onClose: () => void;
@@ -139,14 +223,26 @@ export function TransactionSheet({
   draft?: TxDraft;
   /** Set when the sheet was opened by the Split action rather than by a row. */
   splitFocus?: SplitFocus | null;
+  /**
+   * Takes the finished input instead of the book: the sheet edits something
+   * that is not a posting yet — a statement row waiting to import — and the
+   * caller decides what becomes of it. Nothing is saved and nothing can be
+   * deleted while this is set.
+   */
+  onSubmit?: (input: TransactionInput) => void;
 }) {
   const {
-    accounts, categories, saveTransaction, deleteTransaction, toast, settings,
+    accounts, categories, labels, saveTransaction, deleteTransaction, toast, settings,
+    saveSetting,
   } = useStore();
   const live = useMemo(() => accounts.filter((a) => !a.archived), [accounts]);
   // A book can ask for a note on everything new. What is already in it stays
   // as it is — the rule is about what you are writing down now.
-  const needsNote = settings[REQUIRE_NOTE] === '1' && !editing;
+  // Anything without an id of its own is being written now, whatever the
+  // sheet was opened with — a statement row waiting to import is opened on
+  // a pretend posting, and it is as new as anything typed from scratch.
+  const isNew = !editing?.id;
+  const needsNote = settings[REQUIRE_NOTE] === '1' && isNew;
 
   const [kind, setKind] = useState<TxKind>('expense');
   const [amount, setAmount] = useState('');
@@ -160,6 +256,7 @@ export function TransactionSheet({
   const [saving, setSaving] = useState(false);
   const [lines, setLines] = useState<SplitLine[]>([]);
   const [people, setPeople] = useState<SplitPeople>(emptyPeople);
+  const [labelIds, setLabelIds] = useState<string[]>([]);
   // Dividing a bill is a job of its own — a screenful of rows, each with a
   // category or a person on it — so it gets a page of the sheet rather than a
   // drawer under the form. Null is the transaction itself.
@@ -170,6 +267,10 @@ export function TransactionSheet({
   // nothing has been typed into them — so merely looking never splits a bill.
   const [seeded, setSeeded] = useState(false);
   const amountRef = useRef<HTMLInputElement>(null);
+  // Read through a ref rather than a dependency: writing the setting must
+  // not re-run the reset below and wipe a form that is being filled in.
+  const lastAccount = useRef<string | null>(null);
+  lastAccount.current = settings[LAST_ACCOUNT] ?? null;
 
   // Reset the form each time the sheet opens, from the edited row or the draft.
   useEffect(() => {
@@ -186,11 +287,18 @@ export function TransactionSheet({
       setOccurredAt(editing.occurredAt.slice(0, 16));
       setLines(carried);
       setPeople(peopleFor(editing));
+      setLabelIds(editing.labels.map((l) => l.id));
       setSeeded(false);
     } else {
       setKind(draft?.kind ?? 'expense');
       setAmount('');
-      setAccountId(draft?.accountId ?? live[0]?.id ?? null);
+      // Where it was asked for, then wherever the last one was written, then
+      // whatever comes first — an account that has since gone or been
+      // archived falls through rather than opening on nothing.
+      const remembered = live.some((a) => a.id === lastAccount.current)
+        ? lastAccount.current
+        : null;
+      setAccountId(draft?.accountId ?? remembered ?? live[0]?.id ?? null);
       setToAccountId(null);
       setCategoryId(draft?.categoryId ?? null);
       setMerchant('');
@@ -198,6 +306,7 @@ export function TransactionSheet({
       setOccurredAt(toLocalInput());
       setLines([]);
       setPeople(emptyPeople());
+      setLabelIds([]);
       setSeeded(false);
     }
     // The sheet opens on a split page only when it was asked for by name —
@@ -395,11 +504,25 @@ export function TransactionSheet({
       occurredAt,
       splits: parts,
       shares: owing,
+      labelIds,
     };
+
+    // The caller wanted the input, not the save.
+    if (onSubmit) {
+      onSubmit(input);
+      onClose();
+      return;
+    }
 
     setSaving(true);
     try {
       await saveTransaction(input);
+      // Where the next new one will start. Only what you just added counts:
+      // correcting the account on something from March says nothing about
+      // where you are spending from now.
+      if (isNew && accountId !== lastAccount.current) {
+        void saveSetting(LAST_ACCOUNT, accountId);
+      }
       toast(
         owing.length
           ? `${editing ? 'Transaction updated' : 'Transaction added'} · ${owing.length} ${
@@ -428,6 +551,11 @@ export function TransactionSheet({
   // the two ways of splitting it. Only a transfer has none of that — it moves
   // between your own accounts — so only a transfer drops to one column.
   const twoPane = kind !== 'transfer';
+
+  // How wide the sheet has to be, which is not the same question: a split
+  // page is two columns whatever it is dividing, so a transfer being split
+  // with people needs the room even though its own form is one column.
+  const wide = twoPane || page !== null;
 
   // Nothing of it is yours: an expense entirely owed back is lending, and the
   // sheet says so before it saves it that way.
@@ -512,10 +640,7 @@ export function TransactionSheet({
               {/* Optional once somebody owes it: money out of your accounts
                   with nowhere of yours to go is lending, and the debt is
                   where it went. */}
-              <Field
-                label="Into account"
-                hint={owed > 0 ? 'optional — it is owed back' : undefined}
-              >
+              <Field label="To account">
                 <Select
                   options={accountOptions.filter((o) => o.value !== accountId)}
                   value={toAccountId}
@@ -564,6 +689,42 @@ export function TransactionSheet({
           }}
         />
       </Field>
+
+    </div>
+  );
+
+  // Pins, under whatever the right-hand column is saying about the money —
+  // a label is not a filing, so it sits after the categories rather than
+  // among them, and it applies to a transfer as much as to a bill.
+  const labelPicker = (
+    <div className="tx-labels">
+      <span className="field-label">
+        Labels
+        {labelIds.length > 0 && (
+          <span className="field-hint">
+            {labelIds.length} pinned
+          </span>
+        )}
+      </span>
+      <div className="chip-row">
+        {labels.map((label) => (
+          <Chip
+            key={label.id}
+            color={label.color}
+            active={labelIds.includes(label.id)}
+            onClick={() =>
+              setLabelIds((was) =>
+                was.includes(label.id)
+                  ? was.filter((id) => id !== label.id)
+                  : [...was, label.id],
+              )
+            }
+          >
+            {label.name}
+          </Chip>
+        ))}
+        <NewLabel onAdded={(id) => setLabelIds((was) => [...was, id])} />
+      </div>
     </div>
   );
 
@@ -600,7 +761,7 @@ export function TransactionSheet({
                 : 'Everyone else’s share becomes a debt of its own',
           }
         : {
-            title: editing ? 'Edit transaction' : 'New transaction',
+            title: isNew ? 'New transaction' : 'Edit transaction',
             subtitle:
               kind === 'transfer'
                 ? 'Moving money between your own accounts'
@@ -644,12 +805,16 @@ export function TransactionSheet({
       onBack={page ? leavePage : undefined}
       title={heading.title}
       subtitle={heading.subtitle}
-      width={twoPane ? 1040 : 600}
+      width={wide ? 1040 : 600}
       footer={
         <>
           <div className="foot-lead">
-            {editing && !page && (
-              <Button tone="danger" icon="trash-2" onClick={remove}>
+            {editing && !page && !onSubmit && (
+              <Button
+                tone="danger"
+                icon="trash-2"
+                onClick={() => setConfirmingDelete(true)}
+              >
                 Delete
               </Button>
             )}
@@ -704,7 +869,7 @@ export function TransactionSheet({
             </Button>
             {/* The shortcut belongs on the thing it presses. */}
             <Button tone="primary" onClick={submit} disabled={saving}>
-              {editing ? 'Save changes' : 'Add transaction'}
+              {isNew ? 'Add transaction' : 'Save changes'}
               <span className="btn-keys">
                 <kbd>⌘</kbd>
                 <kbd>↵</kbd>

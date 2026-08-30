@@ -1,5 +1,6 @@
 mod db;
 mod demo;
+mod import;
 mod models;
 mod prices;
 
@@ -116,6 +117,58 @@ fn delete_transactions(db: State<Db>, ids: Vec<String>) -> R<i64> {
 #[tauri::command]
 fn delete_transaction(db: State<Db>, id: String) -> R<()> {
     with_db(&db, |c| db::delete_transaction(c, &id))
+}
+
+/// Reads a bank statement export into rows. Pure — nothing touches the book
+/// until the preview has been seen and the commit asked for.
+#[tauri::command]
+fn parse_statement(path: String) -> R<Vec<StatementRow>> {
+    import::parse_statement(&path)
+}
+
+/// Holds parsed rows against one account: which are already in the book, and
+/// how the new ones would be filed.
+#[tauri::command]
+fn preview_statement_import(
+    db: State<Db>,
+    account_id: String,
+    rows: Vec<StatementRow>,
+) -> R<Vec<ImportPreviewRow>> {
+    with_db(&db, |c| db::preview_import(c, &account_id, rows))
+}
+
+/// Posts the agreed rows, wearing the Triage label where asked. A row marked
+/// as not affecting the balance is absorbed by the opening balances it
+/// touches, so recording it moves nothing.
+#[tauri::command]
+fn commit_statement_import(
+    db: State<Db>,
+    account_id: String,
+    rows: Vec<ImportCommitRow>,
+) -> R<ImportResult> {
+    with_db(&db, |c| db::commit_import(c, &account_id, rows))
+}
+
+#[tauri::command]
+fn list_labels(db: State<Db>) -> R<Vec<Label>> {
+    with_db(&db, db::list_labels)
+}
+
+#[tauri::command]
+fn save_label(db: State<Db>, input: LabelInput) -> R<Label> {
+    with_db(&db, |c| db::save_label(c, input))
+}
+
+#[tauri::command]
+fn delete_label(db: State<Db>, id: String) -> R<()> {
+    with_db(&db, |c| db::delete_label(c, &id))
+}
+
+/// "These are filed right": clears Triage and teaches the importer, so the
+/// next statement classifies these counterparties on its own.
+#[tauri::command]
+fn confirm_triage(db: State<Db>, ids: Vec<String>) -> R<i64> {
+    with_db(&db, |c| db::confirm_triage(c, &ids))
 }
 
 #[tauri::command]
@@ -314,6 +367,13 @@ pub fn run() {
             update_transactions,
             delete_transactions,
             overview,
+            parse_statement,
+            preview_statement_import,
+            commit_statement_import,
+            list_labels,
+            save_label,
+            delete_label,
+            confirm_triage,
             list_debts,
             save_debt,
             delete_debt,

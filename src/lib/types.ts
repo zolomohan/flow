@@ -96,6 +96,23 @@ export interface Transaction {
   splits: TransactionSplit[];
   /** Who else was in on this bill. Each share is a debt of its own. */
   shares: TransactionShare[];
+  /** Labels pinned on top — "Triage" on unverified imports, say. */
+  labels: TxLabel[];
+}
+
+/** A label as it sits on a posting. */
+export interface TxLabel {
+  id: string;
+  name: string;
+  color: string;
+}
+
+export interface Label {
+  id: string;
+  name: string;
+  color: string;
+  /** How many postings carry it right now. */
+  count: number;
 }
 
 /** One line of a split bill: part of the money, filed on its own. */
@@ -160,6 +177,15 @@ export interface TransactionInput {
   splits?: TransactionSplitInput[] | null;
   /** Who owes what out of this bill. Same rule as `splits`. */
   shares?: TransactionShareInput[] | null;
+  /** Labels this posting should wear. Left off, nothing changes; a list
+   *  replaces the set outright, empty taking them all off. */
+  labelIds?: string[] | null;
+}
+
+export interface LabelInput {
+  id?: string | null;
+  name: string;
+  color: string;
 }
 
 /**
@@ -183,6 +209,8 @@ export interface BulkResult {
 
 export interface TransactionQuery {
   search?: string | null;
+  /** Only postings carrying one of these labels. */
+  labelIds?: string[] | null;
   kinds?: TxKind[] | null;
   accountIds?: string[] | null;
   /** Which side of a posting the accounts must be on. Only transfers differ. */
@@ -263,6 +291,9 @@ export interface DebtPayment {
   note: string | null;
   transactionId: string | null;
   transactionLabel: string | null;
+  /** The account the money moved through, for a posting this repayment
+   *  wrote itself. Null when it linked one of yours, or posted nothing. */
+  cashAccountId: string | null;
   createdAt: string;
 }
 
@@ -273,6 +304,10 @@ export interface DebtPaymentInput {
   occurredAt: string;
   note: string | null;
   transactionId: string | null;
+  /** Set it and the repayment posts a transfer — into this account for money
+   *  coming back to you, out of it for money going to them. Exclusive with
+   *  `transactionId`; leave both empty and nothing is written. */
+  cashAccountId?: string | null;
 }
 
 export interface Debt {
@@ -310,7 +345,14 @@ export interface DebtInput {
 
 /* ------------------------------------------------------------ investments */
 
-export type HoldingKind = 'gold' | 'fund';
+/** What a holding is. The two deposits are valued by what they earn; the
+ *  other two by what a market says they would fetch. */
+export type HoldingKind = 'gold' | 'fund' | 'fd' | 'rd';
+
+/** The tabs the Investments screen is divided into — deposits share one. */
+export type InvestmentTab = 'fund' | 'gold' | 'deposit';
+
+export const isDeposit = (kind: HoldingKind) => kind === 'fd' || kind === 'rd';
 export type LotKind = 'buy' | 'sell';
 
 /**
@@ -377,6 +419,14 @@ export interface Holding {
    * line counts it from. Null for a fund, which is dated by its lots.
    */
   acquiredOn: string | null;
+  /** A deposit's annual rate, scaled by 10^4: 7.25% is 72500. */
+  rateE4: Scaled | null;
+  /** The day a deposit started earning, and the day it comes back. */
+  openedOn: string | null;
+  maturesOn: string | null;
+  /** What a deposit will be worth the day it matures. Zero for everything
+   *  else, and for a deposit with no maturity date to reach. */
+  maturityValue: Paise;
   /** Grams for gold, units for a fund. */
   unitsE4: Scaled;
   /** Both are zero for gold: an object you own, not a position you traded. */
@@ -405,6 +455,10 @@ export interface HoldingInput {
   /** The day it was acquired, YYYY-MM-DD. Optional — plenty of gold has been
    *  in the family longer than anyone remembers. */
   acquiredOn: string | null;
+  /** A deposit's terms: the annual rate scaled by 10^4, and its two dates. */
+  rateE4?: Scaled | null;
+  openedOn?: string | null;
+  maturesOn?: string | null;
   note: string | null;
   closed?: boolean | null;
 }
@@ -431,4 +485,71 @@ export interface ValuePoint {
 export interface Scheme {
   schemeCode: string;
   schemeName: string;
+}
+
+/* ------------------------------------------------------- statement import */
+
+export type StatementDirection = 'debit' | 'credit';
+
+/** One line of a bank statement, as parsed. */
+export interface StatementRow {
+  /** ISO date, YYYY-MM-DD. */
+  date: string;
+  narration: string;
+  refNo: string;
+  amount: Paise;
+  /** debit = money left the account · credit = money arrived. */
+  direction: StatementDirection;
+  balance: Paise | null;
+}
+
+/** A statement row held against the book: already in it, or new with a guess. */
+export interface ImportPreviewRow {
+  row: StatementRow;
+  status: 'new' | 'matched';
+  matchedId: string | null;
+  /** What the matched posting says of itself — merchant and category. */
+  matchedSummary: string | null;
+  /** The day the book's copy sits on — interesting when it differs. */
+  matchedOn: string | null;
+  kind: TxKind;
+  categoryId: string | null;
+  /** The other account, when the suggestion is a transfer. */
+  transferAccountId: string | null;
+  merchant: string;
+  /** The suggestion came from a remembered rule; confirmed means a person
+   *  verified that rule rather than the seeder guessing it. */
+  fromRule: boolean;
+  ruleConfirmed: boolean;
+  /** Rows sharing this key are the same counterparty. */
+  matchKey: string | null;
+}
+
+/** One row the user agreed to bring in: the statement's line, and the full
+ *  posting it should become — whatever the transaction sheet wrote, splits,
+ *  shares and all. */
+export interface ImportCommitRow {
+  row: StatementRow;
+  input: TransactionInput;
+  /** Arrives wearing the Triage label, to be verified by hand. */
+  triage: boolean;
+  /** A person shaped this filing in the review — teach the rule right away,
+   *  the way confirming in triage would. */
+  learn: boolean;
+  /** Whether this row should move the balances it touches. False for money
+   *  the current balance has already seen: it is recorded, and the opening
+   *  balances it touches absorb it so nothing moves. */
+  affectsBalance: boolean;
+}
+
+export interface ImportResult {
+  inserted: number;
+  triaged: number;
+  /** How many inserted rows were recorded without moving a balance. */
+  balanceNeutral: number;
+  /** How many debts were opened alongside their postings. */
+  debts: number;
+  /** What the account's opening balance absorbed so the current balance
+   *  stayed put while that history went in. */
+  openingAdjustment: Paise;
 }

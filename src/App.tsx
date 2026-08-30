@@ -18,6 +18,7 @@ import { Debts } from './screens/Debts';
 import { Investments } from './screens/Investments';
 import { Insights } from './screens/Insights';
 import { Categories } from './screens/Categories';
+import { Labels } from './screens/Labels';
 import { Settings } from './screens/Settings';
 import { StoreProvider, useStore } from './lib/store';
 import { screenVariants } from './lib/motion';
@@ -28,6 +29,7 @@ import type {
   DebtDirection,
   Holding,
   HoldingKind,
+  InvestmentTab,
   InvestmentLot,
   Transaction,
   TxKind,
@@ -65,7 +67,7 @@ function Shell() {
   // Which tab Investments opens on. The screen remounts with the route, so
   // arriving from a gold card lands on gold rather than on whatever was last
   // looked at.
-  const [investmentTab, setInvestmentTab] = useState<HoldingKind>('fund');
+  const [investmentTab, setInvestmentTab] = useState<InvestmentTab>('fund');
   // One target for both paths: the holding a new entry belongs to, and the
   // existing entry when one is being corrected.
   const [lotTarget, setLotTarget] = useState<{
@@ -82,6 +84,11 @@ function Shell() {
   // filtered to it, over all time rather than the month you happened to be
   // looking at, because "show me these" means all of them.
   const [categoryFocus, setCategoryFocus] = useState<{ ids: string[]; token: number }>({
+    ids: [],
+    token: 0,
+  });
+  // And the same again for a label picked off the Labels screen.
+  const [labelFocus, setLabelFocus] = useState<{ ids: string[]; token: number }>({
     ids: [],
     token: 0,
   });
@@ -149,7 +156,12 @@ function Shell() {
     setRoute('transactions');
   }, []);
 
-  const openInvestments = useCallback((kind: HoldingKind) => {
+  const openLabelTransactions = useCallback((labelId: string) => {
+    setLabelFocus((f) => ({ ids: [labelId], token: f.token + 1 }));
+    setRoute('transactions');
+  }, []);
+
+  const openInvestments = useCallback((kind: InvestmentTab) => {
     setInvestmentTab(kind);
     setRoute('investments');
   }, []);
@@ -289,6 +301,7 @@ function Shell() {
                 onAddTransaction={() => newTransaction()}
                 accountFocus={accountFocus}
                 categoryFocus={categoryFocus}
+                labelFocus={labelFocus}
               />
             ) : route === 'accounts' ? (
               <Accounts onEditAccount={editAccount} onAddAccount={newAccount} />
@@ -312,6 +325,8 @@ function Shell() {
               <Insights onOpenCategory={openCategoryTransactions} />
             ) : route === 'categories' ? (
               <Categories onOpenCategory={openCategoryTransactions} />
+            ) : route === 'labels' ? (
+              <Labels onOpenLabel={openLabelTransactions} />
             ) : (
               <Settings />
             )}

@@ -9,7 +9,10 @@ import { useStore } from '../lib/store';
 import { dayLabel, money, percent, perUnit, quantity, shortDayLabel, unitPrice } from '../lib/format';
 import { itemVariants, listVariants, spring } from '../lib/motion';
 import { carats, HoldingDetail, splitName, unitOf } from './HoldingDetail';
-import type { Holding, HoldingKind, InvestmentLot, PricePoint } from '../lib/types';
+import { isDeposit } from '../lib/types';
+import type {
+  Holding, HoldingKind, InvestmentTab, InvestmentLot, PricePoint,
+} from '../lib/types';
 
 /** How much of each line the cards carry. A year is the read most people
  *  have in mind when they glance at a holding. */
@@ -20,33 +23,37 @@ const CARD_DAYS = 366;
  * against what it weighs — so they get a tab each rather than being stacked
  * into one scroll where the totals would have to hedge.
  */
-const TABS: SegmentOption<HoldingKind>[] = [
+const TABS: SegmentOption<InvestmentTab>[] = [
   { value: 'fund', label: 'Mutual funds', icon: 'trending-up', accent: 'var(--violet)' },
   { value: 'gold', label: 'Gold', icon: 'coins', accent: 'var(--amber)' },
+  { value: 'deposit', label: 'Deposits', icon: 'landmark', accent: 'var(--blue)' },
 ];
 
-const BLURBS: Record<HoldingKind, string> = {
+const BLURBS: Record<InvestmentTab, string> = {
   fund: 'Units valued at their latest NAV.',
   gold: "Weighed by the gram, valued at today's rate.",
+  deposit:
+    'Fixed and recurring deposits, earning at the rate you were quoted — compounded quarterly, and stopping at maturity.',
 };
 
-const TINTS: Record<HoldingKind, string> = {
+const TINTS: Record<InvestmentTab, string> = {
   fund: 'var(--violet)',
   gold: 'var(--amber)',
+  deposit: 'var(--blue)',
 };
 
 export function Investments({
   initialTab = 'fund', onNewHolding, onEditHolding, onAddLot, onEditLot,
 }: {
-  /** Which kind to open on, for arrivals from elsewhere in the app. */
-  initialTab?: HoldingKind;
+  /** Which tab to open on, for arrivals from elsewhere in the app. */
+  initialTab?: InvestmentTab;
   onNewHolding: (kind: HoldingKind) => void;
   onEditHolding: (holding: Holding) => void;
   onAddLot: (holding: Holding) => void;
   onEditLot: (holding: Holding, lot: InvestmentLot) => void;
 }) {
   const { holdings, refreshPrices, pricesRefreshing, revision } = useStore();
-  const [tab, setTab] = useState<HoldingKind>(initialTab);
+  const [tab, setTab] = useState<InvestmentTab>(initialTab);
   const [showClosed, setShowClosed] = useState(false);
   // Every card's line, fetched in one call rather than one per card. Empty
   // until prices have been fetched at least once, which the cards say plainly.
@@ -90,7 +97,18 @@ export function Investments({
     .filter((h) => !h.closed)
     .reduce((sum, h) => sum + h.marketValue, 0);
 
-  const mine = useMemo(() => holdings.filter((h) => h.kind === tab), [holdings, tab]);
+  // What the tab's "add" button makes. Deposits open as fixed — the sheet
+  // itself offers recurring, which is where the difference matters.
+  const newKind: HoldingKind = tab === 'deposit' ? 'fd' : tab;
+
+  // The deposits tab holds both kinds of them; the others hold their own.
+  const mine = useMemo(
+    () =>
+      holdings.filter((h) =>
+        tab === 'deposit' ? isDeposit(h.kind) : h.kind === tab,
+      ),
+    [holdings, tab],
+  );
   const open = useMemo(() => mine.filter((h) => !h.closed), [mine]);
   const closed = useMemo(() => mine.filter((h) => h.closed), [mine]);
 
@@ -154,8 +172,8 @@ export function Investments({
           >
             {pricesRefreshing ? 'Fetching…' : 'Refresh prices'}
           </Button>
-          <Button tone="primary" icon="plus" onClick={() => onNewHolding(tab)}>
-            {tab === 'gold' ? 'Add gold' : 'Add a fund'}
+          <Button tone="primary" icon="plus" onClick={() => onNewHolding(newKind)}>
+            {tab === 'gold' ? 'Add gold' : tab === 'deposit' ? 'Add a deposit' : 'Add a fund'}
           </Button>
         </div>
       </header>
@@ -289,8 +307,12 @@ export function Investments({
                       : 'Add a scheme and record what you have bought. Midas fetches its NAV each day.'
                   }
                   action={
-                    <Button tone="primary" icon="plus" onClick={() => onNewHolding(tab)}>
-                      {tab === 'gold' ? 'Add gold' : 'Add a fund'}
+                    <Button tone="primary" icon="plus" onClick={() => onNewHolding(newKind)}>
+                      {tab === 'gold'
+                        ? 'Add gold'
+                        : tab === 'deposit'
+                          ? 'Add a deposit'
+                          : 'Add a fund'}
                     </Button>
                   }
                 />
@@ -402,7 +424,23 @@ function HoldingCard({
 
   // The rate is already under the value on a gold card, so its third figure
   // goes to something the card doesn't otherwise say.
-  const figures: { label: string; value: string; hint?: string }[] = isGold
+  const deposit = isDeposit(holding.kind);
+  const figures: { label: string; value: string; hint?: string }[] = deposit
+    ? [
+        { label: 'Paid in', value: money(cost) },
+        {
+          label: 'Rate',
+          value: holding.rateE4 ? `${holding.rateE4 / 10_000}%` : '—',
+          hint: 'a year',
+        },
+        {
+          label: 'At maturity',
+          value: holding.maturityValue ? money(holding.maturityValue) : '—',
+          hint: holding.maturesOn ? shortDayLabel(holding.maturesOn) : undefined,
+        },
+        { label: 'Earned', value: money(gain, { sign: gain > 0 }), hint: 'so far' },
+      ]
+    : isGold
     ? [
         { label: 'Weight', value: quantity(holding.unitsE4, unit) },
         { label: 'Purity', value: carats(holding.purityE4) },
@@ -423,16 +461,26 @@ function HoldingCard({
         { label: 'Invested', value: money(cost), hint: 'net of sales' },
       ];
 
-  const footnotes = [
-    holding.closed ? 'closed' : null,
-    isGold && holding.acquiredOn ? `since ${shortDayLabel(holding.acquiredOn)}` : null,
-    !isGold && share > 0.001 ? `${percent(share * 100)} of holdings` : null,
-    !isGold && holding.lots.length
-      ? `${holding.lots.length} ${holding.lots.length === 1 ? 'entry' : 'entries'}`
-      : null,
-    holding.accountName,
-    holding.priceAsOf ? `priced ${dayLabel(holding.priceAsOf)}` : 'never priced',
-  ].filter(Boolean);
+  const footnotes = deposit
+    ? [
+        holding.closed ? 'closed' : null,
+        holding.kind === 'fd' ? 'fixed deposit' : 'recurring deposit',
+        holding.openedOn ? `opened ${shortDayLabel(holding.openedOn)}` : null,
+        holding.lots.length
+          ? `${holding.lots.length} ${holding.lots.length === 1 ? 'payment' : 'payments'}`
+          : 'nothing paid in yet',
+        holding.accountName,
+      ].filter(Boolean)
+    : [
+        holding.closed ? 'closed' : null,
+        isGold && holding.acquiredOn ? `since ${shortDayLabel(holding.acquiredOn)}` : null,
+        !isGold && share > 0.001 ? `${percent(share * 100)} of holdings` : null,
+        !isGold && holding.lots.length
+          ? `${holding.lots.length} ${holding.lots.length === 1 ? 'entry' : 'entries'}`
+          : null,
+        holding.accountName,
+        holding.priceAsOf ? `priced ${dayLabel(holding.priceAsOf)}` : 'never priced',
+      ].filter(Boolean);
 
   return (
     <motion.button
@@ -445,7 +493,10 @@ function HoldingCard({
     >
       <span className="hc-head">
         <span className="holding-glyph">
-          <Icon name={isGold ? 'coins' : 'trending-up'} size={17} />
+          <Icon
+            name={deposit ? 'landmark' : isGold ? 'coins' : 'trending-up'}
+            size={17}
+          />
         </span>
         <span className="hc-id">
           <span className="holding-name">{title}</span>
@@ -458,9 +509,22 @@ function HoldingCard({
 
       <span className="hc-body">
         <span className="hc-worth">
-          <small>Market value</small>
-          <strong>{priced ? money(holding.marketValue) : 'No price yet'}</strong>
-          {isGold ? (
+          <small>{deposit ? 'Worth today' : 'Market value'}</small>
+          <strong>
+            {deposit || priced ? money(holding.marketValue) : 'No price yet'}
+          </strong>
+          {deposit ? (
+            <span className={`hc-move ${gain > 0 ? 'is-up' : 'is-quiet'}`}>
+              {gain > 0 ? (
+                <>
+                  <Icon name="arrow-up-right" size={13} strokeWidth={2.4} />
+                  {money(gain)} earned
+                </>
+              ) : (
+                'nothing paid in yet'
+              )}
+            </span>
+          ) : isGold ? (
             <span className="hc-move is-quiet">
               {priced ? `at ${unitPrice(holding.priceE4!)} a gram` : 'refresh prices to value it'}
             </span>
@@ -477,7 +541,7 @@ function HoldingCard({
           )}
         </span>
 
-        {!isGold && (
+        {!isGold && !deposit && (
           <span className="hc-line">
             {line.length > 1 ? (
               <>

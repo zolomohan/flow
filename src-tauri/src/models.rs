@@ -100,6 +100,29 @@ pub struct Transaction {
     /// Who else was in on this bill. Each one is a debt of its own, opened by
     /// this posting and repaid on the Debts screen like any other.
     pub shares: Vec<TransactionShare>,
+    /// The labels pinned to this posting — "Triage" on anything an import
+    /// brought in that hasn't been looked over yet.
+    pub labels: Vec<TxLabel>,
+}
+
+/// A label as it sits on a posting. The count lives on `Label`, which is the
+/// list view's business, not the row's.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TxLabel {
+    pub id: String,
+    pub name: String,
+    pub color: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Label {
+    pub id: String,
+    pub name: String,
+    pub color: String,
+    /// How many postings carry it right now.
+    pub count: i64,
 }
 
 /// One line of a split bill: part of the money, filed on its own.
@@ -176,12 +199,26 @@ pub struct TransactionInput {
     /// Who owes what out of this bill. Same rule: `None` changes nothing,
     /// empty clears every share the split opened.
     pub shares: Option<Vec<TransactionShareInput>>,
+    /// The labels this posting should wear. `None` leaves whatever is
+    /// pinned alone; a list replaces the set outright, empty taking all off.
+    #[serde(default)]
+    pub label_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LabelInput {
+    pub id: Option<String>,
+    pub name: String,
+    pub color: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransactionQuery {
     pub search: Option<String>,
+    /// Only postings carrying one of these labels.
+    pub label_ids: Option<Vec<String>>,
     pub kinds: Option<Vec<String>>,
     pub account_ids: Option<Vec<String>>,
     /// Which side of a posting the accounts have to be on: `from` for money
@@ -279,6 +316,10 @@ pub struct DebtPayment {
     /// The posting this repayment corresponds to, when there is one.
     pub transaction_id: Option<String>,
     pub transaction_label: Option<String>,
+    /// The account that posting moved the money through, so the form can
+    /// reopen showing what actually happened. Only set for a posting this
+    /// repayment wrote itself.
+    pub cash_account_id: Option<String>,
     pub created_at: String,
 }
 
@@ -291,6 +332,13 @@ pub struct DebtPaymentInput {
     pub occurred_at: String,
     pub note: Option<String>,
     pub transaction_id: Option<String>,
+    /// The account the money moved through, when the repayment should post a
+    /// transfer of its own: into it for money coming back to you, out of it
+    /// for money going to them. Exclusive with `transaction_id` — a
+    /// repayment either writes a posting or points at one. Leave both empty
+    /// and nothing is written, for repayments that predate the ledger.
+    #[serde(default)]
+    pub cash_account_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -400,7 +448,7 @@ pub struct InvestmentLotInput {
 #[serde(rename_all = "camelCase")]
 pub struct Holding {
     pub id: String,
-    /// gold | fund
+    /// gold | fund | fd | rd
     pub kind: String,
     pub name: String,
     /// The investment account purchases post into.
@@ -418,6 +466,14 @@ pub struct Holding {
     /// line counts it from. Always `None` for a fund, which is dated by its
     /// lots instead.
     pub acquired_on: Option<String>,
+    /// A deposit's annual rate, scaled by 10^4: 7.25% is 72_500.
+    pub rate_e4: Option<Scaled>,
+    /// The day a deposit started earning, and the day it comes back.
+    pub opened_on: Option<String>,
+    pub matures_on: Option<String>,
+    /// What a deposit will be worth the day it matures — the figure the bank
+    /// quotes. Zero for anything that is not a deposit.
+    pub maturity_value: Paise,
     // Derived.
     /// Grams or units held, scaled by 10^4. Gold carries the grams you typed;
     /// a fund carries what its lots add up to.
@@ -454,6 +510,13 @@ pub struct HoldingInput {
     /// The day the gold was acquired (YYYY-MM-DD), when it is known. Optional
     /// — plenty of gold has been in the family longer than anyone remembers.
     pub acquired_on: Option<String>,
+    /// A deposit's annual rate scaled by 10^4, and its two dates.
+    #[serde(default)]
+    pub rate_e4: Option<Scaled>,
+    #[serde(default)]
+    pub opened_on: Option<String>,
+    #[serde(default)]
+    pub matures_on: Option<String>,
     pub note: Option<String>,
     /// Explicitly close or reopen the position.
     pub closed: Option<bool>,
@@ -487,6 +550,96 @@ pub struct ValuePoint {
     /// ISO date (YYYY-MM-DD).
     pub as_of: String,
     pub value: Paise,
+}
+
+// ------------------------------------------------------------ statement import
+
+/// One line of a bank statement, as parsed: money in or out on a date, with
+/// the bank's own words for what it was.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatementRow {
+    /// ISO date (YYYY-MM-DD).
+    pub date: String,
+    pub narration: String,
+    pub ref_no: String,
+    pub amount: Paise,
+    /// debit = money left the account · credit = money arrived
+    pub direction: String,
+    /// The closing balance the statement printed beside this row.
+    pub balance: Option<Paise>,
+}
+
+/// A statement row held against the book: either it is already in there, or
+/// it is new and arrives with the best guess at how to file it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportPreviewRow {
+    pub row: StatementRow,
+    /// new | matched
+    pub status: String,
+    /// The posting this row already is, when it is one.
+    pub matched_id: Option<String>,
+    /// What that posting says of itself — merchant and category — so the
+    /// preview can show what the row was matched to without another query.
+    pub matched_summary: Option<String>,
+    /// The day the book's copy sits on (YYYY-MM-DD) — worth showing only
+    /// when it differs from the statement's, which is why they still paired.
+    pub matched_on: Option<String>,
+    // The suggestion, for a new row.
+    pub kind: String,
+    pub category_id: Option<String>,
+    /// The other account, when the suggestion is a transfer.
+    pub transfer_account_id: Option<String>,
+    pub merchant: String,
+    /// Whether the suggestion comes from a remembered rule at all, and
+    /// whether that rule was confirmed by hand rather than guessed.
+    pub from_rule: bool,
+    pub rule_confirmed: bool,
+    /// The key this row's counterparty files under — rows sharing it are the
+    /// same counterparty, so a filing chosen for one can be offered to all.
+    pub match_key: Option<String>,
+}
+
+/// One row the user has agreed to bring in: the statement's own line, and
+/// the posting it should become — the full shape the transaction sheet
+/// writes, splits, shares and all, so importing a row and editing a posting
+/// are the same act with the same rules.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportCommitRow {
+    pub row: StatementRow,
+    pub input: TransactionInput,
+    /// Whether the posting arrives wearing the Triage label, to be verified.
+    pub triage: bool,
+    /// A person shaped this filing in the review itself — write it down as a
+    /// confirmed rule right away, the way confirming in triage would.
+    #[serde(default)]
+    pub learn: bool,
+    /// Whether this row should move the balances it touches.
+    ///
+    /// True for money the current balance has yet to see. False for
+    /// something already reflected in it — a gap you are backfilling for the
+    /// record — in which case every opening balance the posting touches
+    /// moves the other way, so recording it changes no balance anywhere.
+    /// Only the person importing knows which is which, so it is asked
+    /// rather than inferred.
+    pub affects_balance: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportResult {
+    pub inserted: i64,
+    pub triaged: i64,
+    /// How many of the inserted rows were recorded without moving a balance.
+    pub balance_neutral: i64,
+    /// How many debts were opened alongside their postings.
+    pub debts: i64,
+    /// What was added to the statement account's opening balance to keep its
+    /// current balance where it was while that history went in. Zero when
+    /// nothing was historical, or when the caller asked balances to move.
+    pub opening_adjustment: Paise,
 }
 
 /// A change applied to a run of postings at once. Every field is optional:

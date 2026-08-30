@@ -42,8 +42,23 @@ breakdown rows unfold to show what is inside.
 **Debts** track money lent and borrowed. A debt has a counterparty, a
 principal and any number of partial repayments; outstanding is derived rather
 than stored. The debt itself and each repayment can each link to a real
-transaction, or stand alone — older debts predate the ledger. Outstanding lent
+transaction, or stand alone — older debts predate the ledger. A repayment can
+also *post* its own transfer: name the account the money landed in (or left
+from) and it writes a transfer against `Lent & borrowed`, an archived account
+that never counts toward net worth — what is owed is counted by the debt, so
+counting the account too would count it twice. A posting the repayment wrote
+is rewritten and deleted with it; one you linked is yours and outlives it. Outstanding lent
 counts toward net worth as an asset, borrowed as a liability.
+
+**Investments** hold three things. Mutual funds are valued at their latest
+NAV and gold at today's rate, both fetched; **deposits** are valued by what
+they have earned — an annual rate compounded quarterly the way Indian banks
+do, counted from the day each payment went in and stopping at maturity. A
+**fixed deposit** is one payment; a **recurring deposit** is an instalment a
+month, each earning from its own date. Either way a payment can post a
+transfer into the deposit's account or link a record already in your book,
+exactly as a fund's purchases do — so the money is never counted twice, and
+only the interest on top is new to net worth.
 
 Six screens: **Overview** (net worth, month cash flow, category donut, recent
 activity), **Transactions** (search, kind/account/category filters, date ranges,
@@ -83,6 +98,59 @@ so a re-import restores them instead of silently resetting every balance to
 zero. `--from YYYY-MM-DD` imports a shorter window; the openings then need to
 be the balances as at that date rather than the original initial amounts.
 
+## Importing a bank statement
+
+**Transactions → Import** reads a bank's own export — the legacy `.xls` HDFC
+hands out, parsed in Rust by `calamine` — and holds every row against the
+book before anything is written:
+
+- **Nothing doubles.** A row that pairs with an existing posting (same amount,
+  same side, dates within five days — banks post late) is recognised and set
+  aside, so re-importing a statement, or importing one that overlaps hand-kept
+  months, is safe.
+- **New rows arrive filed.** The importer keeps a memory (`import_rules`) keyed
+  on the stable part of the narration — a UPI VPA, an ACH counterparty, a POS
+  merchant — and prefills each new row with how that counterparty was filed
+  last time. Rows can be refiled in the preview (a category, or a transfer
+  against another account), and one decision can be applied to every row of
+  the same counterparty at once.
+- **You say which rows move the balance.** Money the balance has yet to see
+  moves it, as usual. Money it has already seen — a gap you are filling in
+  for the record — is written down without moving anything: every opening
+  balance the posting touches absorbs it, both ends of a transfer included.
+  The review has *Moves the balance: All / None / from ⟨date⟩* with a
+  per-row override, and shows exactly what the openings would absorb. Which
+  rows are which is asked rather than inferred: nothing about a statement
+  reveals what you had already written down.
+- **A row can be a hand-off rather than a purchase.** Filing it under
+  **Debt** posts it as a transfer against the `Lent & borrowed` account and
+  opens a debt in the named counterparty's name, linked to the posting — the
+  same shape the lending history was rebuilt around, so it never shows up as
+  income or spending.
+- **You choose how much comes in.** Every row has an include checkbox, the
+  toolbar can flip all or none, and *import until a date* takes the statement
+  only up to where your own record begins.
+- **Only guesswork wears the Triage label.** A row you opened and filed by
+  hand in the review is already reviewed: it skips triage and teaches its
+  counterparty's rule on the way in, exactly as confirming would. So does a
+  row filed by an already-confirmed rule. Everything else carries the label
+  until it's looked over; the Transactions screen shows a banner into
+  the queue. Select reviewed rows and **Mark reviewed**: the label comes off
+  and the filing is written down as a confirmed rule — which is what makes the
+  *next* statement of that counterparty arrive classified and skip triage.
+
+Labels are a small system of their own (`labels` / `transaction_labels`):
+pins on top of postings rather than filings. The **Labels** screen creates,
+renames, recolours and deletes them (deleting takes a label off every posting
+and touches nothing else); the transaction sheet pins them on any entry; the
+ledger filters by them. "Triage" is simply the one the importer uses.
+
+`scripts/seed_import_rules.py` can prime the rule memory from history: it
+pairs old statements against the book the same way the preview does and
+writes what it finds as *unconfirmed* rules — suggestions, still triaged,
+until confirmed in the app. Its key derivation mirrors
+`src-tauri/src/import.rs::match_key` and must be kept in step.
+
 ## Keyboard
 
 | | |
@@ -99,6 +167,7 @@ be the balances as at that date rather than the original initial amounts.
 src-tauri/src/
   models.rs    serde structs shared with the frontend (camelCase over the wire)
   db.rs        schema, migrations, every query
+  import.rs    bank statement parsing, and the narration → match-key derivation
   demo.rs      the sample book generator
   lib.rs       Tauri commands, one shared connection behind a Mutex
 

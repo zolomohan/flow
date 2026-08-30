@@ -12,12 +12,15 @@ const inrPaise = new Intl.NumberFormat('en-IN', {
 
 /** ₹1,20,450 — whole rupees, Indian digit grouping. */
 export function money(paise: Paise, opts: { paise?: boolean; sign?: boolean } = {}) {
-  const negative = paise < 0;
   const abs = Math.abs(paise);
   const body = opts.paise
     ? inrPaise.format(abs / 100)
     : inr.format(Math.round(abs / 100));
-  const prefix = negative ? '−' : opts.sign ? '+' : '';
+  // What is printed, not what was passed: a figure that rounds away to
+  // nothing has no sign to carry. "−₹0" is a rounding artifact reading as a
+  // debt, and "+₹0" is a gain that didn't happen.
+  const shown = opts.paise ? abs : Math.round(abs / 100);
+  const prefix = shown === 0 ? '' : paise < 0 ? '−' : opts.sign ? '+' : '';
   return `${prefix}₹${body}`;
 }
 

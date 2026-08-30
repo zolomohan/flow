@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from './Icon';
 import { Amount } from './Money';
 import { MoreMenu } from './ui';
-import { itemVariants, spring } from '../lib/motion';
+import { spring } from '../lib/motion';
 import { initials, money, timeLabel } from '../lib/format';
 import type { Transaction } from '../lib/types';
 
@@ -14,10 +14,19 @@ import type { Transaction } from '../lib/types';
  *  into, and the people who owe some of it, unfold underneath rather than
  *  filling the ledger with entries the bank never saw. */
 export function TransactionRow({
-  tx, onClick, onSplit, onDebt, showDate, selected, onSelect,
+  tx, onClick, onSplit, onDebt, showDate, selected, onSelect, enterDelay = 0,
 }: {
   tx: Transaction;
   onClick?: () => void;
+  /**
+   * How long this row waits before appearing, which is what gives a freshly
+   * loaded list its cascade. The row drives that itself rather than
+   * inheriting it from the list: a row added to a list that has already
+   * finished animating never receives the parent's state, and would sit
+   * there at zero opacity — a row-shaped hole where the entry you just
+   * wrote should be.
+   */
+  enterDelay?: number;
   /** Opens the split editor straight from the row. Left off while picking. */
   onSplit?: () => void;
   /** Turns the whole posting into a debt someone owes. Left off while picking. */
@@ -72,7 +81,8 @@ export function TransactionRow({
       )}
       <motion.button
         type="button"
-        variants={itemVariants}
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0, transition: { ...spring, delay: enterDelay } }}
         className="tx-row"
         onClick={onClick}
         whileTap={{ scale: 0.995 }}
@@ -83,14 +93,25 @@ export function TransactionRow({
         <span className="tx-main">
           <span className="tx-title">
             {tx.merchant || (isTransfer ? 'Transfer' : (tx.categoryName ?? 'Uncategorised'))}
+            {tx.labels.map((label) => (
+              <span
+                key={label.id}
+                className="tx-label"
+                style={{ ['--tint' as any]: label.color }}
+              >
+                {label.name}
+              </span>
+            ))}
           </span>
-          <span className="tx-sub">{subtitle}</span>
+          <span className="tx-sub">
+            {subtitle}
+            {tx.note && (
+              <span className="tx-note" title={tx.note}>
+                {tx.note}
+              </span>
+            )}
+          </span>
         </span>
-        {tx.note && (
-          <span className="tx-note" title={tx.note}>
-            {tx.note}
-          </span>
-        )}
         <span className="tx-right">
           <Amount value={tx.amount} kind={tx.kind} />
           <span className="tx-time">{showDate ?? timeLabel(tx.occurredAt)}</span>

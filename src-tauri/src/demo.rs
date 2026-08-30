@@ -371,6 +371,7 @@ pub fn seed(conn: &Connection) -> Result<()> {
                     note: None,
                 },
             ]),
+            label_ids: None,
         },
     )?;
 

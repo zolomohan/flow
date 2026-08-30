@@ -1021,17 +1021,17 @@ kbd {
   white-space: nowrap;
 }
 
+/* The note rides the subtitle line rather than wearing a pill mid-row: dimmer
+   and italic, so it reads as an aside instead of another label. */
 .tx-note {
-  max-width: 190px;
-  padding: 3px 9px;
-  border-radius: var(--r-full);
-  background: var(--surface-inset);
-  font-size: 11.5px;
-  color: var(--ink-3);
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  color: var(--ink-4);
+  font-style: italic;
+  font-weight: 450;
+}
+.tx-note::before {
+  content: ' · ';
+  font-style: normal;
+  color: var(--ink-4);
 }
 
 .tx-right { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; flex-shrink: 0; }
@@ -1264,6 +1264,12 @@ kbd {
   color: var(--ink-3);
 }
 .day-head .is-up { color: var(--green); }
+/* The rows keep a 16px chevron and a 12px gap to the right of their amounts;
+   the day's total wears the same inset so the figures sit in one column. */
+.day-head .day-net {
+  margin-right: 28px;
+  font-variant-numeric: tabular-nums;
+}
 
 /* =================================================================
    Overview
@@ -2411,11 +2417,38 @@ kbd {
 }
 .search-clear:hover { color: var(--ink); }
 
-.filter-tray {
-  overflow: hidden;
+/* The filters hang off their button as a popup instead of sitting in the
+   page, so opening them never shoves the ledger around. */
+.filter-anchor { position: relative; }
+.filter-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  /* Over the sticky day heads (3), under sheets (60) and toasts (80). */
+  z-index: 40;
+  width: min(620px, calc(100vw - 60px));
+  max-height: min(70vh, 560px);
+  overflow-y: auto;
   border-radius: var(--r-xl);
   background: var(--surface);
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-lg);
+  transform-origin: top right;
+}
+
+/* What the list is narrowed by while the popup is closed: the chosen chips,
+   each of them removable, and the way out of all of them at once. */
+.filter-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: -6px;
+}
+.filter-summary .filter-clear {
+  width: auto;
+  padding: 4px 8px;
+  border-top: 0;
 }
 .filter-group { padding: 14px 18px; }
 .filter-group + .filter-group { border-top: 1px solid var(--line-soft); }
@@ -3007,8 +3040,9 @@ kbd {
 .chip-closed .chip.is-active em { color: inherit; opacity: 0.7; }
 
 /* Every group open, always: the nesting rule carries the hierarchy on its own,
-   without a disclosure to click or a panel behind it. */
-.chip-tree { display: grid; gap: 12px; max-height: 300px; overflow-y: auto; }
+   without a disclosure to click or a panel behind it. No scroll of its own —
+   the popup around it is the one scroll container. */
+.chip-tree { display: grid; gap: 12px; }
 
 .cat-branch { display: grid; gap: 6px; }
 
@@ -4427,3 +4461,366 @@ kbd {
   .split-line-row { flex-wrap: wrap; }
   .split-line-amount { width: 100%; }
 }
+
+/* -------------------------------------------------- labels & statement import */
+
+/* A label pinned on a row: small, tinted, sitting after the merchant name. */
+.tx-label {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 7px;
+  padding: 1.5px 7px;
+  border-radius: var(--r-full);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  vertical-align: 1px;
+  color: var(--tint);
+  background: color-mix(in srgb, var(--tint) 14%, transparent);
+}
+
+/* The way into the review queue, sitting between the toolbar and the list. */
+.triage-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 11px 16px;
+  border-radius: var(--r-lg);
+  border: 1px solid color-mix(in srgb, var(--amber) 30%, transparent);
+  background: var(--amber-soft);
+  overflow: hidden;
+}
+.triage-banner-text {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink-2);
+  min-width: 0;
+}
+.triage-banner-text svg { color: var(--amber); flex-shrink: 0; }
+.triage-banner-text strong { color: var(--ink); }
+
+/* ---- the import sheet */
+
+.import-start {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 6px 0 2px;
+}
+.import-start .field { width: 100%; }
+.import-hint {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink-3);
+  font-weight: 500;
+}
+.import-hint strong { color: var(--amber); font-weight: 600; }
+
+.import-preview { display: flex; flex-direction: column; gap: 12px; }
+.import-counts { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.import-rows {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+.import-rows.is-matched { opacity: 0.75; }
+
+.import-row {
+  display: flex;
+  /* Narrations wrap, so rows vary in height — everything hangs from the
+     first line rather than floating mid-row. */
+  align-items: flex-start;
+  gap: 11px;
+  padding: 9px 12px;
+  background: var(--surface);
+  transition: opacity var(--fast) var(--ease);
+}
+.import-row-tick { margin-top: 3px; }
+
+/* The include box: in the row's own flow — the ledger's .tx-check is
+   absolutely positioned for hovering over avatars and escapes any other
+   container it is borrowed into. */
+.import-check {
+  display: grid;
+  place-items: center;
+  /* The browser's own button padding pushes the glyph off-centre inside a
+     box this small. */
+  padding: 0;
+  line-height: 0;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+  border-radius: var(--r-xs);
+  border: 1.5px solid var(--line-strong);
+  background: var(--surface);
+  color: transparent;
+  cursor: pointer;
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+.import-check:hover { border-color: var(--ink-3); }
+.import-check.is-on {
+  background: var(--solid);
+  border-color: var(--solid);
+  color: var(--on-solid);
+}
+.import-row + .import-row { border-top: 1px solid var(--line-soft); }
+.import-row.is-off .import-row-main,
+.import-row.is-off .import-row-amount { opacity: 0.4; }
+
+.import-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+/* The bank's words are the whole point of the review — they wrap rather
+   than vanish behind an ellipsis. */
+.import-row-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+.import-row-sub {
+  font-size: 11.5px;
+  color: var(--ink-3);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+/* Where the remembered filing came from: confirmed by hand, or a guess. */
+.import-rule {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 7px;
+  padding: 1.5px 7px;
+  border-radius: var(--r-full);
+  font-size: 10px;
+  font-weight: 600;
+  font-style: normal;
+  color: var(--ink-3);
+  background: var(--surface-inset);
+  vertical-align: 1px;
+}
+.import-rule.is-sure {
+  color: var(--green);
+  background: var(--green-soft);
+}
+
+
+.import-row-amount {
+  min-width: 110px;
+  text-align: center;
+  font-size: 14.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.import-row-amount.is-in { color: var(--income); }
+
+.import-row-tick { color: var(--green); flex-shrink: 0; display: inline-flex; }
+
+.import-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+}
+.import-foot-actions { display: flex; align-items: center; gap: 8px; }
+
+@media (max-width: 720px) {
+  .import-row { flex-wrap: wrap; }
+  .import-row-file { width: 100%; }
+}
+
+
+/* Backfilled history in the import preview: what predates the book's own
+   record, and whether the balance should notice. */
+.import-balance {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 11px 14px;
+  border: 1px solid color-mix(in srgb, var(--blue) 24%, transparent);
+  border-radius: var(--r-lg);
+  background: var(--blue-soft);
+}
+.import-balance-head { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.import-balance > p {
+  font-size: 12.5px;
+  line-height: 1.5;
+  font-weight: 500;
+  color: var(--ink-2);
+}
+.import-balance .date-field { background: var(--surface); }
+
+/* Whether one row moves the balance. Quiet when it does — that is the
+   ordinary case — and struck through when the balance has seen it already. */
+.import-moves {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: var(--r-full);
+  border: 1px solid transparent;
+  color: var(--ink-4);
+  cursor: pointer;
+  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.import-moves.is-on { color: var(--blue); background: var(--blue-soft); }
+.import-moves:hover:not(:disabled) { border-color: var(--line-strong); }
+.import-moves:disabled { opacity: 0.4; cursor: default; }
+
+/* The whole window: review work is a table, not a form. */
+.scrim.is-full { padding: 0; }
+.sheet.is-full {
+  max-width: none;
+  width: 100vw;
+  height: 100dvh;
+  max-height: none;
+  border-radius: 0;
+  border: none;
+}
+.sheet.is-full .sheet-body { flex: 1; }
+/* The window's traffic lights sit over the top-left corner. */
+.sheet.is-full .sheet-head { padding-top: 40px; }
+
+/* A day of the statement, heading its rows the way the ledger does. */
+.import-day {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 6px 12px;
+  background: var(--surface-2);
+  border-top: 1px solid var(--line-soft);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: var(--wide);
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.import-day:first-child { border-top: 0; }
+.import-rows .import-day + .import-row { border-top: 0; }
+
+
+/* Choosing how much of the statement comes in: all, none, or up to a date. */
+.import-tools {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-left: auto;
+}
+.import-tools-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+.import-until { min-width: 150px; }
+.import-until .date-field { min-height: 32px; padding: 5px 10px; font-size: 12.5px; }
+
+
+
+/* What the row will post as — click it and the transaction sheet opens on
+   the pending entry. */
+.import-filed {
+  flex-shrink: 0;
+  max-width: 300px;
+  padding: 6px 12px;
+  border-radius: var(--r-full);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: border-color var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.import-row.is-openable { cursor: pointer; }
+.import-row.is-openable:hover { background: var(--surface-2); }
+.import-row.is-openable:hover .import-filed {
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+.import-row.is-off .import-filed { opacity: 0.5; }
+
+/* ------------------------------------------------------------------ labels */
+
+.label-form { display: flex; flex-direction: column; gap: 12px; }
+.label-swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+.label-swatch {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-full);
+  border: 2px solid transparent;
+  color: #fff;
+  cursor: pointer;
+  transition: transform var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+}
+.label-swatch:hover { transform: scale(1.08); }
+.label-swatch.is-on { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px currentColor; }
+.label-form-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+.label-list { display: flex; flex-direction: column; }
+.label-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+}
+.label-row + .label-row { border-top: 1px solid var(--line-soft); }
+.label-dot { width: 10px; height: 10px; border-radius: var(--r-full); flex-shrink: 0; }
+.label-name {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.label-name em {
+  font-style: normal;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+.label-name:hover { color: var(--blue); }
+.label-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+/* Labels in the sheet's right column, under whatever it says about the
+   money: pins, so they come after the filing rather than among it. */
+.tx-labels {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding-top: 4px;
+}
+/* Dashed, like the new sub-category chip: an opening rather than a choice. */
+.chip.is-new {
+  border-style: dashed;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+.chip.is-new:hover { color: var(--ink); border-color: var(--line-strong); }

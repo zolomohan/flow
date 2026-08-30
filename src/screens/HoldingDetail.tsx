@@ -8,6 +8,7 @@ import {
   dayLabel, money, percent, perUnit, quantity, shortDayLabel, unitPrice,
 } from '../lib/format';
 import { itemVariants, listVariants, spring } from '../lib/motion';
+import { isDeposit } from '../lib/types';
 import type { Holding, InvestmentLot } from '../lib/types';
 
 /** 22K reads better than 9160 everywhere it is shown. */
@@ -62,6 +63,9 @@ export function HoldingDetail({
   // cost to measure a return against, so both are left off — what it can show
   // is where the rate itself has been.
   const isGold = holding.kind === 'gold';
+  // A deposit earns rather than being priced, so it has no NAV line, no
+  // units, and its own words for what the entries against it are.
+  const deposit = isDeposit(holding.kind);
 
   const gain = holding.totalReturn;
   const cost = holding.invested - holding.realised;
@@ -93,10 +97,17 @@ export function HoldingDetail({
           <span
             className="holding-glyph"
             style={{
-              ['--tint' as any]: holding.kind === 'gold' ? 'var(--amber)' : 'var(--violet)',
+              ['--tint' as any]: deposit
+                ? 'var(--blue)'
+                : holding.kind === 'gold'
+                  ? 'var(--amber)'
+                  : 'var(--violet)',
             }}
           >
-            <Icon name={isGold ? 'coins' : 'trending-up'} size={18} />
+            <Icon
+              name={deposit ? 'landmark' : isGold ? 'coins' : 'trending-up'}
+              size={18}
+            />
           </span>
           <div>
             <h1>{title}</h1>
@@ -113,7 +124,13 @@ export function HoldingDetail({
           ) : (
             <>
               <Button icon="pencil" onClick={onEdit}>Edit</Button>
-              <Button tone="primary" icon="plus" onClick={onAddLot}>Buy or sell</Button>
+              <Button tone="primary" icon="plus" onClick={onAddLot}>
+                {deposit
+                  ? holding.kind === 'rd'
+                    ? 'Add instalment'
+                    : 'Add payment'
+                  : 'Buy or sell'}
+              </Button>
             </>
           )}
         </div>
@@ -122,19 +139,34 @@ export function HoldingDetail({
       <Card className="detail-summary">
         <div className="detail-top">
           <div className="detail-hero-main">
-            <span className="detail-label">Market value</span>
-            {priced ? (
+            <span className="detail-label">
+              {deposit ? 'Worth today' : 'Market value'}
+            </span>
+            {deposit || priced ? (
               <BigMoney value={holding.marketValue} className="hero-amount" />
             ) : (
               <strong className="detail-unpriced">No price fetched yet</strong>
             )}
             <p className="detail-hero-sub">
-              {quantity(holding.unitsE4, unit)}
-              {priced && ` at ${unitPrice(holding.priceE4!)} a ${unit === 'g' ? 'gram' : 'unit'}`}
-              {holding.priceAsOf && ` · priced ${dayLabel(holding.priceAsOf)}`}
+              {deposit ? (
+                <>
+                  {money(cost)} paid in
+                  {holding.rateE4 ? ` at ${holding.rateE4 / 10_000}% a year` : ''}
+                  {holding.maturesOn
+                    ? ` · ${money(holding.maturityValue)} on ${dayLabel(holding.maturesOn)}`
+                    : ''}
+                </>
+              ) : (
+                <>
+                  {quantity(holding.unitsE4, unit)}
+                  {priced &&
+                    ` at ${unitPrice(holding.priceE4!)} a ${unit === 'g' ? 'gram' : 'unit'}`}
+                  {holding.priceAsOf && ` · priced ${dayLabel(holding.priceAsOf)}`}
+                </>
+              )}
             </p>
           </div>
-          {priced && !isGold && (
+          {(deposit || priced) && !isGold && (
             <div className={`detail-return ${up ? 'is-up' : 'is-down'}`}>
               <small>Total return</small>
               <span>{money(gain, { sign: gain > 0 })}</span>
@@ -143,7 +175,7 @@ export function HoldingDetail({
           )}
         </div>
 
-        {priced && !isGold && (
+        {priced && !isGold && !deposit && (
           <div
             className="holding-bar detail-bar"
             title={`Cost ${money(cost)} · now ${money(holding.marketValue)}`}

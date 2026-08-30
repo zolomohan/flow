@@ -408,7 +408,7 @@ export const useSheetClose = () => useContext(SheetCtx);
 
 /** Centred modal with a blurred scrim; Escape and scrim clicks both dismiss. */
 export function Sheet({
-  open, onClose, title, subtitle, children, footer, onBack, width = 520,
+  open, onClose, title, subtitle, children, footer, onBack, width = 520, full,
 }: {
   open: boolean;
   onClose: () => void;
@@ -420,6 +420,8 @@ export function Sheet({
    *  header, where the title has already changed to say where you are. */
   onBack?: () => void;
   width?: number;
+  /** Nearly the whole window, for work that is a table rather than a form. */
+  full?: boolean;
 }) {
   useEffect(() => {
     if (!open) return;
@@ -437,7 +439,7 @@ export function Sheet({
       {open && (
         <SheetCtx.Provider value={onClose}>
           <motion.div
-            className="scrim"
+            className={`scrim ${full ? 'is-full' : ''}`}
             variants={sheetBackdrop}
             initial="initial"
             animate="animate"
@@ -445,8 +447,8 @@ export function Sheet({
             onMouseDown={(e) => e.target === e.currentTarget && onClose()}
           >
             <motion.div
-              className="sheet"
-              style={{ maxWidth: width }}
+              className={`sheet ${full ? 'is-full' : ''}`}
+              style={full ? undefined : { maxWidth: width }}
               variants={sheetPanel}
               initial="initial"
               animate="animate"
@@ -484,7 +486,11 @@ export function Sheet({
                     the page — and lurch taller before settling back. */}
                 <div
                   className="sheet-canvas"
-                  style={{ width: `min(${width - 44}px, calc(100vw - 92px))` }}
+                  style={
+                    full
+                      ? { width: '100%' }
+                      : { width: `min(${width - 44}px, calc(100vw - 92px))` }
+                  }
                 >
                   {children}
                 </div>

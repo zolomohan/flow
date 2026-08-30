@@ -71,7 +71,7 @@ function rangeBounds(range: Range, month: string) {
 
 export function Transactions({
   onOpenTransaction, onSplitTransaction, onOweTransaction, onAddTransaction,
-  accountFocus, categoryFocus,
+  accountFocus, categoryFocus, labelFocus,
   picking,
 }: {
   onOpenTransaction: (tx: Transaction) => void;
@@ -84,6 +84,8 @@ export function Transactions({
   accountFocus?: { ids: string[]; token: number };
   /** Set when arriving from a category on a breakdown. */
   categoryFocus?: { ids: string[]; token: number };
+  /** Set when arriving from a label on the Labels screen. */
+  labelFocus?: { ids: string[]; token: number };
   /**
    * Rendered inside the link-a-record modal. The screen's own title and the
    * running totals belong to the page rather than the task, and choosing a row
@@ -93,8 +95,8 @@ export function Transactions({
   picking?: boolean;
 }) {
   const {
-    accounts, categories, month, setMonth, listTransactions, transactionSummary, revision,
-    updateTransactions, deleteTransactions, toast,
+    accounts, categories, labels, month, setMonth, listTransactions, transactionSummary,
+    revision, updateTransactions, deleteTransactions, confirmTriage, toast,
   } = useStore();
   const [search, setSearch] = useState('');
   const [debounced, setDebounced] = useState('');
@@ -103,6 +105,8 @@ export function Transactions({
   const [accountIds, setAccountIds] = useState<string[]>([]);
   const [side, setSide] = useState<Side>('either');
   const [categoryIds, setCategoryIds] = useState<string[]>([]);
+  const [labelIds, setLabelIds] = useState<string[]>([]);
+  const [importOpen, setImportOpen] = useState(false);
   const [catQuery, setCatQuery] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [rows, setRows] = useState<Transaction[]>([]);
@@ -114,18 +118,18 @@ export function Transactions({
   const [picked, setPicked] = useState<string[]>([]);
   const [anchor, setAnchor] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
+  const filterAnchor = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebounced(search), 160);
     return () => window.clearTimeout(timer);
   }, [search]);
 
-  // Arriving from an account card: apply its filter and show the tray, so it
-  // is obvious the list is narrowed rather than mysteriously short.
+  // Arriving from an account card: apply its filter. The chips under the
+  // toolbar say the list is narrowed rather than mysteriously short.
   useEffect(() => {
     if (!accountFocus?.token) return;
     setAccountIds(accountFocus.ids);
-    setShowFilters(true);
   }, [accountFocus?.token]);
 
   // Arriving from a breakdown: show that category over all time rather than
@@ -135,7 +139,6 @@ export function Transactions({
     if (!categoryFocus?.token) return;
     setCategoryIds(categoryFocus.ids);
     setRange('all');
-    setShowFilters(true);
     // Whatever the ledger was last narrowed by is not part of the question
     // being asked, and would quietly leave entries out of the answer.
     setKind('all');
@@ -143,6 +146,19 @@ export function Transactions({
     setSearch('');
     setDebounced('');
   }, [categoryFocus?.token]);
+
+  // Arriving from a label: the same idea, over all time and with nothing
+  // else narrowing what wears it.
+  useEffect(() => {
+    if (!labelFocus?.token) return;
+    setLabelIds(labelFocus.ids);
+    setRange('all');
+    setKind('all');
+    setAccountIds([]);
+    setCategoryIds([]);
+    setSearch('');
+    setDebounced('');
+  }, [labelFocus?.token]);
 
   // A selected group stands for itself plus every category filed under it.
   const expandedCategoryIds = useMemo(() => {
@@ -156,7 +172,7 @@ export function Transactions({
 
   useEffect(() => {
     setShown(PAGE);
-  }, [debounced, kind, range, accountIds, side, expandedCategoryIds, month]);
+  }, [debounced, kind, range, accountIds, side, expandedCategoryIds, labelIds, month]);
 
   useEffect(() => {
     const bounds = rangeBounds(range, month);
@@ -167,6 +183,7 @@ export function Transactions({
       accountIds: accountIds.length ? accountIds : null,
       accountSide: accountIds.length ? side : null,
       categoryIds: expandedCategoryIds,
+      labelIds: labelIds.length ? labelIds : null,
       from: bounds.from,
       to: bounds.to,
     };
@@ -186,10 +203,18 @@ export function Transactions({
       })
       .finally(() => setLoading(false));
   }, [
-    debounced, kind, range, accountIds, side, expandedCategoryIds, month, shown,
+    debounced, kind, range, accountIds, side, expandedCategoryIds, labelIds, month, shown,
     listTransactions, transactionSummary, revision,
   ]);
 
+
+  /** Where each row sits in the whole list, so the cascade can run across
+   *  the day groups rather than restarting inside each one. */
+  const orderOf = useMemo(() => {
+    const at = new Map<string, number>();
+    rows.forEach((tx, i) => at.set(tx.id, i));
+    return at;
+  }, [rows]);
 
   // Day buckets, each with its own net, so the list reads like a statement.
   const days = useMemo(() => {
@@ -301,6 +326,28 @@ export function Transactions({
     setAnchor(null);
   };
 
+  // The popup dismisses like any other: a click elsewhere, or Escape.
+  useEffect(() => {
+    if (!showFilters) return;
+    const onDown = (e: MouseEvent) => {
+      if (!filterAnchor.current?.contains(e.target as Node)) setShowFilters(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setShowFilters(false);
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [showFilters]);
+
+  const clearFilters = () => {
+    setAccountIds([]);
+    setCategoryIds([]);
+    setLabelIds([]);
+    setSide('either');
+  };
+
   // Escape drops a selection, the way it dismisses everything else.
   useEffect(() => {
     if (!picked.length) return;
@@ -344,8 +391,40 @@ export function Transactions({
     }
   };
 
+  // The imported entries waiting to be looked over, and whether the list is
+  // already showing them.
+  const triage = labels.find((l) => l.name === 'Triage');
+  const triageActive = !!triage && labelIds.includes(triage.id);
+  const reviewTriage = () => {
+    if (!triage) return;
+    setLabelIds([triage.id]);
+    setRange('all');
+    setKind('all');
+    setAccountIds([]);
+    setCategoryIds([]);
+    setSearch('');
+    setDebounced('');
+  };
+
+  // "These are filed right" — Triage comes off, and how each was filed is
+  // remembered against its counterparty for the next import.
+  const reviewable =
+    chosenHaveTriage(rows, pickedSet) && pickedSet.size > 0;
+  const confirmPicked = async () => {
+    setWorking(true);
+    try {
+      const done = await confirmTriage([...pickedSet]);
+      toast(`${done} reviewed · how they're filed is remembered`);
+      clearPicked();
+    } catch {
+      /* the store has already said what went wrong */
+    } finally {
+      setWorking(false);
+    }
+  };
+
   const activeFilters =
-    accountIds.length + categoryIds.length + (side === 'either' ? 0 : 1);
+    accountIds.length + categoryIds.length + labelIds.length + (side === 'either' ? 0 : 1);
   const total = summary?.count ?? rows.length;
   const remaining = Math.max(total - rows.length, 0);
   const listing = rows.length > STAGGER_UP_TO ? PLAIN_LIST : listVariants;
@@ -381,9 +460,14 @@ export function Transactions({
             <MonthNav month={month} onChange={setMonth} span={RANGE_SPAN[range]} />
           )}
           {!picking && (
-            <Button tone="primary" icon="plus" onClick={onAddTransaction}>
-              Add transaction
-            </Button>
+            <>
+              <Button icon="file-up" onClick={() => setImportOpen(true)}>
+                Import
+              </Button>
+              <Button tone="primary" icon="plus" onClick={onAddTransaction}>
+                Add transaction
+              </Button>
+            </>
           )}
         </div>
       </header>
@@ -404,52 +488,42 @@ export function Transactions({
         </div>
         <Segmented options={KIND_FILTERS} value={kind} onChange={setKind} name="tx-filter" size="sm" />
         <Segmented options={RANGES} value={range} onChange={setRange} name="tx-range" size="sm" />
-        <Button
-          tone={showFilters || activeFilters ? 'primary' : 'secondary'}
-          size="sm"
-          icon="list-filter"
-          onClick={() => setShowFilters((s) => !s)}
-        >
-          {activeFilters ? `Filters · ${activeFilters}` : 'Filters'}
-        </Button>
-      </div>
-
-      <AnimatePresence initial={false}>
-        {showFilters && (
-          <motion.div
-            className="filter-tray"
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={spring}
+        <div className="filter-anchor" ref={filterAnchor}>
+          <Button
+            tone={showFilters || activeFilters ? 'primary' : 'secondary'}
+            size="sm"
+            icon="list-filter"
+            onClick={() => setShowFilters((s) => !s)}
           >
-            <div className="filter-group">
-              <div className="filter-head">
-                <span>Accounts</span>
-                {accountIds.length > 0 && (
-                  <Segmented
-                    options={SIDES}
-                    value={side}
-                    onChange={setSide}
-                    name="tx-side"
-                    size="sm"
-                  />
-                )}
-              </div>
-              <div className="chip-row">
-                {live.map((a) => (
-                  <Chip
-                    key={a.id}
-                    color={a.color}
-                    active={accountIds.includes(a.id)}
-                    onClick={() => setAccountIds((l) => toggle(l, a.id))}
-                  >
-                    {a.name}
-                  </Chip>
-                ))}
-                {closed.length > 0 && (
-                  <span className="chip-closed">
-                    {closed.map((a) => (
+            {activeFilters ? `Filters · ${activeFilters}` : 'Filters'}
+          </Button>
+
+          {/* The filters live in a popup off the button rather than a tray in
+              the page, so opening them doesn't shove the ledger around. */}
+          <AnimatePresence>
+            {showFilters && (
+              <motion.div
+                className="filter-pop"
+                variants={popover}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+              >
+                <div className="filter-group">
+                  <div className="filter-head">
+                    <span>Accounts</span>
+                    {accountIds.length > 0 && (
+                      <Segmented
+                        options={SIDES}
+                        value={side}
+                        onChange={setSide}
+                        name="tx-side"
+                        size="sm"
+                      />
+                    )}
+                  </div>
+                  <div className="chip-row">
+                    {live.map((a) => (
                       <Chip
                         key={a.id}
                         color={a.color}
@@ -457,103 +531,211 @@ export function Transactions({
                         onClick={() => setAccountIds((l) => toggle(l, a.id))}
                       >
                         {a.name}
-                        <em>closed</em>
                       </Chip>
                     ))}
-                  </span>
-                )}
-              </div>
-              {accountIds.length > 0 && side !== 'either' && (
-                <p className="filter-note">
-                  {side === 'from' ? 'Money leaving' : 'Money arriving in'}{' '}
-                  {accountIds.length === 1 ? 'that account' : 'those accounts'} — which only
-                  narrows transfers, since income and expenses touch one side.
-                </p>
-              )}
-            </div>
-
-            {kind === 'transfer' ? (
-              <div className="filter-group">
-                <span>Categories</span>
-                <p className="filter-note">
-                  Transfers move money between your own accounts, so they are never
-                  categorised. Filter them by account instead.
-                </p>
-              </div>
-            ) : (
-              <div className="filter-group">
-                <div className="filter-head">
-                  <span>Categories</span>
-                  <div className="filter-search">
-                    <Icon name="search" size={13} />
-                    <TextInput
-                      value={catQuery}
-                      placeholder="Find a category"
-                      onChange={(e) => setCatQuery(e.target.value)}
-                    />
-                    {catQuery && (
-                      <button onClick={() => setCatQuery('')} aria-label="Clear">
-                        <Icon name="x" size={12} />
-                      </button>
+                    {closed.length > 0 && (
+                      <span className="chip-closed">
+                        {closed.map((a) => (
+                          <Chip
+                            key={a.id}
+                            color={a.color}
+                            active={accountIds.includes(a.id)}
+                            onClick={() => setAccountIds((l) => toggle(l, a.id))}
+                          >
+                            {a.name}
+                            <em>closed</em>
+                          </Chip>
+                        ))}
+                      </span>
                     )}
                   </div>
-                </div>
-                <div className="chip-tree">
-                  {visibleGroups.length === 0 && (
-                    <p className="filter-note">Nothing matches “{catQuery}”.</p>
+                  {accountIds.length > 0 && side !== 'either' && (
+                    <p className="filter-note">
+                      {side === 'from' ? 'Money leaving' : 'Money arriving in'}{' '}
+                      {accountIds.length === 1 ? 'that account' : 'those accounts'} — which only
+                      narrows transfers, since income and expenses touch one side.
+                    </p>
                   )}
-                  {visibleGroups.map(({ group, children }) => {
-                    const groupOn = categoryIds.includes(group.id);
-                    return (
-                      <div key={group.id} className="cat-branch">
-                        <Chip
-                          color={group.color}
-                          active={groupOn}
-                          onClick={() => setCategoryIds((l) => toggle(l, group.id))}
-                        >
-                          {group.name}
-                        </Chip>
-                        {children.length > 0 && (
-                          <div className="cat-children">
-                            {children.map((child) => (
-                              <Chip
-                                key={child.id}
-                                color={child.color}
-                                active={groupOn || categoryIds.includes(child.id)}
-                                onClick={() =>
-                                  // Picking one out of a selected group narrows
-                                  // to it, rather than adding a redundant filter.
-                                  setCategoryIds((l) =>
-                                    groupOn
-                                      ? [...l.filter((id) => id !== group.id), child.id]
-                                      : toggle(l, child.id),
-                                  )
-                                }
-                              >
-                                {child.name}
-                              </Chip>
-                            ))}
-                          </div>
+                </div>
+
+                {kind === 'transfer' ? (
+                  <div className="filter-group">
+                    <span>Categories</span>
+                    <p className="filter-note">
+                      Transfers move money between your own accounts, so they are never
+                      categorised. Filter them by account instead.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="filter-group">
+                    <div className="filter-head">
+                      <span>Categories</span>
+                      <div className="filter-search">
+                        <Icon name="search" size={13} />
+                        <TextInput
+                          value={catQuery}
+                          placeholder="Find a category"
+                          onChange={(e) => setCatQuery(e.target.value)}
+                        />
+                        {catQuery && (
+                          <button onClick={() => setCatQuery('')} aria-label="Clear">
+                            <Icon name="x" size={12} />
+                          </button>
                         )}
                       </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
+                    </div>
+                    <div className="chip-tree">
+                      {visibleGroups.length === 0 && (
+                        <p className="filter-note">Nothing matches “{catQuery}”.</p>
+                      )}
+                      {visibleGroups.map(({ group, children }) => {
+                        const groupOn = categoryIds.includes(group.id);
+                        return (
+                          <div key={group.id} className="cat-branch">
+                            <Chip
+                              color={group.color}
+                              active={groupOn}
+                              onClick={() => setCategoryIds((l) => toggle(l, group.id))}
+                            >
+                              {group.name}
+                            </Chip>
+                            {children.length > 0 && (
+                              <div className="cat-children">
+                                {children.map((child) => (
+                                  <Chip
+                                    key={child.id}
+                                    color={child.color}
+                                    active={groupOn || categoryIds.includes(child.id)}
+                                    onClick={() =>
+                                      // Picking one out of a selected group narrows
+                                      // to it, rather than adding a redundant filter.
+                                      setCategoryIds((l) =>
+                                        groupOn
+                                          ? [...l.filter((id) => id !== group.id), child.id]
+                                          : toggle(l, child.id),
+                                      )
+                                    }
+                                  >
+                                    {child.name}
+                                  </Chip>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
-            {activeFilters > 0 && (
-              <button
-                className="filter-clear"
-                onClick={() => {
-                  setAccountIds([]);
-                  setCategoryIds([]);
-                  setSide('either');
-                }}
-              >
-                <Icon name="x" size={13} /> Clear filters
-              </button>
+                {labels.length > 0 && (
+                  <div className="filter-group">
+                    <span>Labels</span>
+                    <div className="chip-row">
+                      {labels.map((label) => (
+                        <Chip
+                          key={label.id}
+                          color={label.color}
+                          count={label.count}
+                          active={labelIds.includes(label.id)}
+                          onClick={() => setLabelIds((l) => toggle(l, label.id))}
+                        >
+                          {label.name}
+                        </Chip>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {activeFilters > 0 && (
+                  <button className="filter-clear" onClick={clearFilters}>
+                    <Icon name="x" size={13} /> Clear filters
+                  </button>
+                )}
+              </motion.div>
             )}
+          </AnimatePresence>
+        </div>
+      </div>
+
+      {/* With the popup closed, what the list is narrowed by stays in view —
+          one chip per filter, and any of them a click to lift off. */}
+      {!showFilters && activeFilters > 0 && (
+        <div className="filter-summary">
+          {side !== 'either' && (
+            <Chip active onClick={() => setSide('either')}>
+              <Icon name={side === 'from' ? 'arrow-up-right' : 'arrow-down-left'} size={12} />
+              {side === 'from' ? 'Out of' : 'Into'}
+              <Icon name="x" size={11} />
+            </Chip>
+          )}
+          {accountIds.map((id) => {
+            const a = accounts.find((x) => x.id === id);
+            return a && (
+              <Chip
+                key={id}
+                color={a.color}
+                active
+                onClick={() => setAccountIds((l) => l.filter((x) => x !== id))}
+              >
+                {a.name}
+                <Icon name="x" size={11} />
+              </Chip>
+            );
+          })}
+          {categoryIds.map((id) => {
+            const c = categories.find((x) => x.id === id);
+            return c && (
+              <Chip
+                key={id}
+                color={c.color}
+                active
+                onClick={() => setCategoryIds((l) => l.filter((x) => x !== id))}
+              >
+                {c.name}
+                <Icon name="x" size={11} />
+              </Chip>
+            );
+          })}
+          {labelIds.map((id) => {
+            const label = labels.find((x) => x.id === id);
+            return label && (
+              <Chip
+                key={id}
+                color={label.color}
+                active
+                onClick={() => setLabelIds((l) => l.filter((x) => x !== id))}
+              >
+                {label.name}
+                <Icon name="x" size={11} />
+              </Chip>
+            );
+          })}
+          <button className="filter-clear" onClick={clearFilters}>
+            <Icon name="x" size={13} /> Clear filters
+          </button>
+        </div>
+      )}
+
+      {/* Imported entries queue up under one label until a person has looked
+          them over; the banner is the way into that queue. */}
+      <AnimatePresence initial={false}>
+        {!picking && triage && triage.count > 0 && !triageActive && (
+          <motion.div
+            className="triage-banner"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={spring}
+          >
+            <span className="triage-banner-text">
+              <Icon name="inbox" size={15} />
+              <strong>{triage.count}</strong> imported {triage.count === 1 ? 'entry' : 'entries'} waiting
+              for a look — confirm how they're filed and future imports will file them alike.
+            </span>
+            <Button size="sm" tone="primary" onClick={reviewTriage}>
+              Review
+            </Button>
           </motion.div>
         )}
       </AnimatePresence>
@@ -598,7 +780,7 @@ export function Transactions({
                     tone="secondary"
                     onClick={() => {
                       setSearch(''); setKind('all'); setRange('all');
-                      setAccountIds([]); setCategoryIds([]);
+                      setAccountIds([]); setCategoryIds([]); setLabelIds([]);
                     }}
                   >
                     Clear filters
@@ -613,7 +795,7 @@ export function Transactions({
               <section key={day.key} className="day-group">
                 <header className="day-head">
                   <span>{dayLabel(day.key)}</span>
-                  <span className={day.net >= 0 ? 'is-up' : ''}>
+                  <span className={`day-net ${day.net >= 0 ? 'is-up' : ''}`}>
                     {money(day.net, { sign: day.net > 0 })}
                   </span>
                 </header>
@@ -637,6 +819,13 @@ export function Transactions({
                           : () => onOweTransaction(tx)
                       }
                       selected={pickedSet.has(tx.id)}
+                      enterDelay={
+                        // Long lists simply appear; past a point the stagger
+                        // stops being a flourish and becomes a wait.
+                        rows.length > STAGGER_UP_TO
+                          ? 0
+                          : (orderOf.get(tx.id) ?? 0) * 0.028
+                      }
                       onSelect={picking ? undefined : (range) => pick(tx, range)}
                     />
                   ))}
@@ -730,6 +919,17 @@ export function Transactions({
             </div>
 
             <div className="bulk-actions">
+              {reviewable && (
+                <Button
+                  size="sm"
+                  tone="primary"
+                  icon="check-check"
+                  onClick={confirmPicked}
+                  disabled={working}
+                >
+                  Mark reviewed
+                </Button>
+              )}
               {pickedSet.size < rows.length && (
                 <Button
                   size="sm"
@@ -744,7 +944,7 @@ export function Transactions({
                 size="sm"
                 tone="danger"
                 icon="trash-2"
-                onClick={removePicked}
+                onClick={() => setConfirmingDelete(true)}
                 disabled={working}
               >
                 Delete

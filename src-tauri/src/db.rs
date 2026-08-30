@@ -161,7 +161,9 @@ fn migrate(conn: &Connection) -> Result<()> {
 
         CREATE TABLE IF NOT EXISTS holdings (
             id          TEXT PRIMARY KEY,
-            kind        TEXT NOT NULL CHECK (kind IN ('gold','fund')),
+            -- gold and funds are worth what the market says; a deposit is
+            -- worth what it has earned, which the book works out itself.
+            kind        TEXT NOT NULL CHECK (kind IN ('gold','fund','fd','rd')),
             name        TEXT NOT NULL,
             account_id  TEXT REFERENCES accounts(id) ON DELETE SET NULL,
             scheme_code TEXT,
@@ -233,6 +235,40 @@ fn migrate(conn: &Connection) -> Result<()> {
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+
+        -- Labels are pins, not files: a posting keeps its account and its
+        -- category, and a label sits on top for as long as it is useful.
+        -- \"Triage\" is the one the importer uses; others cost nothing.
+        CREATE TABLE IF NOT EXISTS labels (
+            id         TEXT PRIMARY KEY,
+            name       TEXT NOT NULL UNIQUE,
+            color      TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS transaction_labels (
+            transaction_id TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+            label_id       TEXT NOT NULL REFERENCES labels(id) ON DELETE CASCADE,
+            PRIMARY KEY (transaction_id, label_id)
+        ) WITHOUT ROWID;
+
+        CREATE INDEX IF NOT EXISTS idx_tx_labels_label ON transaction_labels(label_id);
+
+        -- What the importer has learned about a counterparty: how the last
+        -- import of them was filed, keyed on the stable part of the bank's
+        -- narration. Confirmed means a person said so; unconfirmed rules were
+        -- seeded or inferred, and their suggestions still land in triage.
+        CREATE TABLE IF NOT EXISTS import_rules (
+            id              TEXT PRIMARY KEY,
+            match_key       TEXT NOT NULL UNIQUE,
+            kind            TEXT NOT NULL CHECK (kind IN ('income','expense','transfer')),
+            category_id     TEXT REFERENCES categories(id) ON DELETE SET NULL,
+            from_account_id TEXT REFERENCES accounts(id) ON DELETE SET NULL,
+            to_account_id   TEXT REFERENCES accounts(id) ON DELETE SET NULL,
+            merchant        TEXT NOT NULL DEFAULT '',
+            confirmed       INTEGER NOT NULL DEFAULT 0,
+            updated_at      TEXT NOT NULL
+        );
         ",
     )
     .map_err(oops)?;
@@ -245,6 +281,11 @@ fn migrate(conn: &Connection) -> Result<()> {
     )?;
     add_column_if_missing(conn, "investment_lots", "allotted_at", "allotted_at TEXT")?;
     add_column_if_missing(conn, "holdings", "acquired_on", "acquired_on TEXT")?;
+    // A deposit's terms: what it pays, when it started, when it comes back.
+    add_column_if_missing(conn, "holdings", "rate_e4", "rate_e4 INTEGER")?;
+    add_column_if_missing(conn, "holdings", "opened_on", "opened_on TEXT")?;
+    add_column_if_missing(conn, "holdings", "matures_on", "matures_on TEXT")?;
+    widen_holding_kinds(conn)?;
     add_column_if_missing(
         conn,
         "accounts",
@@ -254,6 +295,19 @@ fn migrate(conn: &Connection) -> Result<()> {
     // Books that predate splitting have debts, but none of them came from a
     // split — the default of 0 is exactly right for every one of them.
     add_column_if_missing(conn, "debts", "from_split", "from_split INTEGER NOT NULL DEFAULT 0")?;
+    // The counterparty key an imported posting was recognised by, written at
+    // import time so confirming it can teach a rule however the note has
+    // been rewritten since. Null on anything entered by hand.
+    add_column_if_missing(conn, "transactions", "import_key", "import_key TEXT")?;
+    // Whether a repayment wrote the posting it names. One it wrote goes with
+    // it; one you linked is your own record and outlives it. Repayments made
+    // before this existed never wrote any, so the default is right.
+    add_column_if_missing(
+        conn,
+        "debt_payments",
+        "owns_transaction",
+        "owns_transaction INTEGER NOT NULL DEFAULT 0",
+    )?;
     migrate_gold_to_grams(conn)?;
     conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_cat_parent ON categories(parent_id);")
         .map_err(oops)?;
@@ -288,6 +342,61 @@ fn add_column_if_missing(conn: &Connection, table: &str, column: &str, decl: &st
         conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {decl}"), [])
             .map_err(oops)?;
     }
+    Ok(())
+}
+
+/// Books written before deposits existed carry a CHECK that allows only gold
+/// and funds, and SQLite cannot alter one in place — so the table is rebuilt
+/// around the wider rule. Everything in it is copied across untouched; only
+/// what the column will accept from here on changes.
+fn widen_holding_kinds(conn: &Connection) -> Result<()> {
+    let sql: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'holdings'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(oops)?
+        .unwrap_or_default();
+    if sql.contains("'fd'") || !sql.contains("CHECK (kind IN") {
+        return Ok(());
+    }
+    // Foreign keys are enforced on this connection and investment_lots points
+    // at holdings, so the swap happens with them off — and inside no
+    // transaction, which is the one place that pragma can be changed.
+    conn.execute_batch(
+        "PRAGMA foreign_keys = OFF;
+         BEGIN;
+         CREATE TABLE holdings_widened (
+            id          TEXT PRIMARY KEY,
+            kind        TEXT NOT NULL CHECK (kind IN ('gold','fund','fd','rd')),
+            name        TEXT NOT NULL,
+            account_id  TEXT REFERENCES accounts(id) ON DELETE SET NULL,
+            scheme_code TEXT,
+            isin        TEXT,
+            purity_e4   INTEGER CHECK (purity_e4 IS NULL OR (purity_e4 > 0 AND purity_e4 <= 10000)),
+            grams_e4    INTEGER NOT NULL DEFAULT 0,
+            acquired_on TEXT,
+            rate_e4     INTEGER,
+            opened_on   TEXT,
+            matures_on  TEXT,
+            note        TEXT,
+            closed_at   TEXT,
+            created_at  TEXT NOT NULL
+         );
+         INSERT INTO holdings_widened
+            (id, kind, name, account_id, scheme_code, isin, purity_e4, grams_e4,
+             acquired_on, rate_e4, opened_on, matures_on, note, closed_at, created_at)
+         SELECT id, kind, name, account_id, scheme_code, isin, purity_e4, grams_e4,
+                acquired_on, rate_e4, opened_on, matures_on, note, closed_at, created_at
+         FROM holdings;
+         DROP TABLE holdings;
+         ALTER TABLE holdings_widened RENAME TO holdings;
+         COMMIT;
+         PRAGMA foreign_keys = ON;",
+    )
+    .map_err(oops)?;
     Ok(())
 }
 
@@ -880,10 +989,11 @@ fn tx_from_row(r: &Row) -> rusqlite::Result<Transaction> {
         category_color: r.get(15)?,
         category_group_id: r.get(16)?,
         category_group_name: r.get(17)?,
-        // Filled in by `attach_parts`: both are their own tables, and reading
+        // Filled in by `attach_parts`: each is its own table, and reading
         // them per row would turn one list into three hundred queries.
         splits: Vec::new(),
         shares: Vec::new(),
+        labels: Vec::new(),
     })
 }
 
@@ -960,7 +1070,30 @@ fn attach_parts(conn: &Connection, rows: &mut [Transaction]) -> Result<()> {
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(oops)?;
 
-    if splits.is_empty() && shares.is_empty() {
+    let sql = format!(
+        "SELECT tl.transaction_id, l.id, l.name, l.color
+         FROM transaction_labels tl
+         JOIN labels l ON l.id = tl.label_id
+         WHERE tl.transaction_id IN ({ph})
+         ORDER BY l.name"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(oops)?;
+    let labels = stmt
+        .query_map(params_from_iter(ids.iter()), |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                TxLabel {
+                    id: r.get(1)?,
+                    name: r.get(2)?,
+                    color: r.get(3)?,
+                },
+            ))
+        })
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?;
+
+    if splits.is_empty() && shares.is_empty() && labels.is_empty() {
         return Ok(());
     }
     let at: HashMap<String, usize> = rows
@@ -976,6 +1109,11 @@ fn attach_parts(conn: &Connection, rows: &mut [Transaction]) -> Result<()> {
     for (tx_id, share) in shares {
         if let Some(&i) = at.get(&tx_id) {
             rows[i].shares.push(share);
+        }
+    }
+    for (tx_id, label) in labels {
+        if let Some(&i) = at.get(&tx_id) {
+            rows[i].labels.push(label);
         }
     }
     Ok(())
@@ -1083,6 +1221,16 @@ fn tx_filters(q: &TransactionQuery) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
             for id in ids {
                 args.push(Box::new(id.clone()));
             }
+        }
+    }
+    if let Some(ids) = q.label_ids.as_ref().filter(|v| !v.is_empty()) {
+        let ph = placeholders(ids.len());
+        wheres.push(format!(
+            "EXISTS (SELECT 1 FROM transaction_labels tl
+                     WHERE tl.transaction_id = t.id AND tl.label_id IN ({ph}))"
+        ));
+        for id in ids {
+            args.push(Box::new(id.clone()));
         }
     }
     if let Some(from) = q.from.as_ref() {
@@ -1387,9 +1535,16 @@ pub fn save_transaction(conn: &Connection, input: TransactionInput) -> Result<Tr
         None
     };
 
-    // One savepoint over the whole save: a bill and the parts it was split
-    // into are one fact, and half of it landing would leave the two disagreeing.
-    let guard = conn.unchecked_transaction().map_err(oops)?;
+    // One transaction over the whole save: a bill and the parts it was split
+    // into are one fact, and half of it landing would leave the two
+    // disagreeing. Unless a caller — the statement importer, saving many
+    // postings as one act — has a transaction open already, whose fate
+    // covers this save too.
+    let guard = if conn.is_autocommit() {
+        Some(conn.unchecked_transaction().map_err(oops)?)
+    } else {
+        None
+    };
 
     let id = match input.id {
         Some(id) => {
@@ -1473,7 +1628,27 @@ pub fn save_transaction(conn: &Connection, input: TransactionInput) -> Result<Tr
         )?;
     }
 
-    guard.commit().map_err(oops)?;
+    // The labels it should wear, replaced as a set. `None` touches nothing,
+    // so every caller that doesn't know about labels leaves them alone.
+    if let Some(label_ids) = input.label_ids.as_deref() {
+        conn.execute(
+            "DELETE FROM transaction_labels WHERE transaction_id = ?1",
+            params![id],
+        )
+        .map_err(oops)?;
+        for label in label_ids {
+            conn.execute(
+                "INSERT OR IGNORE INTO transaction_labels (transaction_id, label_id)
+                 VALUES (?1, ?2)",
+                params![id, label],
+            )
+            .map_err(oops)?;
+        }
+    }
+
+    if let Some(guard) = guard {
+        guard.commit().map_err(oops)?;
+    }
     get_transaction(conn, &id)
 }
 
@@ -1614,6 +1789,572 @@ pub fn delete_transaction(conn: &Connection, id: &str) -> Result<()> {
     Ok(())
 }
 
+// ------------------------------------------------ labels & statement import
+
+/// The label the importer pins on whatever it brings in: the queue of
+/// postings waiting for a person to say the guess was right.
+pub const TRIAGE_LABEL: &str = "Triage";
+const TRIAGE_COLOR: &str = "#F0B429";
+
+pub fn list_labels(conn: &Connection) -> Result<Vec<Label>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT l.id, l.name, l.color,
+                    (SELECT COUNT(*) FROM transaction_labels tl WHERE tl.label_id = l.id)
+             FROM labels l ORDER BY l.name",
+        )
+        .map_err(oops)?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(Label {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                color: r.get(2)?,
+                count: r.get(3)?,
+            })
+        })
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?;
+    Ok(rows)
+}
+
+pub fn save_label(conn: &Connection, input: LabelInput) -> Result<Label> {
+    let name = input.name.trim().to_string();
+    if name.is_empty() {
+        return Err("A label needs a name.".into());
+    }
+    let taken = |e: rusqlite::Error| {
+        if e.to_string().contains("UNIQUE") {
+            format!("There is already a label called \"{name}\".")
+        } else {
+            e.to_string()
+        }
+    };
+    let id = match input.id.filter(|i| !i.is_empty()) {
+        Some(id) => {
+            conn.execute(
+                "UPDATE labels SET name = ?2, color = ?3 WHERE id = ?1",
+                params![id, name, input.color],
+            )
+            .map_err(taken)?;
+            id
+        }
+        None => {
+            let id = new_id();
+            conn.execute(
+                "INSERT INTO labels (id, name, color, created_at) VALUES (?1, ?2, ?3, ?4)",
+                params![id, name, input.color, now()],
+            )
+            .map_err(taken)?;
+            id
+        }
+    };
+    conn.query_row(
+        "SELECT l.id, l.name, l.color,
+                (SELECT COUNT(*) FROM transaction_labels tl WHERE tl.label_id = l.id)
+         FROM labels l WHERE l.id = ?1",
+        params![id],
+        |r| {
+            Ok(Label {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                color: r.get(2)?,
+                count: r.get(3)?,
+            })
+        },
+    )
+    .map_err(oops)
+}
+
+/// The label goes, and comes off every posting wearing it. The postings
+/// themselves are untouched — a label is a pin, not a filing.
+pub fn delete_label(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute("DELETE FROM labels WHERE id = ?1", params![id])
+        .map_err(oops)?;
+    Ok(())
+}
+
+fn ensure_label(conn: &Connection, name: &str, color: &str) -> Result<String> {
+    if let Some(id) = conn
+        .query_row("SELECT id FROM labels WHERE name = ?1", params![name], |r| {
+            r.get::<_, String>(0)
+        })
+        .optional()
+        .map_err(oops)?
+    {
+        return Ok(id);
+    }
+    let id = new_id();
+    conn.execute(
+        "INSERT INTO labels (id, name, color, created_at) VALUES (?1, ?2, ?3, ?4)",
+        params![id, name, color, now()],
+    )
+    .map_err(oops)?;
+    Ok(id)
+}
+
+/// Writes one counterparty's filing down as confirmed — what the next
+/// statement of them should become, no questions asked.
+fn remember_rule(
+    conn: &Connection,
+    key: &str,
+    kind: &str,
+    category_id: Option<&str>,
+    from_account: Option<&str>,
+    to_account: Option<&str>,
+    merchant: &str,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO import_rules
+             (id, match_key, kind, category_id, from_account_id, to_account_id,
+              merchant, confirmed, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8)
+         ON CONFLICT(match_key) DO UPDATE SET
+             kind = excluded.kind,
+             category_id = excluded.category_id,
+             from_account_id = excluded.from_account_id,
+             to_account_id = excluded.to_account_id,
+             merchant = excluded.merchant,
+             confirmed = 1,
+             updated_at = excluded.updated_at",
+        params![new_id(), key, kind, category_id, from_account, to_account, merchant, now()],
+    )
+    .map_err(oops)?;
+    Ok(())
+}
+
+/// A statement row's side of the ledger, seen from one account: money out of
+/// it is a debit whatever kind of posting carried it.
+fn posting_direction(kind: &str, account_id: &str, target: &str) -> &'static str {
+    match kind {
+        "income" => "credit",
+        "expense" => "debit",
+        _ => {
+            if account_id == target {
+                "debit"
+            } else {
+                "credit"
+            }
+        }
+    }
+}
+
+/// What the importer remembers about one counterparty.
+struct ImportRule {
+    kind: String,
+    category_id: Option<String>,
+    from_account_id: Option<String>,
+    to_account_id: Option<String>,
+    merchant: String,
+    confirmed: bool,
+}
+
+/// Holds every statement row against the book. A row that pairs with an
+/// existing posting — same amount, same side, dates within a few days of each
+/// other, nearest first — is already recorded; the rest are new, and each
+/// arrives with the best available guess at how to file it.
+pub fn preview_import(
+    conn: &Connection,
+    account_id: &str,
+    rows: Vec<StatementRow>,
+) -> Result<Vec<ImportPreviewRow>> {
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let parse_day = |d: &str| NaiveDate::parse_from_str(d, "%Y-%m-%d").map_err(oops);
+    let mut lo = parse_day(&rows[0].date)?;
+    let mut hi = lo;
+    for row in &rows {
+        let day = parse_day(&row.date)?;
+        lo = lo.min(day);
+        hi = hi.max(day);
+    }
+
+    // Every posting touching the account across the statement's stretch,
+    // widened by the matching window so edges pair as well as middles.
+    struct Candidate {
+        id: String,
+        day: NaiveDate,
+        amount: Paise,
+        direction: &'static str,
+        summary: String,
+        free: bool,
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT t.id, t.kind, t.amount, t.account_id, t.occurred_at,
+                    t.merchant, c.name
+             FROM transactions t
+             LEFT JOIN categories c ON c.id = t.category_id
+             WHERE (t.account_id = ?1 OR t.to_account_id = ?1)
+               AND t.occurred_at >= ?2 AND t.occurred_at <= ?3",
+        )
+        .map_err(oops)?;
+    let mut candidates: Vec<Candidate> = stmt
+        .query_map(
+            params![
+                account_id,
+                (lo - Duration::days(6)).to_string(),
+                format!("{}T23:59:59", hi + Duration::days(6)),
+            ],
+            |r| {
+                let kind: String = r.get(1)?;
+                let from: String = r.get(3)?;
+                let occurred: String = r.get(4)?;
+                let merchant: String = r.get(5)?;
+                let category: Option<String> = r.get(6)?;
+                Ok((r.get::<_, String>(0)?, kind, r.get::<_, Paise>(2)?, from, occurred, merchant, category))
+            },
+        )
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?
+        .into_iter()
+        .filter_map(|(id, kind, amount, from, occurred, merchant, category)| {
+            let day = NaiveDate::parse_from_str(occurred.get(..10)?, "%Y-%m-%d").ok()?;
+            let what = category.unwrap_or_else(|| kind.clone());
+            let summary = if merchant.is_empty() {
+                what
+            } else {
+                format!("{merchant} · {what}")
+            };
+            Some(Candidate {
+                id,
+                day,
+                amount,
+                direction: posting_direction(&kind, &from, account_id),
+                summary,
+                free: true,
+            })
+        })
+        .collect();
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT match_key, kind, category_id, from_account_id, to_account_id,
+                    merchant, confirmed
+             FROM import_rules",
+        )
+        .map_err(oops)?;
+    let rules: HashMap<String, ImportRule> = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                ImportRule {
+                    kind: r.get(1)?,
+                    category_id: r.get(2)?,
+                    from_account_id: r.get(3)?,
+                    to_account_id: r.get(4)?,
+                    merchant: r.get(5)?,
+                    confirmed: r.get::<_, i64>(6)? != 0,
+                },
+            ))
+        })
+        .map_err(oops)?
+        .collect::<rusqlite::Result<HashMap<_, _>>>()
+        .map_err(oops)?;
+
+    // Nearest-date greedy pairing, widening the window pass by pass so an
+    // exact-day match is never stolen by a row three days out.
+    let days: Vec<NaiveDate> = rows
+        .iter()
+        .map(|r| parse_day(&r.date))
+        .collect::<Result<_>>()?;
+    let mut matched: Vec<Option<usize>> = vec![None; rows.len()];
+    for window in [0i64, 1, 3, 5] {
+        for (i, row) in rows.iter().enumerate() {
+            if matched[i].is_some() {
+                continue;
+            }
+            let mut best: Option<(i64, usize)> = None;
+            for (j, cand) in candidates.iter().enumerate() {
+                if !cand.free || cand.amount != row.amount || cand.direction != row.direction {
+                    continue;
+                }
+                let delta = (cand.day - days[i]).num_days().abs();
+                if delta <= window && best.is_none_or(|(d, _)| delta < d) {
+                    best = Some((delta, j));
+                }
+            }
+            if let Some((_, j)) = best {
+                candidates[j].free = false;
+                matched[i] = Some(j);
+            }
+        }
+    }
+
+    let out = rows
+        .into_iter()
+        .enumerate()
+        .map(|(i, row)| {
+            if let Some(j) = matched[i] {
+                let cand = &candidates[j];
+                return ImportPreviewRow {
+                    kind: row.direction.clone(),
+                    status: "matched".into(),
+                    matched_id: Some(cand.id.clone()),
+                    matched_summary: Some(cand.summary.clone()),
+                    matched_on: Some(cand.day.to_string()),
+                    category_id: None,
+                    transfer_account_id: None,
+                    merchant: String::new(),
+                    from_rule: false,
+                    rule_confirmed: false,
+                    match_key: None,
+                    row,
+                };
+            }
+            let fallback_kind = if row.direction == "debit" { "expense" } else { "income" };
+            let key = crate::import::match_key(&row.narration);
+            let rule = key
+                .as_deref()
+                .and_then(|key| rules.get(key))
+                // A transfer rule names both of its ends; it only fits an
+                // import that lands on one of them.
+                .filter(|rule| {
+                    rule.kind != "transfer"
+                        || rule.from_account_id.as_deref() == Some(account_id)
+                        || rule.to_account_id.as_deref() == Some(account_id)
+                });
+            let (kind, category_id, transfer_account_id, merchant, from_rule, confirmed) =
+                match rule {
+                    Some(rule) => (
+                        rule.kind.clone(),
+                        rule.category_id.clone(),
+                        if rule.kind == "transfer" {
+                            if rule.from_account_id.as_deref() == Some(account_id) {
+                                rule.to_account_id.clone()
+                            } else {
+                                rule.from_account_id.clone()
+                            }
+                        } else {
+                            None
+                        },
+                        if rule.merchant.is_empty() {
+                            crate::import::display_merchant(&row.narration)
+                        } else {
+                            rule.merchant.clone()
+                        },
+                        true,
+                        rule.confirmed,
+                    ),
+                    None => (
+                        fallback_kind.to_string(),
+                        None,
+                        None,
+                        crate::import::display_merchant(&row.narration),
+                        false,
+                        false,
+                    ),
+                };
+            ImportPreviewRow {
+                status: "new".into(),
+                matched_id: None,
+                matched_summary: None,
+                matched_on: None,
+                kind,
+                category_id,
+                transfer_account_id,
+                merchant,
+                from_rule,
+                rule_confirmed: confirmed,
+                match_key: key,
+                row,
+            }
+        })
+        .collect();
+    Ok(out)
+}
+
+/// Writes the agreed rows into the book, each wearing the Triage label when
+/// asked to, all inside one transaction — a half-imported statement is worse
+/// than none.
+///
+/// A row marked `affects_balance: false` is one the current balance already
+/// reflects — a gap being filled in for the record. It is written down like
+/// any other, and every opening balance it touches moves the same amount the
+/// other way, so no balance anywhere changes. Which rows those are is the
+/// caller's to say: nothing about a statement reveals what was already
+/// counted.
+pub fn commit_import(
+    conn: &Connection,
+    account_id: &str,
+    rows: Vec<ImportCommitRow>,
+) -> Result<ImportResult> {
+    let guard = conn.unchecked_transaction().map_err(oops)?;
+    let triage_id = ensure_label(conn, TRIAGE_LABEL, TRIAGE_COLOR)?;
+    let mut inserted = 0i64;
+    let mut triaged = 0i64;
+    let mut balance_neutral = 0i64;
+    let mut debts = 0i64;
+    let mut adjustments: HashMap<String, Paise> = HashMap::new();
+
+    for ImportCommitRow { row, mut input, triage, learn, affects_balance } in rows {
+        // The posting goes through the same door a hand-written one does —
+        // one set of validations, splits and shares included. A statement
+        // row is always a new posting, whatever id a form left on the input.
+        input.id = None;
+        // The user's own words when they wrote any; the bank's otherwise.
+        if input.note.as_deref().map_or(true, |n| n.trim().is_empty()) {
+            input.note = Some(row.narration.trim().to_string()).filter(|n| !n.is_empty());
+        }
+        let tx = save_transaction(conn, input)?;
+        conn.execute(
+            "UPDATE transactions SET import_key = ?1 WHERE id = ?2",
+            params![crate::import::match_key(&row.narration), tx.id],
+        )
+        .map_err(oops)?;
+        inserted += 1;
+        debts += tx.shares.len() as i64;
+
+        // A filing shaped by hand in the review is as reviewed as it gets:
+        // it skips triage, so the rule it would have taught on confirm gets
+        // written down here instead.
+        if learn {
+            if let Some(key) = crate::import::match_key(&row.narration) {
+                let is_transfer = tx.kind == "transfer";
+                remember_rule(
+                    conn,
+                    &key,
+                    &tx.kind,
+                    tx.category_id.as_deref(),
+                    Some(tx.account_id.as_str()).filter(|_| is_transfer),
+                    tx.to_account_id.as_deref().filter(|_| is_transfer),
+                    &tx.merchant,
+                )?;
+            }
+        }
+
+        // Already counted: cancel what this posting does to each balance by
+        // moving the openings the other way, whichever accounts it touched.
+        if !affects_balance {
+            balance_neutral += 1;
+            match tx.kind.as_str() {
+                "expense" => {
+                    *adjustments.entry(tx.account_id.clone()).or_default() += tx.amount;
+                }
+                "income" => {
+                    *adjustments.entry(tx.account_id.clone()).or_default() -= tx.amount;
+                }
+                _ => {
+                    *adjustments.entry(tx.account_id.clone()).or_default() += tx.amount;
+                    if let Some(to) = tx.to_account_id.as_deref() {
+                        *adjustments.entry(to.to_string()).or_default() -= tx.amount;
+                    }
+                }
+            }
+        }
+
+        if triage {
+            conn.execute(
+                "INSERT OR IGNORE INTO transaction_labels (transaction_id, label_id)
+                 VALUES (?1, ?2)",
+                params![tx.id, triage_id],
+            )
+            .map_err(oops)?;
+            triaged += 1;
+        }
+    }
+
+    let opening_adjustment = adjustments.get(account_id).copied().unwrap_or(0);
+    for (acct, delta) in &adjustments {
+        if *delta != 0 {
+            conn.execute(
+                "UPDATE accounts SET opening_balance = opening_balance + ?1 WHERE id = ?2",
+                params![delta, acct],
+            )
+            .map_err(oops)?;
+        }
+    }
+
+    guard.commit().map_err(oops)?;
+    Ok(ImportResult {
+        inserted,
+        triaged,
+        balance_neutral,
+        debts,
+        opening_adjustment,
+    })
+}
+
+/// A person has looked at these postings and said they are filed right. The
+/// Triage label comes off, and how each one is filed is written down against
+/// its counterparty — which is what makes the next import of them arrive
+/// already classified.
+pub fn confirm_triage(conn: &Connection, ids: &[String]) -> Result<i64> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let guard = conn.unchecked_transaction().map_err(oops)?;
+    let triage_id = conn
+        .query_row(
+            "SELECT id FROM labels WHERE name = ?1",
+            params![TRIAGE_LABEL],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(oops)?;
+
+    let mut confirmed = 0i64;
+    for id in ids {
+        let found = conn
+            .query_row(
+                "SELECT kind, category_id, account_id, to_account_id, merchant, note,
+                        import_key
+                 FROM transactions WHERE id = ?1",
+                params![id],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, Option<String>>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, Option<String>>(3)?,
+                        r.get::<_, String>(4)?,
+                        r.get::<_, Option<String>>(5)?,
+                        r.get::<_, Option<String>>(6)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(oops)?;
+        let Some((kind, category_id, from_account, to_account, merchant, note, import_key)) =
+            found
+        else {
+            continue;
+        };
+
+        // The key the importer recognised this row by, stamped at import
+        // time; rows from before that column existed fall back to reading
+        // the narration out of the note.
+        let key = import_key.or_else(|| note.as_deref().and_then(crate::import::match_key));
+        if let Some(key) = key {
+            let is_transfer = kind == "transfer";
+            remember_rule(
+                conn,
+                &key,
+                &kind,
+                category_id.as_deref(),
+                Some(from_account.as_str()).filter(|_| is_transfer),
+                to_account.as_deref().filter(|_| is_transfer),
+                &merchant,
+            )?;
+        }
+
+        if let Some(triage) = triage_id.as_deref() {
+            conn.execute(
+                "DELETE FROM transaction_labels WHERE transaction_id = ?1 AND label_id = ?2",
+                params![id, triage],
+            )
+            .map_err(oops)?;
+        }
+        confirmed += 1;
+    }
+
+    guard.commit().map_err(oops)?;
+    Ok(confirmed)
+}
+
 // ------------------------------------------------------------------- debts
 
 /// A short label for a linked posting, so the UI can name what opened a debt
@@ -1666,8 +2407,16 @@ pub fn list_debts(conn: &Connection) -> Result<Vec<Debt>> {
 
     let sql = format!(
         "SELECT p.id, p.debt_id, p.amount, p.occurred_at, p.note, p.transaction_id,
-                {TX_LABEL} p.transaction_id), p.created_at
-         FROM debt_payments p ORDER BY p.occurred_at DESC"
+                {TX_LABEL} p.transaction_id), p.created_at,
+                -- Which end of its own transfer is the money's: the side that
+                -- is not the account standing for what is out with people.
+                CASE WHEN p.owns_transaction = 1 THEN (
+                    SELECT CASE WHEN fa.name = '{DEBT}' THEN t.to_account_id
+                                ELSE t.account_id END
+                    FROM transactions t JOIN accounts fa ON fa.id = t.account_id
+                    WHERE t.id = p.transaction_id) END
+         FROM debt_payments p ORDER BY p.occurred_at DESC",
+        DEBT = DEBT_ACCOUNT
     );
     let mut stmt = conn.prepare(&sql).map_err(oops)?;
     let payments = stmt
@@ -1681,6 +2430,7 @@ pub fn list_debts(conn: &Connection) -> Result<Vec<Debt>> {
                 transaction_id: r.get(5)?,
                 transaction_label: r.get(6)?,
                 created_at: r.get(7)?,
+                cash_account_id: r.get(8)?,
             })
         })
         .map_err(oops)?
@@ -1798,39 +2548,190 @@ pub fn delete_debt(conn: &Connection, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// The account money out with people sits in: archived, so it never counts
+/// toward net worth — what is owed is counted by the debt itself, and
+/// counting the account as well would count it twice. A transfer against it
+/// is how a hand-off reaches the ledger without reading as income or spending.
+fn debt_account(conn: &Connection) -> Result<String> {
+    if let Some(id) = conn
+        .query_row(
+            "SELECT id FROM accounts WHERE name = ?1",
+            params![DEBT_ACCOUNT],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(oops)?
+    {
+        return Ok(id);
+    }
+    let id = new_id();
+    conn.execute(
+        "INSERT INTO accounts (id, name, kind, institution, opening_balance, color, icon,
+                               archived, sort_order, created_at, credit_limit)
+         VALUES (?1, ?2, 'cash', NULL, 0, '#979DB5', 'users', 1, 900, ?3, 0)",
+        params![id, DEBT_ACCOUNT, now()],
+    )
+    .map_err(oops)?;
+    Ok(id)
+}
+
+pub const DEBT_ACCOUNT: &str = "Lent & borrowed";
+
 pub fn save_debt_payment(conn: &Connection, input: DebtPaymentInput) -> Result<()> {
     if input.amount <= 0 {
         return Err("A repayment needs an amount greater than zero.".into());
     }
+    let guard = conn.unchecked_transaction().map_err(oops)?;
+
+    // What this repayment already names, and whether it wrote it.
+    let (had_tx, had_own): (Option<String>, bool) = match input.id.as_deref() {
+        Some(id) => conn
+            .query_row(
+                "SELECT transaction_id, owns_transaction FROM debt_payments WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get::<_, i64>(1)? != 0)),
+            )
+            .optional()
+            .map_err(oops)?
+            .unwrap_or((None, false)),
+        None => (None, false),
+    };
+    let drop_owned = |conn: &Connection, tx: &Option<String>, owned: bool| -> Result<()> {
+        match (owned, tx) {
+            (true, Some(id)) => delete_transaction(conn, id),
+            _ => Ok(()),
+        }
+    };
+
+    let cash = input.cash_account_id.as_deref().filter(|a| !a.is_empty());
+    let linked = input.transaction_id.as_deref().filter(|t| !t.is_empty());
+
+    let (transaction_id, owns) = match (cash, linked) {
+        // Pointing at a record already in the book: the money moved when it
+        // was written down, and nothing here should move it again.
+        (_, Some(tx_id)) => {
+            if had_tx.as_deref() != Some(tx_id) {
+                drop_owned(conn, &had_tx, had_own)?;
+            }
+            (Some(tx_id.to_string()), false)
+        }
+
+        // Writing the posting ourselves: money coming back lands in the
+        // chosen account, money going out leaves it, and the other end is
+        // the account that stands for what is out with people.
+        (Some(cash_id), None) => {
+            let direction: String = conn
+                .query_row(
+                    "SELECT direction FROM debts WHERE id = ?1",
+                    params![input.debt_id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(oops)?
+                .ok_or("That debt is no longer in your book.")?;
+            let holding = debt_account(conn)?;
+            if cash_id == holding {
+                return Err(format!(
+                    "Pick the account the money actually moved through — {DEBT_ACCOUNT} is the other side of it."
+                ));
+            }
+            let (from, to) = if direction == "lent" {
+                (holding, cash_id.to_string())
+            } else {
+                (cash_id.to_string(), holding)
+            };
+            let counterparty: String = conn
+                .query_row(
+                    "SELECT counterparty FROM debts WHERE id = ?1",
+                    params![input.debt_id],
+                    |r| r.get(0),
+                )
+                .map_err(oops)?;
+            // Only a posting this repayment wrote may be rewritten; a linked
+            // one is the user's record and is left exactly as entered.
+            let reuse = if had_own { had_tx.clone() } else { None };
+            let tx = save_transaction(
+                conn,
+                TransactionInput {
+                    id: reuse,
+                    kind: "transfer".into(),
+                    amount: input.amount,
+                    account_id: from,
+                    to_account_id: Some(to),
+                    category_id: None,
+                    merchant: counterparty,
+                    note: input.note.clone(),
+                    occurred_at: format!("{}T12:00", &input.occurred_at[..10.min(input.occurred_at.len())]),
+                    splits: None,
+                    shares: None,
+                    label_ids: None,
+                },
+            )?;
+            (Some(tx.id), true)
+        }
+
+        // Recorded without touching the ledger, for what predates it.
+        (None, None) => {
+            drop_owned(conn, &had_tx, had_own)?;
+            (None, false)
+        }
+    };
+
     match input.id {
         Some(id) => conn.execute(
             "UPDATE debt_payments SET amount = ?2, occurred_at = ?3, note = ?4,
-                    transaction_id = ?5
+                    transaction_id = ?5, owns_transaction = ?6
              WHERE id = ?1",
-            params![id, input.amount, input.occurred_at, input.note, input.transaction_id],
+            params![
+                id,
+                input.amount,
+                input.occurred_at,
+                input.note,
+                transaction_id,
+                owns as i64
+            ],
         ),
         None => conn.execute(
             "INSERT INTO debt_payments (id, debt_id, amount, occurred_at, note,
-                                        transaction_id, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                                        transaction_id, owns_transaction, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 new_id(),
                 input.debt_id,
                 input.amount,
                 input.occurred_at,
                 input.note,
-                input.transaction_id,
+                transaction_id,
+                owns as i64,
                 now()
             ],
         ),
     }
     .map_err(oops)?;
+    guard.commit().map_err(oops)?;
     Ok(())
 }
 
+/// The repayment goes, and the posting it wrote goes with it. One you linked
+/// is your own record and stays.
 pub fn delete_debt_payment(conn: &Connection, id: &str) -> Result<()> {
+    let guard = conn.unchecked_transaction().map_err(oops)?;
+    let owned: Option<String> = conn
+        .query_row(
+            "SELECT transaction_id FROM debt_payments
+             WHERE id = ?1 AND owns_transaction = 1",
+            params![id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(oops)?
+        .flatten();
     conn.execute("DELETE FROM debt_payments WHERE id = ?1", params![id])
         .map_err(oops)?;
+    if let Some(tx) = owned {
+        delete_transaction(conn, &tx)?;
+    }
+    guard.commit().map_err(oops)?;
     Ok(())
 }
 
@@ -1993,6 +2894,65 @@ fn units_held(conn: &Connection, holding_id: &str, except: Option<&str>) -> Resu
     .map_err(oops)
 }
 
+/// What a deposit is worth on a given day.
+///
+/// Indian deposits compound quarterly, and a recurring one is simply a
+/// series of deposits that each start earning on the day it is paid — so
+/// both kinds are the same sum, over one instalment or over many. Nothing
+/// earns past maturity: after that day it is a fixed amount waiting to be
+/// collected, not a balance still growing.
+fn deposit_value(rate_e4: Option<Scaled>, matures_on: Option<&str>, on: NaiveDate,
+                 instalments: &[(NaiveDate, Paise)]) -> Paise {
+    let rate = rate_e4.unwrap_or(0).max(0) as f64 / 10_000.0 / 100.0;
+    let until = matures_on
+        .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+        .map_or(on, |m| on.min(m));
+    instalments
+        .iter()
+        .map(|(paid_on, amount)| {
+            // Rate of zero, or money not yet in, is worth exactly itself.
+            let days = (until - *paid_on).num_days();
+            if rate <= 0.0 || days <= 0 {
+                return *amount;
+            }
+            let quarters = days as f64 / 365.25 * 4.0;
+            (*amount as f64 * (1.0 + rate / 4.0).powf(quarters)).round() as Paise
+        })
+        .sum()
+}
+
+/// Every instalment a deposit is made of: what was paid, and the day it
+/// started earning.
+fn deposit_instalments(conn: &Connection, holding_id: &str) -> Result<Vec<(NaiveDate, Paise)>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT COALESCE(l.allotted_at, l.occurred_at), l.amount
+             FROM investment_lots l
+             WHERE l.holding_id = ?1 AND l.kind = 'buy'",
+        )
+        .map_err(oops)?;
+    let rows = stmt
+        .query_map(params![holding_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Paise>(1)?))
+        })
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(day, amount)| {
+            let day = NaiveDate::parse_from_str(day.get(..10)?, "%Y-%m-%d").ok()?;
+            Some((day, amount))
+        })
+        .collect())
+}
+
+/// True for the two kinds of deposit, which are valued by what they have
+/// earned rather than by what a market says they would fetch.
+fn is_deposit(kind: &str) -> bool {
+    kind == "fd" || kind == "rd"
+}
+
 pub fn list_holdings(conn: &Connection) -> Result<Vec<Holding>> {
     let book = PriceBook::load(conn)?;
     let mut stmt = conn
@@ -2006,7 +2966,8 @@ pub fn list_holdings(conn: &Connection) -> Result<Vec<Holding>> {
                     COALESCE((SELECT SUM(l.amount) FROM investment_lots l
                               WHERE l.holding_id = h.id AND l.kind = 'buy'), 0),
                     COALESCE((SELECT SUM(l.amount) FROM investment_lots l
-                              WHERE l.holding_id = h.id AND l.kind = 'sell'), 0)
+                              WHERE l.holding_id = h.id AND l.kind = 'sell'), 0),
+                    h.rate_e4, h.opened_on, h.matures_on
              FROM holdings h
              LEFT JOIN accounts a ON a.id = h.account_id
              ORDER BY h.closed_at IS NOT NULL, h.kind, h.created_at DESC",
@@ -2015,14 +2976,22 @@ pub fn list_holdings(conn: &Connection) -> Result<Vec<Holding>> {
     let mut holdings = stmt
         .query_map([], |r| {
             let kind: String = r.get(1)?;
-            let is_gold = kind == "gold";
+            // Gold reports no return — it is weighed, not bought and sold —
+            // and a deposit's return is filled in with its value below.
+            let is_gold = kind == "gold" || is_deposit(&kind);
             let scheme_code: Option<String> = r.get(5)?;
             let purity_e4: Option<Scaled> = r.get(7)?;
             let closed_at: Option<String> = r.get(9)?;
             let units_e4: Scaled = r.get(12)?;
             let invested: Paise = r.get(13)?;
             let realised: Paise = r.get(14)?;
+            let rate_e4: Option<Scaled> = r.get(15)?;
+            let opened_on: Option<String> = r.get(16)?;
+            let matures_on: Option<String> = r.get(17)?;
             let priced = book.price_for(&kind, scheme_code.as_deref(), purity_e4);
+            // A deposit has no price to look up: it is worth what it has
+            // earned, which is filled in below where the connection is at
+            // hand to read its instalments.
             let market_value = priced
                 .as_ref()
                 .map(|(price, _)| market_value_paise(units_e4.max(0), *price))
@@ -2052,12 +3021,40 @@ pub fn list_holdings(conn: &Connection) -> Result<Vec<Holding>> {
                 // Gold has none of that behind it — it is weighed, not bought
                 // and sold — so it reports no return rather than a fake one.
                 total_return: if is_gold { 0 } else { market_value + realised - invested },
+                rate_e4,
+                opened_on,
+                matures_on,
+                maturity_value: 0,
                 lots: Vec::new(),
             })
         })
         .map_err(oops)?
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(oops)?;
+
+    // What each deposit has earned, and what it will be worth when it comes
+    // back. Both are computed rather than priced.
+    let today = Utc::now().date_naive();
+    for holding in holdings.iter_mut().filter(|h| is_deposit(&h.kind)) {
+        let paid = deposit_instalments(conn, &holding.id)?;
+        holding.market_value = deposit_value(
+            holding.rate_e4,
+            holding.matures_on.as_deref(),
+            today,
+            &paid,
+        );
+        holding.maturity_value = match holding
+            .matures_on
+            .as_deref()
+            .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+        {
+            Some(day) => deposit_value(holding.rate_e4, holding.matures_on.as_deref(), day, &paid),
+            // Nothing says when it ends, so there is no maturity figure to
+            // quote — only what it is worth today.
+            None => 0,
+        };
+        holding.total_return = holding.market_value + holding.realised - holding.invested;
+    }
 
     let sql = format!(
         "SELECT l.id, l.holding_id, l.kind, l.quantity_e4, l.amount, l.occurred_at,
@@ -2105,14 +3102,47 @@ pub fn save_holding(conn: &Connection, input: HoldingInput) -> Result<()> {
     if input.name.trim().is_empty() {
         return Err("Give the holding a name.".into());
     }
-    if input.kind != "gold" && input.kind != "fund" {
-        return Err("A holding is either gold or a fund.".into());
+    if !matches!(input.kind.as_str(), "gold" | "fund" | "fd" | "rd") {
+        return Err("A holding is gold, a fund, or a deposit.".into());
     }
+
+    // A deposit is defined by its terms rather than by units: what it pays,
+    // when it started, and when it comes back.
+    let deposit = is_deposit(&input.kind);
+    let (rate_e4, opened_on, matures_on) = if deposit {
+        let rate = input.rate_e4.unwrap_or(0);
+        if rate < 0 || rate > 1_000_000 {
+            return Err("That interest rate isn't a rate.".into());
+        }
+        let day = |d: Option<String>, what: &str| -> Result<Option<String>> {
+            match d.map(|d| d.trim().to_string()).filter(|d| !d.is_empty()) {
+                None => Ok(None),
+                Some(day) => {
+                    if NaiveDate::parse_from_str(&day, "%Y-%m-%d").is_err() {
+                        return Err(format!("That {what} date isn't a date."));
+                    }
+                    Ok(Some(day))
+                }
+            }
+        };
+        let opened = day(input.opened_on, "opening")?;
+        let matures = day(input.matures_on, "maturity")?;
+        if let (Some(o), Some(m)) = (&opened, &matures) {
+            if m < o {
+                return Err("A deposit can't mature before it was opened.".into());
+            }
+        }
+        (Some(rate), opened, matures)
+    } else {
+        (None, None, None)
+    };
 
     // Each kind carries only its own fields, so changing a holding's kind can
     // never leave a scheme code on a gold bar. Account credit limits are kept
     // tidy the same way.
-    let (scheme_code, isin, purity_e4, grams_e4) = if input.kind == "fund" {
+    let (scheme_code, isin, purity_e4, grams_e4) = if deposit {
+        (None, None, None, 0)
+    } else if input.kind == "fund" {
         let code = input
             .scheme_code
             .map(|c| c.trim().to_string())
@@ -2152,7 +3182,7 @@ pub fn save_holding(conn: &Connection, input: HoldingInput) -> Result<()> {
     // so there is no investment account for it to move money through.
     let account_id = input
         .account_id
-        .filter(|a| !a.is_empty() && input.kind == "fund");
+        .filter(|a| !a.is_empty() && (input.kind == "fund" || deposit));
     if let Some(id) = &account_id {
         if account_kind(conn, id)? != "investment" {
             return Err("Purchases post into an investment account — pick one of those.".into());
@@ -2197,7 +3227,7 @@ pub fn save_holding(conn: &Connection, input: HoldingInput) -> Result<()> {
             conn.execute(
                 "UPDATE holdings SET kind = ?2, name = ?3, account_id = ?4, scheme_code = ?5,
                         isin = ?6, purity_e4 = ?7, grams_e4 = ?8, note = ?9, closed_at = ?10,
-                        acquired_on = ?11
+                        acquired_on = ?11, rate_e4 = ?12, opened_on = ?13, matures_on = ?14
                  WHERE id = ?1",
                 params![
                     id,
@@ -2210,15 +3240,18 @@ pub fn save_holding(conn: &Connection, input: HoldingInput) -> Result<()> {
                     grams_e4,
                     input.note,
                     closed_at,
-                    acquired_on
+                    acquired_on,
+                    rate_e4,
+                    opened_on,
+                    matures_on
                 ],
             )
         }
         None => conn.execute(
             "INSERT INTO holdings (id, kind, name, account_id, scheme_code, isin,
                                    purity_e4, grams_e4, note, closed_at, created_at,
-                                   acquired_on)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                                   acquired_on, rate_e4, opened_on, matures_on)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 new_id(),
                 input.kind,
@@ -2231,7 +3264,10 @@ pub fn save_holding(conn: &Connection, input: HoldingInput) -> Result<()> {
                 input.note,
                 if input.closed == Some(true) { Some(now()) } else { None },
                 now(),
-                acquired_on
+                acquired_on,
+                rate_e4,
+                opened_on,
+                matures_on
             ],
         ),
     }
@@ -2247,7 +3283,24 @@ pub fn delete_holding(conn: &Connection, id: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn save_investment_lot(conn: &Connection, input: InvestmentLotInput) -> Result<()> {
+pub fn save_investment_lot(conn: &Connection, mut input: InvestmentLotInput) -> Result<()> {
+    // A deposit is money, not units: what was paid in is the whole of it, so
+    // the quantity is nominal rather than asked for.
+    let into_deposit: String = conn
+        .query_row(
+            "SELECT kind FROM holdings WHERE id = ?1",
+            params![input.holding_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(oops)?
+        .unwrap_or_default();
+    if is_deposit(&into_deposit) {
+        input.quantity_e4 = 10_000;
+        if input.amount <= 0 {
+            return Err("How much went in? A deposit is measured by its money.".into());
+        }
+    }
     if input.quantity_e4 <= 0 {
         return Err("How much was bought? Enter a quantity above zero.".into());
     }
@@ -2411,6 +3464,7 @@ pub fn save_investment_lot(conn: &Connection, input: InvestmentLotInput) -> Resu
                             occurred_at: tx.occurred_at.clone(),
                             splits: None,
                             shares: None,
+                            label_ids: None,
                         },
                     )?;
                 }
@@ -2461,6 +3515,7 @@ pub fn save_investment_lot(conn: &Connection, input: InvestmentLotInput) -> Resu
                     occurred_at: format!("{day}T12:00"),
                     splits: None,
                     shares: None,
+                    label_ids: None,
                 },
             )?;
             (Some(tx.id), true)
@@ -2923,7 +3978,8 @@ fn holding_marks(conn: &Connection) -> Result<Marks> {
                         WHEN t.kind = 'transfer' AND t.to_account_id = h.account_id THEN  t.amount
                         ELSE 0 END)
                       FROM investment_lots l JOIN transactions t ON t.id = l.transaction_id
-                      WHERE l.holding_id = h.id), 0)
+                      WHERE l.holding_id = h.id), 0),
+                    h.id, h.rate_e4, h.matures_on
              FROM holdings h",
         )
         .map_err(oops)?;
@@ -2936,19 +3992,39 @@ fn holding_marks(conn: &Connection) -> Result<Marks> {
                 r.get::<_, Option<Scaled>>(3)?,
                 r.get::<_, Scaled>(4)?,
                 r.get::<_, Paise>(5)?,
+                r.get::<_, String>(6)?,
+                r.get::<_, Option<Scaled>>(7)?,
+                r.get::<_, Option<String>>(8)?,
             ))
         })
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(oops)?;
 
     let mut marks = Marks::default();
-    for row in rows {
-        let (account_id, kind, scheme_code, purity_e4, units_e4, posted) = row.map_err(oops)?;
-        // Nothing fetched for it yet — leave the basis standing rather than
-        // marking the position down to nothing on a first offline launch.
-        let Some((price_e4, _)) = book.price_for(&kind, scheme_code.as_deref(), purity_e4) else {
-            continue;
+    let today = Utc::now().date_naive();
+    for (account_id, kind, scheme_code, purity_e4, units_e4, posted, id, rate_e4, matures_on)
+        in rows
+    {
+        let market = if is_deposit(&kind) {
+            // Worth what it has earned: each instalment compounds from the
+            // day it was paid, so the sum is read per deposit.
+            deposit_value(
+                rate_e4,
+                matures_on.as_deref(),
+                today,
+                &deposit_instalments(conn, &id)?,
+            )
+        } else {
+            // Nothing fetched for it yet — leave the basis standing rather
+            // than marking the position down to nothing on a first offline
+            // launch.
+            let Some((price_e4, _)) = book.price_for(&kind, scheme_code.as_deref(), purity_e4)
+            else {
+                continue;
+            };
+            market_value_paise(units_e4.max(0), price_e4)
         };
-        let market = market_value_paise(units_e4.max(0), price_e4);
         marks.value += market;
         match account_id {
             Some(id) => {
@@ -3466,6 +4542,9 @@ mod tests {
                 acquired_on: None,
                 note: None,
                 closed: None,
+                rate_e4: None,
+                opened_on: None,
+                matures_on: None,
             },
         )
         .unwrap();
@@ -3526,6 +4605,9 @@ mod tests {
                 acquired_on: None,
                 note: None,
                 closed: None,
+                rate_e4: None,
+                opened_on: None,
+                matures_on: None,
             },
         )
         .unwrap();
@@ -3704,6 +4786,9 @@ mod tests {
                 acquired_on: None,
                 note: None,
                 closed: None,
+                rate_e4: None,
+                opened_on: None,
+                matures_on: None,
             },
         )
         .unwrap_err();
@@ -3820,6 +4905,7 @@ mod tests {
                 occurred_at: transfer.occurred_at.clone(),
                 splits: None,
                 shares: None,
+                label_ids: None,
             },
         )
         .unwrap();
@@ -3930,6 +5016,9 @@ mod tests {
                     acquired_on: None,
                     note: None,
                     closed: None,
+                    rate_e4: None,
+                    opened_on: None,
+                    matures_on: None,
                 },
             )
             .unwrap();
@@ -3999,6 +5088,7 @@ mod tests {
                 occurred_at: "2026-08-05T08:00".into(),
                 splits: None,
                 shares: None,
+                label_ids: None,
             },
         )
         .unwrap();
@@ -4053,6 +5143,7 @@ mod tests {
                 occurred_at: "2026-08-05T08:00".into(),
                 splits: None,
                 shares: None,
+                label_ids: None,
             },
         )
         .unwrap();
@@ -4103,6 +5194,7 @@ mod tests {
                 occurred_at: "2026-08-05T08:00".into(),
                 splits: None,
                 shares: None,
+                label_ids: None,
             },
         )
         .unwrap();
@@ -4165,6 +5257,7 @@ mod tests {
                 occurred_at: "2026-08-05T08:00".into(),
                 splits: None,
                 shares: None,
+                label_ids: None,
             },
         )
         .unwrap();
@@ -4209,6 +5302,7 @@ mod tests {
                 occurred_at: "2026-08-05T08:00".into(),
                 splits: None,
                 shares: None,
+                label_ids: None,
             },
         )
         .unwrap();
@@ -4252,6 +5346,7 @@ mod tests {
                     occurred_at: "2026-08-05T08:00".into(),
                     splits: None,
                     shares: None,
+                    label_ids: None,
                 },
             )
             .unwrap();
@@ -4300,6 +5395,7 @@ mod tests {
                     occurred_at: format!("2026-08-{:02}T10:00", i + 1),
                     splits: None,
                     shares: None,
+                    label_ids: None,
                 },
             )
             .unwrap();
@@ -4366,6 +5462,7 @@ mod tests {
                     occurred_at: format!("{month}-15T10:00"),
                     splits: None,
                     shares: None,
+                    label_ids: None,
                 },
             )
             .unwrap();
@@ -4595,6 +5692,7 @@ mod tests {
                 occurred_at: "2026-08-15T20:00".into(),
                 splits: None,
                 shares: None,
+                label_ids: None,
             },
         )
         .unwrap()
@@ -4641,6 +5739,7 @@ mod tests {
                 occurred_at: tx.occurred_at.clone(),
                 splits,
                 shares,
+                label_ids: None,
             },
         )
     }
@@ -4764,6 +5863,7 @@ mod tests {
                 occurred_at: "2026-08-20".into(),
                 note: None,
                 transaction_id: None,
+                cash_account_id: None,
             },
         )
         .unwrap();
@@ -4840,6 +5940,7 @@ mod tests {
                 occurred_at: tx.occurred_at.clone(),
                 splits: None,
                 shares: None,
+                label_ids: None,
             },
         )
         .unwrap();
@@ -4906,6 +6007,9 @@ mod tests {
                 acquired_on: None,
                 note: None,
                 closed: None,
+                rate_e4: None,
+                opened_on: None,
+                matures_on: None,
             },
         )
         .unwrap();
@@ -4948,6 +6052,9 @@ mod tests {
                 acquired_on: None,
                 note: None,
                 closed: None,
+                rate_e4: None,
+                opened_on: None,
+                matures_on: None,
             },
         )
         .unwrap();
@@ -5001,6 +6108,9 @@ mod tests {
                 acquired_on: Some("2026-08-29".into()),
                 note: None,
                 closed: None,
+                rate_e4: None,
+                opened_on: None,
+                matures_on: None,
             },
         )
         .unwrap();
@@ -5034,6 +6144,9 @@ mod tests {
                 acquired_on: Some("2099-01-01".into()),
                 note: None,
                 closed: None,
+                rate_e4: None,
+                opened_on: None,
+                matures_on: None,
             },
         );
         assert!(err.is_err(), "an acquisition date in the future is refused");
@@ -5114,6 +6227,7 @@ mod tests {
                 occurred_at: "2026-08-15T10:00".into(),
                 splits: None,
                 shares: None,
+                label_ids: None,
             },
         )
         .unwrap();
@@ -5209,6 +6323,7 @@ mod tests {
                     occurred_at: "2026-08-14T10:00".into(),
                     splits: None,
                     shares,
+                    label_ids: None,
                 },
             )
         };
@@ -5265,6 +6380,7 @@ mod tests {
                 occurred_at: "2026-08-16T10:00".into(),
                 splits: None,
                 shares: None,
+                label_ids: None,
             },
         );
         assert!(direct.is_err(), "a group cannot take a posting of its own");
@@ -5341,5 +6457,513 @@ mod tests {
         let once = market_value_paise(lots.iter().sum::<Scaled>(), 900_000);
         assert_eq!(per_lot, 9_001);
         assert_eq!(once, 9_000);
+    }
+
+    fn statement_row(date: &str, narration: &str, amount: Paise, direction: &str) -> StatementRow {
+        StatementRow {
+            date: date.into(),
+            narration: narration.into(),
+            ref_no: "0000123".into(),
+            amount,
+            direction: direction.into(),
+            balance: None,
+        }
+    }
+
+    /// The whole import loop: a row comes in unknown and lands in triage;
+    /// confirming it teaches a rule; the next import of that counterparty
+    /// arrives filed, and re-importing the same statement matches instead of
+    /// doubling.
+    #[test]
+    fn imports_triage_and_learning() {
+        let conn = book();
+        let bank = account(&conn, "Bank", "bank", 0);
+        let cafe = statement_row(
+            "2026-05-01",
+            "UPI-BLUE TOKAI-BLUETOKAI@AXIS-UTIB0000001-645826-COFFEE",
+            45_000,
+            "debit",
+        );
+
+        // Unknown counterparty: a plain expense guess, no rule behind it.
+        let preview = preview_import(&conn, &bank, vec![cafe.clone()]).unwrap();
+        assert_eq!(preview[0].status, "new");
+        assert_eq!(preview[0].kind, "expense");
+        assert!(!preview[0].from_rule);
+
+        let done = commit_import(
+            &conn,
+            &bank,
+            vec![ImportCommitRow {
+                row: cafe.clone(),
+                input: TransactionInput {
+                    id: None,
+                    kind: "expense".into(),
+                    amount: cafe.amount,
+                    account_id: bank.clone(),
+                    to_account_id: None,
+                    category_id: None,
+                    merchant: "Blue Tokai".into(),
+                    note: None,
+                    occurred_at: format!("{}T12:00", cafe.date),
+                    splits: None,
+                    shares: None,
+                    label_ids: None,
+                },
+                triage: true,
+                learn: false,
+                affects_balance: true,
+            }],
+        )
+        .unwrap();
+        assert_eq!((done.inserted, done.triaged), (1, 1));
+        assert_eq!((done.balance_neutral, done.opening_adjustment), (0, 0));
+
+        let rows = list_transactions(&conn, TransactionQuery::default()).unwrap();
+        assert_eq!(rows[0].labels.len(), 1);
+        assert_eq!(rows[0].labels[0].name, TRIAGE_LABEL);
+
+        // Only labelled rows come back when the query asks by label.
+        let triage_only = list_transactions(
+            &conn,
+            TransactionQuery {
+                label_ids: Some(vec![rows[0].labels[0].id.clone()]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(triage_only.len(), 1);
+
+        // Confirming clears the label and writes the rule down.
+        assert_eq!(confirm_triage(&conn, &[rows[0].id.clone()]).unwrap(), 1);
+        let rows = list_transactions(&conn, TransactionQuery::default()).unwrap();
+        assert!(rows[0].labels.is_empty());
+
+        // The same statement again: matched, not doubled.
+        let again = preview_import(&conn, &bank, vec![cafe.clone()]).unwrap();
+        assert_eq!(again[0].status, "matched");
+
+        // A later visit to the same cafe: filed by the confirmed rule.
+        let later = statement_row(
+            "2026-06-09",
+            "UPI-BLUE TOKAI-BLUETOKAI@AXIS-UTIB0000001-991122-FLAT WHITE",
+            61_000,
+            "debit",
+        );
+        let preview = preview_import(&conn, &bank, vec![later]).unwrap();
+        assert_eq!(preview[0].status, "new");
+        assert!(preview[0].from_rule && preview[0].rule_confirmed);
+        assert_eq!(preview[0].merchant, "Blue Tokai");
+    }
+
+    /// A transfer rule names both of its ends, and applying it from the
+    /// statement's side puts the money through the right way round.
+    #[test]
+    fn transfer_rules_keep_their_direction() {
+        let conn = book();
+        let bank = account(&conn, "Bank", "bank", 0);
+        let funds = account(&conn, "Funds", "investment", 0);
+        let sip = statement_row(
+            "2026-05-05",
+            "ACH D- INDIAN CLEARING CORP-000000PKHMUL",
+            1_000_000,
+            "debit",
+        );
+
+        commit_import(
+            &conn,
+            &bank,
+            vec![ImportCommitRow {
+                row: sip.clone(),
+                input: TransactionInput {
+                    id: None,
+                    kind: "transfer".into(),
+                    amount: sip.amount,
+                    account_id: bank.clone(),
+                    to_account_id: Some(funds.clone()),
+                    category_id: None,
+                    merchant: "SIP".into(),
+                    note: None,
+                    occurred_at: format!("{}T12:00", sip.date),
+                    splits: None,
+                    shares: None,
+                    label_ids: None,
+                },
+                triage: true,
+                learn: false,
+                affects_balance: true,
+            }],
+        )
+        .unwrap();
+        let rows = list_transactions(&conn, TransactionQuery::default()).unwrap();
+        assert_eq!(rows[0].kind, "transfer");
+        assert_eq!(rows[0].account_id, bank);
+        assert_eq!(rows[0].to_account_id.as_deref(), Some(funds.as_str()));
+        confirm_triage(&conn, &[rows[0].id.clone()]).unwrap();
+
+        // Next month's debit of the same house: suggested as the same transfer.
+        let next = statement_row(
+            "2026-06-05",
+            "ACH D- INDIAN CLEARING CORP-000000QQXYZ",
+            1_000_000,
+            "debit",
+        );
+        let preview = preview_import(&conn, &bank, vec![next]).unwrap();
+        assert_eq!(preview[0].kind, "transfer");
+        assert_eq!(preview[0].transfer_account_id.as_deref(), Some(funds.as_str()));
+    }
+
+    fn balance_of(conn: &Connection, id: &str) -> Paise {
+        list_accounts(conn)
+            .unwrap()
+            .into_iter()
+            .find(|a| a.id == id)
+            .unwrap()
+            .balance
+    }
+
+    fn commit_row(
+        date: &str,
+        amount: Paise,
+        kind: &str,
+        account: &str,
+        other: Option<&str>,
+    ) -> ImportCommitRow {
+        ImportCommitRow {
+            row: statement_row(
+                date,
+                &format!("UPI-SOMEONE-SOMEONE@AXIS-{date}"),
+                amount,
+                "debit",
+            ),
+            input: TransactionInput {
+                id: None,
+                kind: kind.into(),
+                amount,
+                account_id: account.into(),
+                to_account_id: other.map(String::from),
+                category_id: None,
+                merchant: "Someone".into(),
+                note: None,
+                occurred_at: format!("{date}T12:00"),
+                splits: None,
+                shares: None,
+                label_ids: None,
+            },
+            triage: false,
+            learn: false,
+            affects_balance: true,
+        }
+    }
+
+    /// A split written at import posts exactly like one written later from
+    /// the sheet, and one that doesn't add up sinks the whole commit.
+    #[test]
+    fn imported_rows_can_arrive_split() {
+        let conn = book();
+        let bank = account(&conn, "Bank", "bank", 0);
+        let part = |amount: Paise| TransactionSplitInput {
+            id: None,
+            amount,
+            category_id: None,
+            note: None,
+        };
+        let mut row = commit_row("2026-05-02", 5_000, "expense", &bank, None);
+        row.input.splits = Some(vec![part(3_000), part(2_000)]);
+        commit_import(&conn, &bank, vec![row]).unwrap();
+        let rows = list_transactions(&conn, TransactionQuery::default()).unwrap();
+        assert_eq!(rows[0].splits.len(), 2);
+
+        let mut bad = commit_row("2026-05-03", 5_000, "expense", &bank, None);
+        bad.input.splits = Some(vec![part(3_000), part(1_000)]);
+        assert!(commit_import(&conn, &bank, vec![bad]).is_err());
+        // The failed commit left nothing half-done.
+        assert_eq!(list_transactions(&conn, TransactionQuery::default()).unwrap().len(), 1);
+    }
+
+    /// A filing shaped by hand in the review teaches its rule at once, and
+    /// labels set through the ordinary save stick and can be taken off.
+    #[test]
+    fn hand_edits_learn_and_labels_stick() {
+        let conn = book();
+        let bank = account(&conn, "Bank", "bank", 0);
+        let mut row = commit_row("2026-05-02", 5_000, "expense", &bank, None);
+        row.learn = true;
+        commit_import(&conn, &bank, vec![row]).unwrap();
+
+        let next = statement_row(
+            "2026-06-02",
+            "UPI-SOMEONE-SOMEONE@AXIS-2026-06-02",
+            7_000,
+            "debit",
+        );
+        let preview = preview_import(&conn, &bank, vec![next]).unwrap();
+        assert!(preview[0].from_rule && preview[0].rule_confirmed);
+
+        let label = save_label(
+            &conn,
+            LabelInput { id: None, name: "Trip".into(), color: "#118AE4".into() },
+        )
+        .unwrap();
+        let tx = list_transactions(&conn, TransactionQuery::default())
+            .unwrap()
+            .remove(0);
+        let relabel = |ids: Vec<String>| TransactionInput {
+            id: Some(tx.id.clone()),
+            kind: tx.kind.clone(),
+            amount: tx.amount,
+            account_id: tx.account_id.clone(),
+            to_account_id: None,
+            category_id: None,
+            merchant: tx.merchant.clone(),
+            note: tx.note.clone(),
+            occurred_at: tx.occurred_at.clone(),
+            splits: None,
+            shares: None,
+            label_ids: Some(ids),
+        };
+        let saved = save_transaction(&conn, relabel(vec![label.id.clone()])).unwrap();
+        assert_eq!(saved.labels.len(), 1);
+        assert_eq!(saved.labels[0].name, "Trip");
+        let saved = save_transaction(&conn, relabel(vec![])).unwrap();
+        assert!(saved.labels.is_empty());
+
+        // Deleting the label never touches the postings that wore it.
+        delete_label(&conn, &label.id).unwrap();
+        assert!(list_labels(&conn).unwrap().iter().all(|l| l.name != "Trip"));
+    }
+
+    fn deposit(conn: &Connection, kind: &str, account: Option<String>, rate_pct: f64,
+               opened: &str, matures: &str) -> String {
+        save_holding(
+            conn,
+            HoldingInput {
+                id: None,
+                kind: kind.into(),
+                name: "Term deposit".into(),
+                account_id: account,
+                scheme_code: None,
+                isin: None,
+                purity_e4: None,
+                grams_e4: None,
+                acquired_on: None,
+                rate_e4: Some((rate_pct * 10_000.0) as Scaled),
+                opened_on: Some(opened.into()),
+                matures_on: Some(matures.into()),
+                note: None,
+                closed: None,
+            },
+        )
+        .unwrap();
+        conn.query_row(
+            "SELECT id FROM holdings WHERE kind = ?1 ORDER BY created_at DESC LIMIT 1",
+            params![kind],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// A deposit is worth what it has earned: quarterly compounding from the
+    /// day each instalment went in, and nothing after maturity.
+    #[test]
+    fn deposits_earn_rather_than_being_priced() {
+        // ₹1,00,000 at 8% for a year, compounded quarterly, is 1.08243 times
+        // the principal — the figure a bank quotes on a one-year FD.
+        let a_year = deposit_value(
+            Some(80_000),
+            Some("2027-01-01"),
+            NaiveDate::from_ymd_opt(2027, 1, 1).unwrap(),
+            &[(NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(), 10_000_000)],
+        );
+        assert!((a_year - 10_824_300).abs() < 1_000, "got {a_year}");
+
+        // Past maturity it stops: the same figure, whenever you look.
+        let later = deposit_value(
+            Some(80_000),
+            Some("2027-01-01"),
+            NaiveDate::from_ymd_opt(2029, 6, 1).unwrap(),
+            &[(NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(), 10_000_000)],
+        );
+        assert_eq!(later, a_year);
+
+        // No rate, no growth — a deposit recorded without its terms is worth
+        // exactly what went into it rather than nothing.
+        assert_eq!(
+            deposit_value(None, None, NaiveDate::from_ymd_opt(2030, 1, 1).unwrap(),
+                          &[(NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(), 5_000)]),
+            5_000
+        );
+    }
+
+    /// The money is already in the investment account; only what the deposit
+    /// has earned on top is new.
+    #[test]
+    fn a_deposit_adds_only_its_interest_to_net_worth() {
+        let conn = book();
+        let bank = account(&conn, "Bank", "bank", 1_000_000);
+        let vault = account(&conn, "Deposits", "investment", 0);
+        let fd = deposit(&conn, "fd", Some(vault.clone()), 8.0, "2026-01-01", "2027-01-01");
+        save_investment_lot(
+            &conn,
+            InvestmentLotInput {
+                id: None,
+                holding_id: fd.clone(),
+                kind: "buy".into(),
+                // Deposits are measured by their money; the quantity is
+                // filled in for us.
+                quantity_e4: 1,
+                amount: 500_000,
+                occurred_at: "2026-01-01".into(),
+                allotted_at: None,
+                note: None,
+                cash_account_id: Some(bank.clone()),
+                transaction_id: None,
+            },
+        )
+        .unwrap();
+
+        // The transfer moved the money without spending it.
+        assert_eq!(balance_of(&conn, &bank), 500_000);
+        let held = list_holdings(&conn).unwrap();
+        let held = held.iter().find(|h| h.id == fd).unwrap();
+        assert_eq!(held.invested, 500_000);
+        // Worth more than went in, and its maturity figure is quoted.
+        assert!(held.market_value > 500_000);
+        assert!(held.maturity_value > held.market_value);
+        assert_eq!(held.total_return, held.market_value - 500_000);
+
+        // Net worth is the accounts plus what the deposit has earned — the
+        // principal is already sitting in the investment account.
+        let accounts = list_accounts(&conn).unwrap();
+        let vault_row = accounts.iter().find(|a| a.id == vault).unwrap();
+        assert_eq!(vault_row.balance, 500_000);
+        assert_eq!(vault_row.revaluation, held.market_value - 500_000);
+    }
+
+    /// A repayment that posts its own transfer moves the money into the
+    /// account it landed in and leaves net worth where it was: what came
+    /// back was already counted as owed.
+    #[test]
+    fn repayments_can_post_their_own_transfer() {
+        let conn = book();
+        let bank = account(&conn, "Bank", "bank", 500_000);
+        save_debt(
+            &conn,
+            DebtInput {
+                id: None,
+                direction: "lent".into(),
+                counterparty: "Asha".into(),
+                principal: 100_000,
+                opened_on: "2026-08-01".into(),
+                due_on: None,
+                note: None,
+                transaction_id: None,
+                settled: None,
+            },
+        )
+        .unwrap();
+        let debt_id = list_debts(&conn).unwrap()[0].id.clone();
+        // Lent but not yet posted: the money is out with her, and net worth
+        // counts it as owed rather than as cash.
+        let before = net_worth(&conn);
+        assert_eq!(before, 500_000 + 100_000);
+
+        save_debt_payment(
+            &conn,
+            DebtPaymentInput {
+                id: None,
+                debt_id: debt_id.clone(),
+                amount: 40_000,
+                occurred_at: "2026-08-20".into(),
+                note: None,
+                transaction_id: None,
+                cash_account_id: Some(bank.clone()),
+            },
+        )
+        .unwrap();
+
+        // The money is in the account now, and no longer owed — so the total
+        // has not moved, only what it is made of.
+        assert_eq!(net_worth(&conn), before);
+        let debt = &list_debts(&conn).unwrap()[0];
+        assert_eq!(debt.paid, 40_000);
+        assert_eq!(debt.outstanding, 60_000);
+        let payment = &debt.payments[0];
+        assert_eq!(payment.cash_account_id.as_deref(), Some(bank.as_str()));
+
+        // The posting it wrote is a transfer into the account, against the
+        // archived account that stands for what is out with people.
+        let tx = get_transaction(&conn, payment.transaction_id.as_deref().unwrap()).unwrap();
+        assert_eq!(tx.kind, "transfer");
+        assert_eq!(tx.to_account_id.as_deref(), Some(bank.as_str()));
+        assert_eq!(tx.account_name, DEBT_ACCOUNT);
+
+        // Removing the repayment takes its posting with it, and the account
+        // goes back to where it started.
+        delete_debt_payment(&conn, &payment.id).unwrap();
+        assert!(get_transaction(&conn, &tx.id).is_err());
+        assert_eq!(net_worth(&conn), before);
+    }
+
+    /// A row the balance has already seen leaves every balance where it
+    /// stood — the openings absorb it — while the rest move balances as
+    /// usual, whatever their dates.
+    #[test]
+    fn rows_marked_already_counted_leave_balances_alone() {
+        let conn = book();
+        let bank = account(&conn, "Bank", "bank", 100_000);
+        let funds = account(&conn, "Funds", "investment", 0);
+        // The book's own record ends 1 June.
+        save_transaction(
+            &conn,
+            TransactionInput {
+                id: None,
+                kind: "expense".into(),
+                amount: 10_000,
+                account_id: bank.clone(),
+                to_account_id: None,
+                category_id: None,
+                merchant: "Latest".into(),
+                note: None,
+                occurred_at: "2026-06-01T10:00".into(),
+                splits: None,
+                shares: None,
+                label_ids: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(balance_of(&conn, &bank), 90_000);
+
+        // An expense and a SIP the balance has already seen: recorded for
+        // the record, but no balance anywhere moves — not the account's,
+        // not the fund's, so not net worth either.
+        let neutral = |mut r: ImportCommitRow| {
+            r.affects_balance = false;
+            r
+        };
+        let done = commit_import(
+            &conn,
+            &bank,
+            vec![
+                neutral(commit_row("2026-05-02", 5_000, "expense", &bank, None)),
+                neutral(commit_row("2026-05-05", 20_000, "transfer", &bank, Some(&funds))),
+            ],
+        )
+        .unwrap();
+        assert_eq!(done.balance_neutral, 2);
+        assert_eq!(done.opening_adjustment, 25_000);
+        assert_eq!(balance_of(&conn, &bank), 90_000);
+        assert_eq!(balance_of(&conn, &funds), 0);
+
+        // Money the balance has yet to see moves it by exactly itself, and
+        // the date has nothing to do with it: this one is older than both.
+        let done = commit_import(
+            &conn,
+            &bank,
+            vec![commit_row("2026-04-03", 7_000, "expense", &bank, None)],
+        )
+        .unwrap();
+        assert_eq!((done.balance_neutral, done.opening_adjustment), (0, 0));
+        assert_eq!(balance_of(&conn, &bank), 83_000);
     }
 }

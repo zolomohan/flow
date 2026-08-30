@@ -13,11 +13,18 @@ import {
   settleAmount, toLocalInput,
 } from '../lib/format';
 import type { InvestmentLot, Transaction } from '../lib/types';
+import { isDeposit } from '../lib/types';
 import type { Holding, HoldingKind, LotKind, Scheme } from '../lib/types';
 
 const KINDS: SegmentOption<HoldingKind>[] = [
   { value: 'gold', label: 'Gold', icon: 'coins', accent: 'var(--amber)' },
   { value: 'fund', label: 'Mutual fund', icon: 'trending-up', accent: 'var(--violet)' },
+];
+
+/** Which kind of deposit, once the sheet is already on deposits. */
+const DEPOSIT_KINDS: SegmentOption<HoldingKind>[] = [
+  { value: 'fd', label: 'Fixed', icon: 'landmark', accent: 'var(--blue)' },
+  { value: 'rd', label: 'Recurring', icon: 'repeat', accent: 'var(--blue)' },
 ];
 
 const PURITIES: SegmentOption<string>[] = [
@@ -70,6 +77,10 @@ export function HoldingSheet({
   const [purity, setPurity] = useState('9160');
   const [grams, setGrams] = useState('');
   const [acquiredOn, setAcquiredOn] = useState('');
+  // A deposit's terms: what it pays, and the two days that bound it.
+  const [rate, setRate] = useState('');
+  const [openedOn, setOpenedOn] = useState('');
+  const [maturesOn, setMaturesOn] = useState('');
   const [schemeCode, setSchemeCode] = useState<string | null>(null);
   const [isin, setIsin] = useState<string | null>(null);
   const [accountId, setAccountId] = useState<string | null>(null);
@@ -86,6 +97,9 @@ export function HoldingSheet({
       setPurity(String(editing.purityE4 ?? 10_000));
       setGrams(editing.kind === 'gold' ? fromScaled(editing.unitsE4) : '');
       setAcquiredOn(editing.acquiredOn ?? '');
+      setRate(editing.rateE4 ? String(editing.rateE4 / 10_000) : '');
+      setOpenedOn(editing.openedOn ?? '');
+      setMaturesOn(editing.maturesOn ?? '');
       setSchemeCode(editing.schemeCode);
       setIsin(editing.isin);
       setAccountId(editing.accountId);
@@ -97,6 +111,9 @@ export function HoldingSheet({
       setPurity('9160');
       setGrams('');
       setAcquiredOn('');
+      setRate('');
+      setOpenedOn('');
+      setMaturesOn('');
       setSchemeCode(null);
       setIsin(null);
       setAccountId(null);
@@ -130,17 +147,24 @@ export function HoldingSheet({
       return setError('Search for the fund so its NAV can be fetched.');
     }
     if (kind === 'gold' && gramsE4 <= 0) return setError('How many grams?');
+    const deposit = isDeposit(kind);
+    if (deposit && openedOn && maturesOn && maturesOn < openedOn) {
+      return setError("A deposit can't mature before it was opened.");
+    }
     try {
       await saveHolding({
         id: editing?.id ?? null,
         kind,
         name: name.trim(),
-        accountId: kind === 'fund' ? accountId : null,
+        accountId: kind === 'fund' || deposit ? accountId : null,
         schemeCode: kind === 'fund' ? schemeCode : null,
         isin: kind === 'fund' ? isin : null,
         purityE4: kind === 'gold' ? Number(purity) : null,
         gramsE4: kind === 'gold' ? gramsE4 : null,
         acquiredOn: kind === 'gold' && acquiredOn ? acquiredOn : null,
+        rateE4: deposit ? Math.round((evaluateAmount(rate) ?? 0) * 10_000) : null,
+        openedOn: deposit && openedOn ? openedOn : null,
+        maturesOn: deposit && maturesOn ? maturesOn : null,
         note: note.trim() || null,
         closed,
       });
@@ -150,7 +174,11 @@ export function HoldingSheet({
     }
   };
 
-  const accent = kind === 'gold' ? 'var(--amber)' : 'var(--violet)';
+  const accent = isDeposit(kind)
+    ? 'var(--blue)'
+    : kind === 'gold'
+      ? 'var(--amber)'
+      : 'var(--violet)';
 
   return (
     <Sheet
@@ -158,9 +186,13 @@ export function HoldingSheet({
       onClose={onClose}
       title={editing ? 'Edit holding' : 'New holding'}
       subtitle={
-        kind === 'gold'
-          ? 'Physical gold — weigh it and Midas prices it'
-          : 'A mutual fund, tracked by its units'
+        kind === 'fd'
+          ? 'One sum, left to earn until it matures'
+          : kind === 'rd'
+            ? 'Paid in by instalments, each earning from the day it goes in'
+            : kind === 'gold'
+              ? 'Physical gold — weigh it and Midas prices it'
+              : 'A mutual fund, tracked by its units'
       }
       width={520}
       footer={
@@ -201,14 +233,60 @@ export function HoldingSheet({
         }}
       >
         <Segmented
-          options={KINDS}
+          options={isDeposit(kind) ? DEPOSIT_KINDS : KINDS}
           value={kind}
           onChange={setKind}
           name="holding-kind"
           size="lg"
         />
 
-        {kind === 'fund' ? (
+        {isDeposit(kind) ? (
+          <>
+            <Field label="What it is" error={error}>
+              <TextInput
+                value={name}
+                placeholder={kind === 'fd' ? 'HDFC 1-year FD' : 'SBI recurring deposit'}
+                onChange={(e) => { setName(e.target.value); setError(null); }}
+              />
+            </Field>
+            <Field label="Interest rate" hint="what the bank quotes, a year">
+              <div className="rupee-input is-suffix">
+                <TextInput
+                  inputMode="decimal"
+                  value={rate}
+                  placeholder="7.25"
+                  onChange={(e) => { setRate(amountChars(e.target.value)); setError(null); }}
+                  onBlur={() => setRate(settleAmount(rate))}
+                />
+                <span>% a year</span>
+              </div>
+            </Field>
+            <div className="tx-meta">
+              <Field label="Opened">
+                <DateField
+                  value={openedOn}
+                  onChange={setOpenedOn}
+                  placeholder="The day it started"
+                  allowClear
+                />
+              </Field>
+              <Field label="Matures" hint="optional">
+                <DateField
+                  value={maturesOn}
+                  onChange={setMaturesOn}
+                  placeholder="When it comes back"
+                  allowClear
+                />
+              </Field>
+            </div>
+            <p className="field-note">
+              {kind === 'fd'
+                ? 'Record the deposit itself as an entry below once it is saved — link the transfer your bank already shows, or post a new one.'
+                : 'Each instalment is an entry of its own, so a month you missed is simply a month with no entry.'}
+              {' '}Interest compounds quarterly, the way Indian deposits do, and stops at maturity.
+            </p>
+          </>
+        ) : kind === 'fund' ? (
           <SchemePicker
             code={schemeCode}
             name={name}
@@ -271,12 +349,14 @@ export function HoldingSheet({
           </>
         )}
 
-        {kind === 'fund' && (
+        {(kind === 'fund' || isDeposit(kind)) && (
           <Field
             label="Posts into"
             hint={
               investmentAccounts.length
-                ? 'optional — an investment account for purchases to move through'
+                ? isDeposit(kind)
+                  ? 'optional — an investment account for the money to sit in'
+                  : 'optional — an investment account for purchases to move through'
                 : 'add an investment account first to post purchases'
             }
           >
@@ -523,6 +603,9 @@ export function LotSheet({
   })();
 
   const unit = holding.kind === 'gold' ? 'g' : 'units';
+  // A payment into a deposit rather than a purchase of units: the money is
+  // the whole of the entry, and the sheet says so throughout.
+  const intoDeposit = isDeposit(holding.kind);
   const scaled = toScaled(qty);
   const paise = rupeesToPaise(amount);
   // What it works out to per gram or unit, in paise — the number you would
@@ -530,7 +613,9 @@ export function LotSheet({
   const rate = scaled > 0 && paise > 0 ? Math.round((paise / scaled) * 10_000) : 0;
 
   const submit = async () => {
-    if (scaled <= 0) return setError(`How many ${unit}?`);
+    // A deposit has no units to count: what went in is the whole of it.
+    if (intoDeposit && paise <= 0) return setError('How much went in?');
+    if (!intoDeposit && scaled <= 0) return setError(`How many ${unit}?`);
     // Editing a sale shouldn't measure it against a total it is already part
     // of; the backend applies the same rule as the final word.
     const available =
@@ -546,7 +631,8 @@ export function LotSheet({
         id: editing?.id ?? null,
         holdingId: holding.id,
         kind,
-        quantityE4: scaled,
+        // Deposits are stamped with a nominal one by the book itself.
+        quantityE4: intoDeposit ? 10_000 : scaled,
         amount: paise,
         occurredAt,
         allottedAt,
@@ -564,8 +650,24 @@ export function LotSheet({
     <Sheet
       open={open}
       onClose={onClose}
-      title={editing ? 'Edit entry' : kind === 'buy' ? 'Record a purchase' : 'Record a sale'}
-      subtitle={`${holding.name} · ${quantity(holding.unitsE4, unit)} held`}
+      title={
+        intoDeposit
+          ? editing
+            ? 'Edit payment'
+            : holding.kind === 'rd'
+              ? 'Record an instalment'
+              : 'Record the deposit'
+          : editing
+            ? 'Edit entry'
+            : kind === 'buy'
+              ? 'Record a purchase'
+              : 'Record a sale'
+      }
+      subtitle={
+        intoDeposit
+          ? `${holding.name} · ${money(holding.invested - holding.realised)} paid in`
+          : `${holding.name} · ${quantity(holding.unitsE4, unit)} held`
+      }
       width={520}
       footer={
         <>
@@ -592,7 +694,13 @@ export function LotSheet({
             <span className="foot-hint"><kbd>⌘</kbd><kbd>↵</kbd> to save</span>
             <Button tone="ghost" onClick={onClose}>Cancel</Button>
             <Button tone="primary" onClick={submit}>
-              {editing ? 'Save changes' : kind === 'buy' ? 'Record purchase' : 'Record sale'}
+              {editing
+                ? 'Save changes'
+                : intoDeposit
+                  ? 'Record payment'
+                  : kind === 'buy'
+                    ? 'Record purchase'
+                    : 'Record sale'}
             </Button>
           </div>
         </>
@@ -604,32 +712,41 @@ export function LotSheet({
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit();
         }}
       >
-        <Segmented
-          options={LOT_KINDS}
-          value={kind}
-          onChange={(next) => { setKind(next); setError(null); }}
-          name="lot-kind"
-          size="lg"
-        />
+        {!intoDeposit && (
+          <Segmented
+            options={LOT_KINDS}
+            value={kind}
+            onChange={(next) => { setKind(next); setError(null); }}
+            name="lot-kind"
+            size="lg"
+          />
+        )}
 
         <div className="tx-meta">
-          <Field label={holding.kind === 'gold' ? 'Grams' : 'Units'} error={error}>
-            <div className="rupee-input is-suffix">
-              <TextInput
-                autoFocus
-                inputMode="decimal"
-                value={qty}
-                placeholder="0"
-                onChange={(e) => {
-                  setQty(amountChars(e.target.value));
-                  setError(null);
-                }}
-                onBlur={() => setQty(settleAmount(qty))}
-              />
-              <span>{unit}</span>
-            </div>
-          </Field>
-          <Field label={kind === 'buy' ? 'Paid' : 'Received'}>
+          {/* A deposit is measured by its money — there are no units in it,
+              so there is nothing to ask for here. */}
+          {!intoDeposit && (
+            <Field label={holding.kind === 'gold' ? 'Grams' : 'Units'} error={error}>
+              <div className="rupee-input is-suffix">
+                <TextInput
+                  autoFocus
+                  inputMode="decimal"
+                  value={qty}
+                  placeholder="0"
+                  onChange={(e) => {
+                    setQty(amountChars(e.target.value));
+                    setError(null);
+                  }}
+                  onBlur={() => setQty(settleAmount(qty))}
+                />
+                <span>{unit}</span>
+              </div>
+            </Field>
+          )}
+          <Field
+            label={intoDeposit ? 'Amount' : kind === 'buy' ? 'Paid' : 'Received'}
+            error={intoDeposit ? error : undefined}
+          >
             <div className="rupee-input">
               <span>₹</span>
               <TextInput
