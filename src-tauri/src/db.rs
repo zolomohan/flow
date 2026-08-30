@@ -4217,6 +4217,68 @@ mod tests {
         assert!(err.contains("allotment date"), "{err}");
     }
 
+    /// A sub-category is a shade of its group: it is saved in the group's
+    /// colour whatever it was given, and recolouring the group carries.
+    #[test]
+    fn sub_categories_wear_their_groups_colour() {
+        let conn = book();
+        let cat = |name: &str, color: &str, parent: Option<&str>| {
+            save_category(
+                &conn,
+                CategoryInput {
+                    id: None,
+                    kind: "expense".into(),
+                    name: name.into(),
+                    icon: "circle-dashed".into(),
+                    color: color.into(),
+                    parent_id: parent.map(str::to_string),
+                },
+            )
+            .unwrap()
+        };
+
+        let group = cat("Travel", "#118AE4", None);
+        // Asking for a different colour does not get you one.
+        let child = cat("Flights", "#F2724F", Some(&group.id));
+        assert_eq!(child.color, "#118AE4");
+
+        // Repainting the group repaints what is filed under it.
+        save_category(
+            &conn,
+            CategoryInput {
+                id: Some(group.id.clone()),
+                kind: "expense".into(),
+                name: "Travel".into(),
+                icon: "circle-dashed".into(),
+                color: "#42C251".into(),
+                parent_id: None,
+            },
+        )
+        .unwrap();
+        let after = list_categories(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|c| c.id == child.id)
+            .unwrap();
+        assert_eq!(after.color, "#42C251");
+
+        // Lifted back to the top, it keeps the colour it is wearing and is
+        // free to be given another.
+        let lifted = save_category(
+            &conn,
+            CategoryInput {
+                id: Some(child.id.clone()),
+                kind: "expense".into(),
+                name: "Flights".into(),
+                icon: "circle-dashed".into(),
+                color: "#A855F7".into(),
+                parent_id: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(lifted.color, "#A855F7");
+    }
+
     #[test]
     fn gold_folds_spot_the_rupee_and_purity_into_a_gram() {
         // $4456.3999/oz at ₹95.39, marked up 9%, at 22K.

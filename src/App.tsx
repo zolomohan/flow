@@ -16,6 +16,7 @@ import { Accounts } from './screens/Accounts';
 import { Debts } from './screens/Debts';
 import { Investments } from './screens/Investments';
 import { Insights } from './screens/Insights';
+import { Categories } from './screens/Categories';
 import { Settings } from './screens/Settings';
 import { StoreProvider, useStore } from './lib/store';
 import { screenVariants } from './lib/motion';
@@ -279,8 +280,10 @@ function Shell() {
               />
             ) : route === 'insights' ? (
               <Insights onOpenCategory={openCategoryTransactions} />
+            ) : route === 'categories' ? (
+              <Categories onOpenCategory={openCategoryTransactions} />
             ) : (
-              <Settings onOpenCategory={openCategoryTransactions} />
+              <Settings />
             )}
           </motion.div>
         </AnimatePresence>

@@ -2904,6 +2904,26 @@ kbd {
 .cat-row:hover .cat-row-actions,
 .cat-row:focus-within .cat-row-actions { opacity: 1; }
 
+/* A sub-category has no colour of its own — this says whose it wears. */
+.cat-inherited {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 9px 11px;
+  border-radius: var(--r-md);
+  background: var(--surface-inset);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink-2);
+}
+.cat-inherited i {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border-radius: 5px;
+}
+
 .cat-subrows {
   display: grid;
   gap: 2px;
