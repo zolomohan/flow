@@ -274,6 +274,8 @@ export function Transactions({
         icon: c.icon,
         color: c.color,
         child: !!c.parentId,
+        // A group names what is under it; things are filed on the leaves.
+        heading: !c.parentId && categories.some((k) => k.parentId === c.id),
         under: c.parentId
           ? categories.find((p) => p.id === c.parentId)?.name ?? undefined
           : undefined,

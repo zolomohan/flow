@@ -113,6 +113,7 @@ export function TransactionSheet({
     // The sheet opens on a split page only when it was asked for by name —
     // the Split action on a row. Otherwise it opens on the transaction, with
     // whatever divisions it already carries summarised underneath.
+    setBrowsing(null);
     setPage(splitFocus === 'debt' ? 'people' : splitFocus ?? null);
     setBack(false);
     // The whole of it is theirs, so no row of yours holds any of it back.
@@ -173,7 +174,11 @@ export function TransactionSheet({
     .join(', ');
 
   const selected = palette.find((c) => c.id === categoryId) ?? null;
-  const openGroupId = selected ? (selected.parentId ?? selected.id) : null;
+  // A group with something under it is a heading: tapping it opens what is
+  // inside rather than filing the bill against the heading itself. The one it
+  // opens follows the choice when there is one, and is remembered otherwise.
+  const [browsing, setBrowsing] = useState<string | null>(null);
+  const openGroupId = selected ? (selected.parentId ?? selected.id) : browsing;
   const openGroup = groups.find((g) => g.id === openGroupId) ?? null;
 
   useEffect(() => {
@@ -706,7 +711,15 @@ export function TransactionSheet({
                               inside && !active ? 'is-inside' : ''
                             }`}
                             style={{ ['--cat' as any]: group.color }}
-                            onClick={() => setCategoryId(active ? null : group.id)}
+                            onClick={() => {
+                              if (group.children.length) {
+                                setCategoryId(null);
+                                setBrowsing(inside ? null : group.id);
+                                return;
+                              }
+                              setBrowsing(null);
+                              setCategoryId(active ? null : group.id);
+                            }}
                           >
                             <span className="cat-glyph">
                               <Icon name={group.icon} size={15} strokeWidth={2.1} />
@@ -749,7 +762,10 @@ export function TransactionSheet({
                                     type="button"
                                     className={`cat-sub-chip ${active ? 'is-active' : ''}`}
                                     style={{ ['--cat' as any]: child.color }}
-                                    onClick={() => setCategoryId(active ? openGroup.id : child.id)}
+                                    onClick={() => {
+                                setBrowsing(openGroup.id);
+                                setCategoryId(active ? null : child.id);
+                              }}
                                   >
                                     <Icon name={child.icon} size={13} strokeWidth={2.2} />
                                     {child.name}

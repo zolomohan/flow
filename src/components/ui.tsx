@@ -191,6 +191,12 @@ export interface SelectOption {
    * once filtering has flattened the indent away.
    */
   under?: string;
+  /**
+   * A row that names a group rather than offering one: it is what the rows
+   * under it belong to, and picking it would file something against a
+   * heading. Shown, quietened, and inert.
+   */
+  heading?: boolean;
 }
 
 /** Custom listbox — the native one can't carry colour swatches or groups. */
@@ -338,9 +344,15 @@ export function Select({
             <button
               key={option.value}
               type="button"
+              disabled={option.heading}
+              title={
+                option.heading
+                  ? `${option.label} is a group — pick one of the categories under it`
+                  : undefined
+              }
               className={`select-option ${option.value === value ? 'is-active' : ''} ${
                 option.child && !term ? 'is-child' : ''
-              }`}
+              } ${option.heading ? 'is-heading' : ''}`}
               onClick={() => { onChange(option.value); setOpen(false); }}
             >
               <span

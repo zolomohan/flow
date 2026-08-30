@@ -255,7 +255,11 @@ fn migrate(conn: &Connection) -> Result<()> {
         [],
     )
     .map_err(oops)?;
-    seed_categories(conn)
+    seed_categories(conn)?;
+    // A group is a heading rather than a place to file things. Books written
+    // before that was true still have postings sitting on one, and so does a
+    // book where a category grew its first sub-category yesterday.
+    sweep_group_postings(conn)
 }
 
 /// SQLite has no `ADD COLUMN IF NOT EXISTS`, so check the table first. Books
@@ -509,6 +513,106 @@ pub fn list_categories(conn: &Connection) -> Result<Vec<Category>> {
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(oops)
 }
 
+/// Whether anything is filed under this category, making it a group rather
+/// than a place to file things.
+fn is_group(conn: &Connection, id: &str) -> Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM categories WHERE parent_id = ?1)",
+        params![id],
+        |r| r.get::<_, i64>(0),
+    )
+    .map_err(oops)
+    .map(|n| n != 0)
+}
+
+/// A group is a heading, not a category: what it stands for is the sum of
+/// what is under it, and a posting filed against the heading itself is
+/// counted in the group's total while belonging to none of its parts.
+fn refuse_a_group(conn: &Connection, category_id: Option<&str>) -> Result<()> {
+    let Some(id) = category_id else { return Ok(()) };
+    if is_group(conn, id)? {
+        return Err(
+            "That one has sub-categories. Pick the one underneath it that this belongs to."
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+/// The sub-category a group's own postings go to once it stops being a place
+/// to file things — made only when there is something to put in it, and
+/// reused ever after.
+fn others_under(conn: &Connection, parent: &str) -> Result<String> {
+    let existing: Option<String> = conn
+        .query_row(
+            "SELECT id FROM categories WHERE parent_id = ?1 AND name = 'Others'",
+            params![parent],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(oops)?;
+    if let Some(id) = existing {
+        return Ok(id);
+    }
+    let (kind, icon, color): (String, String, String) = conn
+        .query_row(
+            "SELECT kind, icon, color FROM categories WHERE id = ?1",
+            params![parent],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .map_err(oops)?;
+    let next: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM categories WHERE kind = ?1",
+            params![kind],
+            |r| r.get(0),
+        )
+        .map_err(oops)?;
+    let id = new_id();
+    conn.execute(
+        "INSERT INTO categories (id, kind, name, icon, color, sort_order, parent_id)
+         VALUES (?1, ?2, 'Others', ?3, ?4, ?5, ?6)",
+        params![id, kind, icon, color, next, parent],
+    )
+    .map_err(oops)?;
+    Ok(id)
+}
+
+/// Moves whatever is filed against a group itself into an `Others` beneath
+/// it. Runs at every launch, so a book from before the rule — or one where a
+/// category grew its first sub-category yesterday — puts itself right.
+pub fn sweep_group_postings(conn: &Connection) -> Result<()> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT p.id FROM categories p
+             WHERE EXISTS (SELECT 1 FROM categories c WHERE c.parent_id = p.id)
+               AND (EXISTS (SELECT 1 FROM transactions t WHERE t.category_id = p.id)
+                 OR EXISTS (SELECT 1 FROM transaction_splits s WHERE s.category_id = p.id))",
+        )
+        .map_err(oops)?;
+    let groups = stmt
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?;
+    drop(stmt);
+
+    for group in groups {
+        let others = others_under(conn, &group)?;
+        conn.execute(
+            "UPDATE transactions SET category_id = ?2 WHERE category_id = ?1",
+            params![group, others],
+        )
+        .map_err(oops)?;
+        conn.execute(
+            "UPDATE transaction_splits SET category_id = ?2 WHERE category_id = ?1",
+            params![group, others],
+        )
+        .map_err(oops)?;
+    }
+    Ok(())
+}
+
 pub fn save_category(conn: &Connection, input: CategoryInput) -> Result<Category> {
     // Nesting is exactly one level deep, and a category can never be its own
     // ancestor — reject anything that would build a deeper or cyclic tree.
@@ -583,6 +687,12 @@ pub fn save_category(conn: &Connection, input: CategoryInput) -> Result<Category
             id
         }
     };
+    // Whatever was filed against the new parent belongs under it now, not on
+    // it: a group is a heading, and its own postings become its `Others`.
+    if let Some(parent) = &parent_id {
+        sweep_group_postings(conn)?;
+        let _ = parent;
+    }
     conn.query_row(
         "SELECT id, kind, name, icon, color, sort_order, parent_id FROM categories WHERE id = ?1",
         params![id],
@@ -684,6 +794,7 @@ pub fn reassign_category(
     if category_kind(conn, from)? != category_kind(conn, to)? {
         return Err("Income and expense categories can't be mixed.".into());
     }
+    refuse_a_group(conn, Some(to))?;
     move_transactions(conn, &sources, Some(to))
 }
 
@@ -696,6 +807,7 @@ pub fn delete_category(
     reassign_to: Option<String>,
     delete_children: bool,
 ) -> Result<()> {
+    refuse_a_group(conn, reassign_to.as_deref())?;
     let mut doomed = vec![id.to_string()];
     if delete_children {
         doomed.extend(child_ids(conn, id)?);
@@ -1056,6 +1168,9 @@ fn replace_splits(
         if splits.iter().any(|s| s.amount <= 0) {
             return Err("Every part of a split needs an amount greater than zero.".into());
         }
+        for part in splits {
+            refuse_a_group(conn, part.category_id.as_deref())?;
+        }
         let total: Paise = splits.iter().map(|s| s.amount).sum();
         if total != amount {
             return Err(format!(
@@ -1254,6 +1369,7 @@ pub fn save_transaction(conn: &Connection, input: TransactionInput) -> Result<Tr
     } else {
         input.category_id.filter(|c| !c.is_empty())
     };
+    refuse_a_group(conn, category_id.as_deref())?;
     let to_account_id = if input.kind == "transfer" {
         input.to_account_id
     } else {
@@ -1370,6 +1486,7 @@ pub fn update_transactions(
     let category_id = patch.category_id.filter(|c| !c.is_empty());
     // The side of the ledger the category sits on: an expense cannot be filed
     // under an income category without the totals going wrong.
+    refuse_a_group(conn, category_id.as_deref())?;
     let category_kind: Option<String> = match &category_id {
         Some(id) => Some(
             conn.query_row("SELECT kind FROM categories WHERE id = ?1", params![id], |r| {
@@ -4982,6 +5099,74 @@ mod tests {
         let month = overview(&conn, "2026-08", 1).unwrap();
         assert_eq!(month.expense, 0);
         assert_eq!(month.lent_outstanding, 500_000);
+    }
+
+    /// A group is a heading: what it stands for is the sum of what is under
+    /// it. A posting filed against the heading itself would be counted in the
+    /// group and belong to none of its parts, so it is moved under one — and
+    /// nothing can be filed there again.
+    #[test]
+    fn a_group_is_not_a_place_to_file_things() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 5_000_000);
+        let health = category(&conn, "Health", None);
+        let tx = bill(&conn, &bank, 100_000, Some(health.clone()));
+
+        // Filed on it while it was a category in its own right, which it was.
+        assert_eq!(get_transaction(&conn, &tx.id).unwrap().category_id.as_deref(), Some(health.as_str()));
+
+        // Growing its first sub-category makes it a heading, and what was
+        // filed on it goes under it.
+        let pharmacy = category(&conn, "Pharmacy", Some(health.clone()));
+        let moved = get_transaction(&conn, &tx.id).unwrap();
+        assert_ne!(moved.category_id.as_deref(), Some(health.as_str()));
+        assert_eq!(moved.category_name.as_deref(), Some("Others"));
+        assert_eq!(moved.category_group_name.as_deref(), Some("Health"));
+
+        // And it cannot be filed back on the heading, one way or the other.
+        let direct = save_transaction(
+            &conn,
+            TransactionInput {
+                id: None,
+                kind: "expense".into(),
+                amount: 20_000,
+                account_id: bank.clone(),
+                to_account_id: None,
+                category_id: Some(health.clone()),
+                merchant: "Chemist".into(),
+                note: None,
+                occurred_at: "2026-08-16T10:00".into(),
+                splits: None,
+                shares: None,
+            },
+        );
+        assert!(direct.is_err(), "a group cannot take a posting of its own");
+
+        let one = bill(&conn, &bank, 60_000, Some(pharmacy.clone()));
+        let parts = resplit(
+            &conn,
+            &one,
+            Some(vec![part(30_000, &health), part(30_000, &pharmacy)]),
+            None,
+        );
+        assert!(parts.is_err(), "nor a part of one");
+
+        let sweep = update_transactions(
+            &conn,
+            &[one.id.clone()],
+            TransactionPatch { category_id: Some(health.clone()), ..Default::default() },
+        );
+        assert!(sweep.is_err(), "nor a change made over many at once");
+
+        // The `Others` it made is reused rather than piling up.
+        let others: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM categories WHERE parent_id = ?1 AND name = 'Others'",
+                params![health],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(others, 1);
     }
 
     #[test]

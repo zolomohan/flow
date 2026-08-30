@@ -312,6 +312,9 @@ function CategorySheet({
     if (mode === 'move' && scope === 'all') children.forEach((c) => gone.add(c.id));
     return categories
       .filter((c) => c.kind === editing.kind && !gone.has(c.id))
+      // A group is a heading: nothing is filed on it, so nothing can be moved
+      // onto it either. Its children are what the transactions can land in.
+      .filter((c) => !categories.some((k) => k.parentId === c.id))
       .map((c) => ({
         value: c.id,
         label: c.name,
@@ -320,7 +323,7 @@ function CategorySheet({
         hint: categoryUsage[c.id] ? plural(categoryUsage[c.id]) : undefined,
         group: c.parentId
           ? categories.find((p) => p.id === c.parentId)?.name ?? 'Sub-categories'
-          : 'Groups',
+          : 'Categories',
       }));
   }, [categories, categoryUsage, children, childFate, editing, mode, scope]);
 
