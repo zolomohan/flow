@@ -519,15 +519,11 @@ export function TransactionSheet({
             )}
           </div>
           <div className="foot-actions">
-            {page ? (
-              <Button tone="ghost" icon="chevron-left" onClick={leavePage}>
-                Back
-              </Button>
-            ) : (
-              <Button tone="ghost" onClick={onClose}>
-                Cancel
-              </Button>
-            )}
+            {/* Cancel means the transaction, wherever you are in it. The way
+                back out of a split is the arrow in the header. */}
+            <Button tone="ghost" onClick={onClose}>
+              Cancel
+            </Button>
             {/* The shortcut belongs on the thing it presses. */}
             <Button tone="primary" onClick={submit} disabled={saving}>
               {editing ? 'Save changes' : 'Add transaction'}
