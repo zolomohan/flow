@@ -61,7 +61,10 @@ export function TransactionSheet({
   const [saving, setSaving] = useState(false);
   const [lines, setLines] = useState<SplitLine[]>([]);
   const [people, setPeople] = useState<SplitPeople>(emptyPeople);
-  const [panel, setPanel] = useState<SplitFocus | null>(null);
+  // Both panels can be open at once. They divide the same bill along
+  // different lines — one by category, one by who owes what — so opening the
+  // second is no reason to fold the first away and forget it was there.
+  const [panels, setPanels] = useState<SplitFocus[]>([]);
   // True while the category rows are still the halves the panel seeded and
   // nothing has been typed into them — so merely looking never splits a bill.
   const [seeded, setSeeded] = useState(false);
@@ -97,10 +100,11 @@ export function TransactionSheet({
     }
     // A panel opens by itself when there is already something in it, or when
     // the sheet was opened by the Split action rather than by the row.
-    setPanel(
-      splitFocus ??
-        (editing?.shares.length ? 'people' : editing?.splits.length ? 'categories' : null),
-    );
+    const showing = new Set<SplitFocus>();
+    if (editing?.splits.length) showing.add('categories');
+    if (editing?.shares.length) showing.add('people');
+    if (splitFocus) showing.add(splitFocus);
+    setPanels([...showing]);
     setError(null);
     const focus = window.setTimeout(() => amountRef.current?.focus(), 220);
     return () => window.clearTimeout(focus);
@@ -171,8 +175,8 @@ export function TransactionSheet({
   // Closing it again without touching them puts the bill back as it was:
   // looking inside a panel is not the same as asking for a split.
   const togglePanel = (which: SplitFocus) => {
-    const closing = panel === which;
-    setPanel(closing ? null : which);
+    const closing = panels.includes(which);
+    setPanels(closing ? panels.filter((p) => p !== which) : [...panels, which]);
     if (which !== 'categories') return;
     if (closing) {
       if (seeded) {
@@ -541,7 +545,7 @@ export function TransactionSheet({
                       ? `${lines.length} parts of ${money(paise)} · ${partNames || 'pick categories'}`
                       : 'File one bill under more than one category'
                   }
-                  open={panel === 'categories'}
+                  open={panels.includes('categories')}
                   onToggle={() => togglePanel('categories')}
                 >
                   <SplitLinesEditor
@@ -566,7 +570,7 @@ export function TransactionSheet({
                         ? 'Owe part of this to the people it was for'
                         : 'Turn everyone else’s share into a debt they owe you'
                   }
-                  open={panel === 'people'}
+                  open={panels.includes('people')}
                   onToggle={() => togglePanel('people')}
                 >
                   <SplitPeopleEditor
