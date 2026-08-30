@@ -108,6 +108,11 @@ export function Sparkline({
  * pointer. Days are plotted evenly rather than by calendar distance: a NAV is
  * only published on business days, and spacing the gaps would leave the line
  * limping across every long weekend for no information gained.
+ *
+ * The measuring is split from the drawing on purpose. The host below is
+ * rendered whatever happens, so the observer always has something to watch —
+ * hand the width back to a chart that only renders once it has one and the
+ * two wait on each other for ever.
  */
 export function PriceChart({
   points, height = 240, stroke = 'var(--violet)', reference, referenceLabel,
@@ -119,10 +124,8 @@ export function PriceChart({
   reference?: number | null;
   referenceLabel?: string;
 }) {
-  const gradientId = useId();
   const host = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
-  const [hover, setHover] = useState<number | null>(null);
 
   useLayoutEffect(() => {
     const node = host.current;
@@ -133,14 +136,53 @@ export function PriceChart({
     return () => observer.disconnect();
   }, []);
 
+  const ready = width > 0 && points.length > 1;
+  return (
+    <div
+      className={`price-chart ${ready ? '' : 'is-empty'}`}
+      ref={host}
+      style={{ height }}
+    >
+      {ready ? (
+        <PriceLine
+          points={points}
+          width={width}
+          height={height}
+          stroke={stroke}
+          reference={reference}
+          referenceLabel={referenceLabel}
+        />
+      ) : (
+        width > 0 && (
+          <span className="price-chart-empty">
+            Not enough price history yet — refresh prices and it fills in.
+          </span>
+        )
+      )}
+    </div>
+  );
+}
+
+function PriceLine({
+  points, width, height, stroke, reference, referenceLabel,
+}: {
+  points: PricePoint[];
+  width: number;
+  height: number;
+  stroke: string;
+  reference?: number | null;
+  referenceLabel?: string;
+}) {
+  const gradientId = useId();
+  const [hover, setHover] = useState<number | null>(null);
+
   // Room on the right for the axis labels, and a little top and bottom so the
   // high and the low don't sit flush against the frame.
   const gutter = 52;
   const pad = 14;
-  const plot = Math.max(0, width - gutter);
+  const plot = Math.max(1, width - gutter);
 
   const shape = useMemo(() => {
-    if (points.length < 2 || plot <= 0) return null;
     const values = points.map((p) => p.priceE4);
     const low = Math.min(...values);
     const high = Math.max(...values);
@@ -157,8 +199,6 @@ export function PriceChart({
       line,
       area: `${line} L ${plot} ${height} L 0 ${height} Z`,
       coords,
-      low,
-      high,
       lowAt: values.indexOf(low),
       highAt: values.indexOf(high),
       y,
@@ -167,43 +207,33 @@ export function PriceChart({
     };
   }, [points, plot, height]);
 
-  if (!shape) {
-    return (
-      <div className="price-chart-empty" style={{ height }}>
-        <span>Not enough price history yet — refresh prices and it fills in.</span>
-      </div>
-    );
-  }
-
   // Axis labels follow the range rather than the number: a NAV moving between
   // ₹87.20 and ₹88.40 needs its paise, a gold rate in the thousands does not.
   const tickLabel = (e4: number) => {
-    const rupees = e4 / 10_000;
     const spread = shape.span / 10_000;
     const places = spread < 20 ? 2 : spread < 200 ? 1 : 0;
-    return `₹${rupees.toLocaleString('en-IN', {
+    return `₹${(e4 / 10_000).toLocaleString('en-IN', {
       minimumFractionDigits: places,
       maximumFractionDigits: places,
     })}`;
   };
 
-  const at = hover ?? points.length - 1;
+  const at = Math.min(hover ?? points.length - 1, points.length - 1);
   const active = points[at];
   const [activeX, activeY] = shape.coords[at];
-  // Four rules across the range, labelled in rupees on the right.
+  // Five rules across the range, labelled in rupees on the right.
   const ticks = [0, 0.25, 0.5, 0.75, 1].map((t) => shape.floor + shape.span * t);
-  const refY =
-    reference != null && reference > 0 ? shape.y(reference) : null;
+  const refY = reference != null && reference > 0 ? shape.y(reference) : null;
 
   return (
-    <div className="price-chart" ref={host} style={{ height }}>
+    <>
       <svg
         width={width}
         height={height}
         onMouseLeave={() => setHover(null)}
         onMouseMove={(event) => {
           const box = event.currentTarget.getBoundingClientRect();
-          const ratio = (event.clientX - box.left) / (plot || 1);
+          const ratio = (event.clientX - box.left) / plot;
           const index = Math.round(ratio * (points.length - 1));
           setHover(Math.max(0, Math.min(points.length - 1, index)));
         }}
@@ -232,13 +262,7 @@ export function PriceChart({
 
         {refY !== null && refY > 0 && refY < height && (
           <g>
-            <line
-              className="price-reference"
-              x1={0}
-              x2={plot}
-              y1={refY}
-              y2={refY}
-            />
+            <line className="price-reference" x1={0} x2={plot} y1={refY} y2={refY} />
             {referenceLabel && (
               <text className="price-reference-label" x={4} y={refY - 6}>
                 {referenceLabel}
@@ -292,14 +316,12 @@ export function PriceChart({
 
       <div
         className="price-readout"
-        style={{
-          left: Math.min(Math.max(activeX, 0), Math.max(0, plot - 96)),
-        }}
+        style={{ left: Math.min(Math.max(activeX, 0), Math.max(0, plot - 96)) }}
       >
         <strong>{unitPrice(active.priceE4)}</strong>
         <span>{shortDayLabel(active.asOf)}</span>
       </div>
-    </div>
+    </>
   );
 }
 

@@ -3072,6 +3072,15 @@ kbd {
 .price-stat.is-down strong { color: var(--red); }
 
 .price-chart { position: relative; width: 100%; }
+/* Before there is a line to draw — the host still renders, since it is what
+   the width is measured from, and a chart that waited for one would wait for
+   ever. */
+.price-chart.is-empty {
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--line);
+  border-radius: var(--r-lg);
+}
 .price-chart svg { display: block; cursor: crosshair; }
 .price-rule { stroke: var(--line-soft); stroke-width: 1; }
 .price-tick {
@@ -3121,15 +3130,11 @@ kbd {
 .price-readout span { font-size: 11.5px; font-weight: 500; color: var(--ink-4); }
 
 .price-chart-empty {
-  display: grid;
-  place-items: center;
   padding: 0 24px;
   text-align: center;
   font-size: 12.5px;
   font-weight: 500;
   color: var(--ink-4);
-  border: 1px dashed var(--line);
-  border-radius: var(--r-lg);
 }
 
 .price-chart-foot {
