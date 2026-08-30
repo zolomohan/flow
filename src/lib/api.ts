@@ -54,6 +54,7 @@ export const api = {
     call<Transaction[]>('list_transactions', { query: query ?? null }),
   transactionSummary: (query?: TransactionQuery) =>
     call<TransactionSummary>('transaction_summary', { query: query ?? null }),
+  transaction: (id: string) => call<Transaction>('transaction', { id }),
   saveTransaction: (input: TransactionInput) =>
     call<Transaction>('save_transaction', { input }),
   deleteTransaction: (id: string) => call<void>('delete_transaction', { id }),

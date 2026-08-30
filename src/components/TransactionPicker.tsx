@@ -9,12 +9,14 @@ import type { Transaction } from '../lib/types';
  * the record wanted is usually months back and needs finding, not scrolling.
  */
 export function TransactionPicker({
-  value, label, onChange, title = 'Link an existing record', subtitle,
+  value, label, onChange, onOpen, title = 'Link an existing record', subtitle,
 }: {
   value: string | null;
   label: string | null;
   /** The posting itself comes along, so a form can prefill from it. */
   onChange: (id: string | null, label: string | null, tx?: Transaction) => void;
+  /** Opens the linked posting itself, when there is somewhere to open it. */
+  onOpen?: (id: string) => void;
   title?: string;
   subtitle?: string;
 }) {
@@ -26,6 +28,11 @@ export function TransactionPicker({
         <div className="link-chip">
           <Icon name="arrow-left-right" size={14} />
           <span>{label ?? 'Linked record'}</span>
+          {onOpen && (
+            <button type="button" className="link-change" onClick={() => onOpen(value)}>
+              Open
+            </button>
+          )}
           <button type="button" className="link-change" onClick={() => setOpen(true)}>
             Change
           </button>

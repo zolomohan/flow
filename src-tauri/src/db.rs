@@ -1149,7 +1149,7 @@ pub fn transaction_summary(conn: &Connection, q: TransactionQuery) -> Result<Tra
     .map_err(oops)
 }
 
-fn get_transaction(conn: &Connection, id: &str) -> Result<Transaction> {
+pub fn get_transaction(conn: &Connection, id: &str) -> Result<Transaction> {
     let sql = format!("{TX_SELECT}{TX_FROM} WHERE t.id = ?1");
     let mut one = vec![conn
         .query_row(&sql, params![id], tx_from_row)

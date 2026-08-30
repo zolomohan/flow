@@ -15,12 +15,14 @@ const DIRECTIONS: SegmentOption<DebtDirection>[] = [
 ];
 
 export function DebtSheet({
-  open, onClose, editing, seedDirection,
+  open, onClose, editing, seedDirection, onOpenTransaction,
 }: {
   open: boolean;
   onClose: () => void;
   editing?: Debt | null;
   seedDirection?: DebtDirection;
+  /** Opens the posting this debt names, when it names one. */
+  onOpenTransaction?: (id: string) => void;
 }) {
   const { debts, saveDebt, deleteDebt } = useStore();
 
@@ -192,6 +194,7 @@ export function DebtSheet({
             title={direction === 'lent' ? 'Which record was the money you lent?' : 'Which record was the money you borrowed?'}
             subtitle="Search and filter your whole ledger"
             onChange={(id, label) => { setTxId(id); setTxLabel(label); }}
+            onOpen={onOpenTransaction}
           />
         </div>
 
@@ -217,13 +220,15 @@ export function DebtSheet({
 
 /** Recording a repayment against an existing debt. */
 export function DebtPaymentSheet({
-  open, onClose, debt, editing,
+  open, onClose, debt, editing, onOpenTransaction,
 }: {
   open: boolean;
   onClose: () => void;
   debt: Debt | null;
   /** The repayment being changed, when one is. */
   editing?: DebtPayment | null;
+  /** Opens the posting this repayment names, when it names one. */
+  onOpenTransaction?: (id: string) => void;
 }) {
   const { saveDebtPayment, deleteDebtPayment } = useStore();
   const [amount, setAmount] = useState('');
@@ -341,6 +346,7 @@ export function DebtPaymentSheet({
             title="Which record was this repayment?"
             subtitle={`${debt.counterparty} · search and filter your whole ledger`}
             onChange={(id, label) => { setTxId(id); setTxLabel(label); }}
+            onOpen={onOpenTransaction}
           />
         </div>
       </div>

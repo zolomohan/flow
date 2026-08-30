@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Sidebar, type Route } from './components/Sidebar';
+import { api } from './lib/api';
 import { CommandPalette } from './components/CommandPalette';
 import {
   TransactionSheet, type SplitFocus, type TxDraft,
@@ -90,6 +91,23 @@ function Shell() {
     setDraft(next);
     setSplitFocus(null);
     setTxOpen(true);
+  }, []);
+
+  // Opening whatever a debt or a repayment names: the sheet asking gives way
+  // to the posting itself, since one modal over another is nobody's idea of
+  // where they are.
+  const openTransactionById = useCallback(async (id: string) => {
+    try {
+      const tx = await api.transaction(id);
+      setPaying(null);
+      setDebtOpen(false);
+      setDraft(undefined);
+      setEditingTx(tx);
+      setSplitFocus(null);
+      setTxOpen(true);
+    } catch {
+      /* it is gone, and the sheet says nothing rather than the wrong thing */
+    }
   }, []);
 
   const openTransaction = useCallback((tx: Transaction) => {
@@ -321,12 +339,14 @@ function Shell() {
         onClose={() => setDebtOpen(false)}
         editing={editingDebt}
         seedDirection={debtDirection}
+        onOpenTransaction={openTransactionById}
       />
       <DebtPaymentSheet
         open={!!paying}
         onClose={() => setPaying(null)}
         debt={paying?.debt ?? null}
         editing={paying?.payment ?? null}
+        onOpenTransaction={openTransactionById}
       />
       <HoldingSheet
         open={holdingOpen}

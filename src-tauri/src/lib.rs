@@ -87,6 +87,12 @@ fn transaction_summary(db: State<Db>, query: Option<TransactionQuery>) -> R<Tran
     with_db(&db, |c| db::transaction_summary(c, query.unwrap_or_default()))
 }
 
+/// One posting, by id — for opening whatever a debt or a repayment names.
+#[tauri::command]
+fn transaction(db: State<Db>, id: String) -> R<Transaction> {
+    with_db(&db, |c| db::get_transaction(c, &id))
+}
+
 #[tauri::command]
 fn save_transaction(db: State<Db>, input: TransactionInput) -> R<Transaction> {
     with_db(&db, |c| db::save_transaction(c, input))
@@ -288,6 +294,7 @@ pub fn run() {
             delete_category,
             list_transactions,
             transaction_summary,
+            transaction,
             save_transaction,
             delete_transaction,
             update_transactions,
