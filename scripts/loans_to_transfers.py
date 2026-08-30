@@ -62,14 +62,121 @@ def counterparty(merchant: str, note: str) -> str:
     return first or "Unidentified"
 
 
+def rebuild_debts(conn: sqlite3.Connection, account_id: str, book: Path,
+                  backed_up: bool = False) -> int:
+    """Writes one debt per person from the transfers themselves.
+
+    The principal is what the person who gave more actually handed over, the
+    repayments are every movement the other way, and what never came back is
+    left unpaid on a settled debt — which is what forgiving it looks like.
+    Written from the ledger rather than from a running total, so a debt can
+    be thrown away and worked out again.
+    """
+    if not backed_up:
+        backup = book.with_suffix(f".sqlite3.bak-{dt.datetime.now():%Y%m%d-%H%M%S}")
+        conn.execute("VACUUM INTO ?", (str(backup),))
+        print(f"book copied to {backup.name}")
+
+    rows = conn.execute(
+        """SELECT t.id, t.amount, t.occurred_at, t.merchant, COALESCE(t.note, '') note,
+                  t.to_account_id = ? AS outward
+           FROM transactions t
+           WHERE ? IN (t.account_id, t.to_account_id)
+           ORDER BY t.occurred_at""",
+        (account_id, account_id),
+    ).fetchall()
+
+    now = dt.datetime.now(dt.timezone.utc).isoformat()
+    people = collections.defaultdict(list)
+    for row in rows:
+        people[counterparty(row["merchant"], row["note"])].append(row)
+
+    with conn:
+        # Only the ones this script wrote: a debt of your own naming the same
+        # person is none of its business.
+        gone = conn.execute(
+            """DELETE FROM debts
+               WHERE from_split = 0 AND transaction_id IS NULL
+                 AND note LIKE '% out, % back, over %'"""
+        ).rowcount
+        if gone:
+            print(f"{gone} debt records from a previous run cleared")
+
+        written = 0
+        for who, items in sorted(people.items()):
+            out = [r for r in items if r["outward"]]
+            back = [r for r in items if not r["outward"]]
+            gave, got = sum(r["amount"] for r in out), sum(r["amount"] for r in back)
+            # Whoever handed over more holds the debt; the rest is repayment
+            # against it, and what is left of it is what was forgiven.
+            lent = gave >= got
+            principal = max(gave, got)
+            payments = back if lent else out
+            if principal <= 0:
+                continue
+            reasons = set()
+            for item in items:
+                note = item["note"].strip()
+                hit = OUT.match(note) or IN.match(note)
+                if hit and hit.group(2):
+                    reasons.add(hit.group(2).strip())
+            forgiven = principal - sum(r["amount"] for r in payments)
+            story = (
+                f"{gave / 100:,.0f} out, {got / 100:,.0f} back, over "
+                f"{items[0]['occurred_at'][:10]} to {items[-1]['occurred_at'][:10]}."
+            )
+            if forgiven > 0:
+                story += f" {forgiven / 100:,.0f} forgiven."
+            if reasons:
+                story += " " + ", ".join(sorted(reasons))
+            debt_id = str(uuid.uuid4())
+            conn.execute(
+                """INSERT INTO debts (id, direction, counterparty, principal, opened_on,
+                                      due_on, note, settled_at, created_at, transaction_id,
+                                      from_split)
+                   VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, 0)""",
+                (
+                    debt_id,
+                    "lent" if lent else "borrowed",
+                    who,
+                    principal,
+                    items[0]["occurred_at"][:10],
+                    story[:400],
+                    now,
+                    now,
+                ),
+            )
+            for payment in payments:
+                conn.execute(
+                    """INSERT INTO debt_payments (id, debt_id, amount, occurred_at, note,
+                                                  transaction_id, created_at)
+                       VALUES (?, ?, ?, ?, NULL, ?, ?)""",
+                    (
+                        str(uuid.uuid4()),
+                        debt_id,
+                        payment["amount"],
+                        payment["occurred_at"][:10],
+                        payment["id"],
+                        now,
+                    ),
+                )
+            written += 1
+
+    print(f"{written} debt records written from {len(rows)} transfers — principal,"
+          " repayments and whatever was forgiven, every one settled")
+    return 0
+
+
 def main(book: Path) -> int:
     conn = sqlite3.connect(book)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
 
-    if conn.execute("SELECT 1 FROM accounts WHERE name = ?", (HOLDING,)).fetchone():
-        print(f"“{HOLDING}” already exists — this has been run. Nothing to do.")
-        return 1
+    held = conn.execute("SELECT id FROM accounts WHERE name = ?", (HOLDING,)).fetchone()
+    if held:
+        print(f"“{HOLDING}” is already there — leaving the ledger alone and"
+              " writing the debts again from it.")
+        return rebuild_debts(conn, held["id"], book)
 
     rows = conn.execute(
         """SELECT t.id, t.kind, t.amount, t.account_id, t.occurred_at, t.merchant,
@@ -130,56 +237,8 @@ def main(book: Path) -> int:
                     (account_id, row["account_id"], row["id"]),
                 )
 
-        # One record per person, for what is actually left between you: the
-        # movements are on the ledger as transfers now, so what a debt has to
-        # say is who ended up out of pocket and by how much. Everyone who
-        # squared up gets none — there is nothing left to say about them.
-        people = collections.defaultdict(list)
-        for row in moving:
-            people[counterparty(row["merchant"], row["note"])].append(row)
-
-        written = 0
-        for who, items in sorted(people.items()):
-            items.sort(key=lambda r: r["occurred_at"])
-            net = sum(
-                r["amount"] if r["kind"] == "expense" else -r["amount"] for r in items
-            )
-            if net == 0:
-                continue
-            reasons = set()
-            for item in items:
-                note = item["note"].strip()
-                hit = OUT.match(note) or IN.match(note)
-                if hit and hit.group(2):
-                    reasons.add(hit.group(2).strip())
-            gave = sum(r["amount"] for r in items if r["kind"] == "expense")
-            back = sum(r["amount"] for r in items if r["kind"] == "income")
-            story = (
-                f"{gave / 100:,.0f} out, {back / 100:,.0f} back, over "
-                f"{items[0]['occurred_at'][:10]} to {items[-1]['occurred_at'][:10]}. "
-                "Forgiven."
-            )
-            if reasons:
-                story += " " + ", ".join(sorted(reasons))
-            conn.execute(
-                """INSERT INTO debts (id, direction, counterparty, principal, opened_on,
-                                      due_on, note, settled_at, created_at, transaction_id,
-                                      from_split)
-                   VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, 0)""",
-                (
-                    str(uuid.uuid4()),
-                    "lent" if net > 0 else "borrowed",
-                    who,
-                    abs(net),
-                    items[0]["occurred_at"][:10],
-                    story[:400],
-                    now,
-                    now,
-                ),
-            )
-            written += 1
-        print(f"\n{written} debt records written — the people who did not square up,"
-              f" every one settled")
+    print()
+    rebuild_debts(conn, account_id, book, backed_up=True)
 
     left = conn.execute(
         """SELECT c.name, COUNT(*) FROM transactions t JOIN categories c ON c.id = t.category_id
