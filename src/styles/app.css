@@ -418,7 +418,6 @@ kbd {
 .segment {
   position: relative;
   flex: 1;
-  min-width: 0;
   border-radius: 9px;
   color: var(--ink-2);
   font-weight: 500;
@@ -427,7 +426,7 @@ kbd {
 }
 .segmented-sm .segment { padding: 5px 11px; font-size: 12.5px; border-radius: 6px; }
 .segmented-md .segment { padding: 6px 14px; font-size: 13px; }
-.segmented-lg .segment { padding: 9px 12px; font-size: 14px; border-radius: var(--r-md); }
+.segmented-lg .segment { padding: 9px 16px; font-size: 14px; border-radius: var(--r-md); }
 
 .segment:hover { color: var(--ink); }
 .segment.is-active { color: var(--seg-accent, var(--ink)); font-weight: 600; }
@@ -446,13 +445,8 @@ kbd {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  min-width: 0;
-  max-width: 100%;
 }
 .segment-label svg { flex: none; }
-/* Four tabs in a column sized for three: the word gives way rather than the
-   row pushing out of it. */
-.segment-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 /* =================================================================
    Fields
