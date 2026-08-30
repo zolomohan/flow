@@ -464,7 +464,19 @@ export function Sheet({
                 </AnimatePresence>
                 <IconButton icon="x" label="Close" onClick={onClose} />
               </header>
-              <div className="sheet-body">{children}</div>
+              <div className="sheet-body">
+                {/* The content is laid out at the width the sheet is heading
+                    for, not the one it is passing through. A sheet that grows
+                    a column would otherwise reflow at every width on the way —
+                    two columns squeezed into six hundred pixels, wrapping down
+                    the page — and lurch taller before settling back. */}
+                <div
+                  className="sheet-canvas"
+                  style={{ width: `min(${width - 44}px, calc(100vw - 92px))` }}
+                >
+                  {children}
+                </div>
+              </div>
               {footer && <footer className="sheet-foot">{footer}</footer>}
             </motion.div>
           </motion.div>

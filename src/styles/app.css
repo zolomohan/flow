@@ -657,6 +657,10 @@ kbd {
   flex-direction: column;
   width: 100%;
   max-height: min(86vh, 820px);
+  /* Some sheets grow a column as you fill them in — glide rather than jump.
+     What is inside is sized for where the glide is going, so the width is the
+     only thing that moves. */
+  transition: max-width var(--base) var(--ease);
   border-radius: var(--r-3xl);
   background: var(--surface);
   border: 1px solid var(--line-soft);
@@ -677,6 +681,9 @@ kbd {
 .sheet-sub { margin-top: 2px; font-size: 13px; color: var(--ink-3); font-weight: 500; }
 
 .sheet-body { padding: 0 22px 22px; overflow-y: auto; overflow-x: hidden; }
+/* Its width is set inline, from the sheet's own target — deliberately not
+   from its parent, which is the thing that moves. */
+.sheet-canvas { flex: none; }
 
 .sheet-foot {
   display: flex;
