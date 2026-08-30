@@ -1306,6 +1306,136 @@ pub fn save_transaction(conn: &Connection, input: TransactionInput) -> Result<Tr
     get_transaction(conn, &id)
 }
 
+/// Applies one change to many postings.
+///
+/// Every rule the single form enforces holds here too, and a posting the
+/// change cannot apply to is left alone rather than bent to fit: a transfer
+/// has no category, a category belongs to one side of the ledger, and a bill
+/// already split into parts takes its category from the largest of them
+/// rather than from anything set on the row. Those come back as `skipped`,
+/// so the screen can say so instead of quietly doing less than it claimed.
+pub fn update_transactions(
+    conn: &Connection,
+    ids: &[String],
+    patch: TransactionPatch,
+) -> Result<BulkResult> {
+    if ids.is_empty() {
+        return Ok(BulkResult { changed: 0, skipped: 0 });
+    }
+    let clear_category = patch.clear_category.unwrap_or(false);
+    let category_id = patch.category_id.filter(|c| !c.is_empty());
+    // The side of the ledger the category sits on: an expense cannot be filed
+    // under an income category without the totals going wrong.
+    let category_kind: Option<String> = match &category_id {
+        Some(id) => Some(
+            conn.query_row("SELECT kind FROM categories WHERE id = ?1", params![id], |r| {
+                r.get(0)
+            })
+            .optional()
+            .map_err(oops)?
+            .ok_or("That category no longer exists.")?,
+        ),
+        None => None,
+    };
+    let account_id = patch.account_id.filter(|a| !a.is_empty());
+    if let Some(id) = &account_id {
+        // Reusing the existing check: it errors if the account is gone.
+        account_kind(conn, id)?;
+    }
+    let merchant = patch.merchant.map(|m| m.trim().to_string());
+    let clear_note = patch.clear_note.unwrap_or(false);
+
+    let guard = conn.unchecked_transaction().map_err(oops)?;
+    let mut changed = 0;
+    let mut skipped = 0;
+
+    for id in ids {
+        let row: Option<(String, Option<String>, Option<String>, i64)> = conn
+            .query_row(
+                "SELECT t.kind, t.account_id, t.to_account_id,
+                        (SELECT COUNT(*) FROM transaction_splits s WHERE s.transaction_id = t.id)
+                 FROM transactions t WHERE t.id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()
+            .map_err(oops)?;
+        let Some((kind, _from, to_account, parts)) = row else {
+            skipped += 1;
+            continue;
+        };
+
+        let mut sets: Vec<&str> = Vec::new();
+        let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        let mut refused = false;
+
+        if clear_category || category_id.is_some() {
+            let allowed = kind != "transfer"
+                && parts == 0
+                && category_kind.as_deref().is_none_or(|c| c == kind);
+            if allowed {
+                sets.push("category_id = ?");
+                args.push(Box::new(if clear_category { None } else { category_id.clone() }));
+            } else {
+                refused = true;
+            }
+        }
+        if let Some(account) = &account_id {
+            // Moving a transfer onto the account it already pays into would
+            // leave it moving money to itself.
+            if to_account.as_deref() == Some(account.as_str()) {
+                refused = true;
+            } else {
+                sets.push("account_id = ?");
+                args.push(Box::new(account.clone()));
+            }
+        }
+        if let Some(name) = &merchant {
+            sets.push("merchant = ?");
+            args.push(Box::new(name.clone()));
+        }
+        if clear_note {
+            sets.push("note = ?");
+            args.push(Box::new(None::<String>));
+        } else if let Some(note) = &patch.note {
+            sets.push("note = ?");
+            args.push(Box::new(note.trim().to_string()));
+        }
+
+        if sets.is_empty() {
+            if refused {
+                skipped += 1;
+            }
+            continue;
+        }
+        args.push(Box::new(id.clone()));
+        let sql = format!("UPDATE transactions SET {} WHERE id = ?", sets.join(", "));
+        conn.execute(&sql, params_from_iter(args.iter().map(|a| a.as_ref())))
+            .map_err(oops)?;
+        if refused {
+            skipped += 1;
+        } else {
+            changed += 1;
+        }
+    }
+
+    guard.commit().map_err(oops)?;
+    Ok(BulkResult { changed, skipped })
+}
+
+/// Deletes a run of postings, and whatever they alone were holding up.
+pub fn delete_transactions(conn: &Connection, ids: &[String]) -> Result<i64> {
+    let guard = conn.unchecked_transaction().map_err(oops)?;
+    let mut gone = 0;
+    for id in ids {
+        gone += conn
+            .execute("DELETE FROM transactions WHERE id = ?1", params![id])
+            .map_err(oops)? as i64;
+    }
+    guard.commit().map_err(oops)?;
+    Ok(gone)
+}
+
 pub fn delete_transaction(conn: &Connection, id: &str) -> Result<()> {
     conn.execute("DELETE FROM transactions WHERE id = ?1", params![id])
         .map_err(oops)?;

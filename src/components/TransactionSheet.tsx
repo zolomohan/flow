@@ -469,16 +469,33 @@ export function TransactionSheet({
                   : 'Money leaving an account',
           };
 
-  // ⌘↵ saves from either page. Escape steps back out of a split first, since
-  // leaving the page is what it means there — the sheet's own Escape only
-  // gets it once there is nothing left to go back to.
+  // Escape steps back out of a split first, since leaving the page is what it
+  // means there — the sheet's own Escape only gets it once there is nothing
+  // left to go back to.
   const onKeys = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit();
     if (e.key === 'Escape' && page) {
       e.stopPropagation();
       leavePage();
     }
   };
+
+  // ⌘↵ saves from wherever you are in the sheet. It listens on the document
+  // rather than on the form, because the footer, the header and the split
+  // menu are all outside the form and the shortcut is about the sheet.
+  //
+  // It listens as the event bubbles, not on the way down, so a field that
+  // takes Enter for itself — the box you type a name into on the people page
+  // — still stops the sheet from saving out from under it.
+  const shortcut = useRef<(e: KeyboardEvent) => void>(() => {});
+  shortcut.current = (e: KeyboardEvent) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit();
+  };
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => shortcut.current(e);
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open]);
 
   return (
     <Sheet

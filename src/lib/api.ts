@@ -14,8 +14,10 @@ import type {
   Overview,
   PricePoint,
   ValuePoint,
+  BulkResult,
   Transaction,
   TransactionInput,
+  TransactionPatch,
   TransactionQuery,
   TransactionSummary,
 } from './types';
@@ -55,6 +57,9 @@ export const api = {
   saveTransaction: (input: TransactionInput) =>
     call<Transaction>('save_transaction', { input }),
   deleteTransaction: (id: string) => call<void>('delete_transaction', { id }),
+  updateTransactions: (ids: string[], patch: TransactionPatch) =>
+    call<BulkResult>('update_transactions', { ids, patch }),
+  deleteTransactions: (ids: string[]) => call<number>('delete_transactions', { ids }),
 
   overview: (month: string, span = 1) => call<Overview>('overview', { month, span }),
 

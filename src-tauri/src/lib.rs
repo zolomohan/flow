@@ -92,6 +92,21 @@ fn save_transaction(db: State<Db>, input: TransactionInput) -> R<Transaction> {
     with_db(&db, |c| db::save_transaction(c, input))
 }
 
+/// One change over many postings — the ledger's own bulk edit.
+#[tauri::command]
+fn update_transactions(
+    db: State<Db>,
+    ids: Vec<String>,
+    patch: TransactionPatch,
+) -> R<BulkResult> {
+    with_db(&db, |c| db::update_transactions(c, &ids, patch))
+}
+
+#[tauri::command]
+fn delete_transactions(db: State<Db>, ids: Vec<String>) -> R<i64> {
+    with_db(&db, |c| db::delete_transactions(c, &ids))
+}
+
 #[tauri::command]
 fn delete_transaction(db: State<Db>, id: String) -> R<()> {
     with_db(&db, |c| db::delete_transaction(c, &id))
@@ -264,6 +279,8 @@ pub fn run() {
             transaction_summary,
             save_transaction,
             delete_transaction,
+            update_transactions,
+            delete_transactions,
             overview,
             list_debts,
             save_debt,

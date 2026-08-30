@@ -162,6 +162,25 @@ export interface TransactionInput {
   shares?: TransactionShareInput[] | null;
 }
 
+/**
+ * A change applied to a run of postings at once. Anything left off is left
+ * alone; the two `clear` flags say "empty it" as against "don't touch it".
+ */
+export interface TransactionPatch {
+  categoryId?: string | null;
+  clearCategory?: boolean;
+  accountId?: string | null;
+  merchant?: string | null;
+  note?: string | null;
+  clearNote?: boolean;
+}
+
+/** What a bulk edit came to: changed, and left alone because it didn't apply. */
+export interface BulkResult {
+  changed: number;
+  skipped: number;
+}
+
 export interface TransactionQuery {
   search?: string | null;
   kinds?: TxKind[] | null;

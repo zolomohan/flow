@@ -488,3 +488,29 @@ pub struct ValuePoint {
     pub as_of: String,
     pub value: Paise,
 }
+
+/// A change applied to a run of postings at once. Every field is optional:
+/// what isn't named is left exactly as it was.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionPatch {
+    /// File them all under this category.
+    pub category_id: Option<String>,
+    /// Take the category off instead. Wins over `category_id`.
+    pub clear_category: Option<bool>,
+    /// Move them to this account — the money's own side of a transfer.
+    pub account_id: Option<String>,
+    pub merchant: Option<String>,
+    pub note: Option<String>,
+    /// Empty the note, as against leaving it alone.
+    pub clear_note: Option<bool>,
+}
+
+/// What a bulk edit came to: what it changed, and what it left alone because
+/// the change didn't apply — a category on a transfer, say.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkResult {
+    pub changed: i64,
+    pub skipped: i64,
+}
