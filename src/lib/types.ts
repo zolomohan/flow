@@ -391,6 +391,16 @@ export interface PricePoint {
   priceE4: Scaled;
 }
 
+/**
+ * One day on a value line: what something was worth, in paise. A price line
+ * says what a gram went for; this says what the pile of them came to — and
+ * it is what the charts actually plot, prices mapped onto it.
+ */
+export interface ValuePoint {
+  asOf: string;
+  value: Paise;
+}
+
 export interface Scheme {
   schemeCode: string;
   schemeName: string;

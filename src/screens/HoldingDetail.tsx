@@ -219,7 +219,11 @@ export function HoldingDetail({
             : 'what one unit has been worth, day by day'
         }
         tint={isGold ? 'var(--amber)' : 'var(--violet)'}
-        load={(days) => api.holdingSeries(holding.id, days)}
+        load={(days) =>
+          api
+            .holdingSeries(holding.id, days)
+            .then((line) => line.map((p) => ({ asOf: p.asOf, value: p.priceE4 })))
+        }
         reference={!isGold && avgBuy ? avgBuy * 100 : null}
         referenceLabel={
           !isGold && avgBuy ? `your average cost · ${money(avgBuy, { paise: true })}` : undefined

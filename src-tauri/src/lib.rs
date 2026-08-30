@@ -186,15 +186,14 @@ fn holding_series_all(
     with_db(&db, |c| db::holding_series_all(c, days))
 }
 
-/// What a gram has gone for at a given purity — the rate under every gold
-/// holding, which is one line however many pieces are valued off it.
+/// What the gold in the book has been worth, day by day.
 #[tauri::command]
-fn gold_rate_series(
+fn gold_value_series(
     db: State<Db>,
     days: Option<i64>,
     purity_e4: Option<i64>,
-) -> R<Vec<PricePoint>> {
-    with_db(&db, |c| db::gold_rate_series(c, days, purity_e4))
+) -> R<Vec<ValuePoint>> {
+    with_db(&db, |c| db::gold_value_series(c, days, purity_e4))
 }
 
 #[tauri::command]
@@ -279,7 +278,7 @@ pub fn run() {
             refresh_prices,
             holding_series,
             holding_series_all,
-            gold_rate_series,
+            gold_value_series,
             search_schemes,
             get_setting,
             set_setting,

@@ -2428,9 +2428,80 @@ pub fn holding_series_all(conn: &Connection, days: Option<i64>) -> Result<HashMa
     Ok(out)
 }
 
+/// What the gold you hold has been worth, day by day.
+///
+/// Weight is not kept by date — gold is a thing in a locker, not a position
+/// with a history of trades — so the line is today's weight run back over the
+/// market. It answers "what has the metal I own been doing", which is the
+/// question the tab is asking, rather than "what was my locker worth in 2019".
+///
+/// `purity_e4` narrows it to the pieces of one fineness; `None` counts them
+/// all. Each piece is valued exactly as the screen values it today, and the
+/// day's total is their sum, so the last point on the line and the figure at
+/// the top of the tab are the same number.
+pub fn gold_value_series(
+    conn: &Connection,
+    days: Option<i64>,
+    purity_e4: Option<Scaled>,
+) -> Result<Vec<ValuePoint>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT COALESCE(purity_e4, 10000), grams_e4 FROM holdings
+             WHERE kind = 'gold' AND closed_at IS NULL AND grams_e4 > 0",
+        )
+        .map_err(oops)?;
+    let mut pieces: Vec<(Scaled, Scaled)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?;
+    if let Some(wanted) = purity_e4 {
+        pieces.retain(|(purity, _)| *purity == wanted);
+    }
+    if pieces.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // One folded line per fineness rather than one per piece: a dozen bangles
+    // of the same karat ride the same rate, and the rate is the expensive part.
+    let since = since_date(days);
+    let mut lines: HashMap<Scaled, Vec<PricePoint>> = HashMap::new();
+    for (purity, _) in &pieces {
+        if !lines.contains_key(purity) {
+            lines.insert(*purity, gold_series(conn, *purity, since.as_deref())?);
+        }
+    }
+
+    let mut totals: HashMap<&str, Paise> = HashMap::new();
+    let mut order: Vec<&str> = Vec::new();
+    // Dates come out of the fix in order, and every fineness shares them, so
+    // walking the first line keeps the days in order without a second sort.
+    if let Some(first) = pieces.first().and_then(|(p, _)| lines.get(p)) {
+        for point in first {
+            order.push(&point.as_of);
+        }
+    }
+    for (purity, grams_e4) in &pieces {
+        for point in &lines[purity] {
+            *totals.entry(&point.as_of).or_insert(0) +=
+                market_value_paise(*grams_e4, point.price_e4);
+        }
+    }
+    Ok(order
+        .into_iter()
+        .filter_map(|as_of| {
+            totals.get(as_of).map(|value| ValuePoint {
+                as_of: as_of.to_string(),
+                value: *value,
+            })
+        })
+        .collect())
+}
+
 /// What a gram has gone for, day by day, at whatever purity is asked for —
 /// the rate behind every gold holding, which is a fact about the market rather
 /// than about any one piece. `None` reads it as 24K.
+#[cfg(test)]
 pub fn gold_rate_series(
     conn: &Connection,
     days: Option<i64>,
@@ -4324,6 +4395,59 @@ mod tests {
         let mine = holding_series(&conn, &id, None).unwrap();
         assert_eq!(pure.len(), 1);
         assert_eq!(mine[0].price_e4, pure[0].price_e4 * 9_160 / 10_000);
+    }
+
+    /// The tab's line has to land on the tab's figure: whatever a piece is
+    /// worth today is what its last point says, summed over the lot.
+    #[test]
+    fn the_last_point_of_the_value_line_is_what_the_gold_is_worth_today() {
+        let conn = book();
+        gold(&conn, 10 * 10_000, None); // 10 g of 24K
+        save_holding(
+            &conn,
+            HoldingInput {
+                id: None,
+                kind: "gold".into(),
+                name: "Bangles".into(),
+                account_id: None,
+                scheme_code: None,
+                isin: None,
+                purity_e4: Some(9_160),
+                grams_e4: Some(20 * 10_000),
+                note: None,
+                closed: None,
+            },
+        )
+        .unwrap();
+        gold_price_at(&conn, 100);
+        let landed = gold_landed_e4(&conn).unwrap();
+        store_history(
+            &conn,
+            KEY_GOLD,
+            &[
+                ("2026-08-28".into(), 50 * 311_035 * 10_000 / landed),
+                ("2026-08-29".into(), 100 * 311_035 * 10_000 / landed),
+            ],
+        )
+        .unwrap();
+
+        let today: Paise = list_holdings(&conn)
+            .unwrap()
+            .iter()
+            .filter(|h| h.kind == "gold")
+            .map(|h| h.market_value)
+            .sum();
+        let line = gold_value_series(&conn, None, None).unwrap();
+        assert_eq!(line.len(), 2);
+        assert_eq!(line[1].value, today, "the line ends where the tab's total is");
+        // Half the rate, half the money — both pieces, one sum.
+        assert_eq!(line[0].value, line[1].value / 2);
+
+        let only_22k = gold_value_series(&conn, None, Some(9_160)).unwrap();
+        assert!(
+            only_22k[1].value < line[1].value,
+            "narrowing to one fineness leaves the other pieces out"
+        );
     }
 
     /// Spot and the fix are different feeds that sit a couple of percent apart.

@@ -470,3 +470,14 @@ pub struct PricePoint {
     pub as_of: String,
     pub price_e4: Scaled,
 }
+
+/// One day on a value line: what something was worth, in paise, on that date.
+/// A price line says what a gram or a unit went for; this says what the pile
+/// of them came to.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ValuePoint {
+    /// ISO date (YYYY-MM-DD).
+    pub as_of: String,
+    pub value: Paise,
+}

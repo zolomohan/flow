@@ -1,10 +1,10 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { PriceChart } from './charts';
+import { PriceChart, type SeriesKind } from './charts';
 import { Card, CardHead, Segmented, type SegmentOption } from './ui';
-import { dayLabel, percent, unitPrice } from '../lib/format';
+import { dayLabel, money, percent, unitPrice } from '../lib/format';
 import { useStore } from '../lib/store';
-import type { PricePoint } from '../lib/types';
+import type { ValuePoint } from '../lib/types';
 
 type Range = '1M' | '6M' | '1Y' | '5Y' | 'Max';
 
@@ -28,15 +28,18 @@ const RANGES: SegmentOption<Range>[] = (Object.keys(DAYS) as Range[]).map((value
  * says how to load a window; everything else is the same story either way.
  */
 export function PriceHistory({
-  title, hint, tint, load, reference, referenceLabel, footnote, filter, reloadOn,
-  initialRange = '1Y',
+  title, hint, tint, load, kind = 'price', reference, referenceLabel, footnote, filter,
+  reloadOn, initialRange = '1Y',
 }: {
   title: string;
   hint?: string;
   tint: string;
   /** `days` bounds the window; null asks for the whole line. */
-  load: (days: number | null) => Promise<PricePoint[]>;
-  /** A scaled price to rule across the chart — a fund's average cost. */
+  load: (days: number | null) => Promise<ValuePoint[]>;
+  /** Whether the points are prices or money, which is all the difference
+   *  between a NAV line and what a locker full of gold is worth. */
+  kind?: SeriesKind;
+  /** A figure to rule across the chart, in the points' own units. */
   reference?: number | null;
   referenceLabel?: string;
   footnote?: string;
@@ -48,7 +51,7 @@ export function PriceHistory({
 }) {
   const { revision } = useStore();
   const [range, setRange] = useState<Range>(initialRange);
-  const [points, setPoints] = useState<PricePoint[] | null>(null);
+  const [points, setPoints] = useState<ValuePoint[] | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -69,10 +72,11 @@ export function PriceHistory({
   const last = line[line.length - 1];
   // What the range itself did — the number a chart is read for before any
   // single day on it.
-  const change = first && last ? last.priceE4 - first.priceE4 : 0;
-  const changePct = first?.priceE4 ? (change / first.priceE4) * 100 : null;
-  const high = line.length ? Math.max(...line.map((p) => p.priceE4)) : 0;
-  const low = line.length ? Math.min(...line.map((p) => p.priceE4)) : 0;
+  const change = first && last ? last.value - first.value : 0;
+  const changePct = first?.value ? (change / first.value) * 100 : null;
+  const high = line.length ? Math.max(...line.map((p) => p.value)) : 0;
+  const low = line.length ? Math.min(...line.map((p) => p.value)) : 0;
+  const read = (value: number) => (kind === 'money' ? money(value) : unitPrice(value));
 
   return (
     <Card className="price-history">
@@ -99,18 +103,18 @@ export function PriceHistory({
             <span>Change</span>
             <strong>{changePct === null ? '—' : percent(changePct, { sign: true })}</strong>
             <small>
-              {unitPrice(Math.abs(change))} {change >= 0 ? 'up' : 'down'} since{' '}
+              {read(Math.abs(change))} {change >= 0 ? 'up' : 'down'} since{' '}
               {dayLabel(first.asOf)}
             </small>
           </div>
           <div className="price-stat">
             <span>High</span>
-            <strong>{unitPrice(high)}</strong>
+            <strong>{read(high)}</strong>
             <small>over the range</small>
           </div>
           <div className="price-stat">
             <span>Low</span>
-            <strong>{unitPrice(low)}</strong>
+            <strong>{read(low)}</strong>
             <small>over the range</small>
           </div>
         </div>
@@ -126,6 +130,7 @@ export function PriceHistory({
         >
           <PriceChart
             points={line}
+            kind={kind}
             stroke={change >= 0 ? 'var(--green)' : 'var(--red)'}
             reference={reference}
             referenceLabel={referenceLabel}
@@ -136,7 +141,7 @@ export function PriceHistory({
       <div className="price-chart-foot">
         <span style={{ ['--tint' as any]: tint }} className="price-chart-dot" />
         {line.length > 1
-          ? `${line.length} trading days · latest ${dayLabel(last.asOf)}`
+          ? `${line.length} ${kind === 'money' ? 'days' : 'trading days'} · latest ${dayLabel(last.asOf)}`
           : 'Refresh prices to start building this line.'}
         {footnote && <em>{footnote}</em>}
       </div>

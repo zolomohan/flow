@@ -53,7 +53,8 @@ export function Investments({
   const [series, setSeries] = useState<Record<string, PricePoint[]>>({});
   // Which purity the gold rate is read at. Every piece rides the same market,
   // so the tab plots it once and this says at what fineness.
-  const [purity, setPurity] = useState(10_000);
+  // Which pieces the tab's line counts. Null is all of them.
+  const [purity, setPurity] = useState<number | null>(null);
   // Held by id rather than by object: the store hands back fresh holdings
   // after every write, and the open page should follow them.
   const [openId, setOpenId] = useState<string | null>(null);
@@ -107,11 +108,12 @@ export function Investments({
     return any ? Math.round((any.priceE4! * 10_000) / any.purityE4!) : null;
   })();
 
-  // 24K is the market's own figure, and each purity actually held is that
-  // figure scaled — so those are the only readings worth offering.
+  // Pieces of one fineness can be read on their own, but only where there is
+  // more than one to tell apart — a locker of 22K bangles has nothing to
+  // filter.
   const purities = useMemo(() => {
     const held = open.map((h) => h.purityE4 ?? 10_000);
-    return [...new Set([10_000, ...held])].sort((a, b) => b - a);
+    return [...new Set(held)].sort((a, b) => b - a);
   }, [open]);
 
   // The freshest price anything on this tab is carrying, and whether anything
@@ -237,23 +239,31 @@ export function Investments({
 
             {tab === 'gold' && open.length > 0 && (
               <PriceHistory
-                title="Gold rate"
-                hint={`rupees a gram of ${carats(purity)}, day by day`}
+                title="Your gold"
+                hint={
+                  purity === null
+                    ? 'what the metal you hold has been worth, day by day'
+                    : `what your ${carats(purity)} has been worth, day by day`
+                }
                 tint="var(--amber)"
-                load={(days) => api.goldRateSeries(days, purity)}
-                reloadOn={purity}
+                kind="money"
+                load={(days) => api.goldValueSeries(days, purity)}
+                reloadOn={purity ?? 'all'}
                 filter={
                   purities.length > 1 ? (
                     <Segmented
-                      options={purities.map((p) => ({ value: String(p), label: carats(p) }))}
-                      value={String(purity)}
-                      onChange={(next) => setPurity(Number(next))}
+                      options={[
+                        { value: 'all', label: 'All' },
+                        ...purities.map((p) => ({ value: String(p), label: carats(p) })),
+                      ]}
+                      value={purity === null ? 'all' : String(purity)}
+                      onChange={(next) => setPurity(next === 'all' ? null : Number(next))}
                       size="sm"
                       name="gold-purity"
                     />
                   ) : undefined
                 }
-                footnote="London's daily fix, converted at the ECB's rupee rate and marked up for duty and GST."
+                footnote="Today's weight run back over the market — London's daily fix, converted at the ECB's rupee rate and marked up for duty and GST."
               />
             )}
 

@@ -2,7 +2,34 @@ import { useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { compactMoney, money, shortDayLabel, unitPrice } from '../lib/format';
 import { spring } from '../lib/motion';
-import type { FlowPoint, Paise, PricePoint } from '../lib/types';
+import type { FlowPoint, Paise, ValuePoint } from '../lib/types';
+
+/**
+ * What the numbers on a line mean: a per-gram or per-unit price, scaled by
+ * 10^4, or money in paise. It decides how the axis and the readout are
+ * written and nothing else — the shape of the line is the same either way.
+ */
+export type SeriesKind = 'price' | 'money';
+
+/** The readout above the crosshair: exact, whatever the kind. */
+function readValue(kind: SeriesKind, value: number) {
+  return kind === 'money' ? money(value) : unitPrice(value);
+}
+
+/**
+ * The axis, which has less room and more to say. Money goes compact; a price
+ * follows its own range, since a NAV moving between ₹87.20 and ₹88.40 needs
+ * its paise where a gold rate in the thousands does not.
+ */
+function readTick(kind: SeriesKind, value: number, span: number) {
+  if (kind === 'money') return compactMoney(value);
+  const spread = span / 10_000;
+  const places = spread < 20 ? 2 : spread < 200 ? 1 : 0;
+  return `₹${(value / 10_000).toLocaleString('en-IN', {
+    minimumFractionDigits: places,
+    maximumFractionDigits: places,
+  })}`;
+}
 
 /** Catmull-Rom through the points, emitted as cubic beziers. */
 function smoothPath(points: [number, number][]) {
@@ -115,12 +142,14 @@ export function Sparkline({
  * two wait on each other for ever.
  */
 export function PriceChart({
-  points, height = 240, stroke = 'var(--violet)', reference, referenceLabel,
+  points, height = 240, stroke = 'var(--violet)', kind = 'price', reference, referenceLabel,
 }: {
-  points: PricePoint[];
+  points: ValuePoint[];
   height?: number;
   stroke?: string;
-  /** A scaled price to mark with a dashed rule — a fund's average cost. */
+  kind?: SeriesKind;
+  /** A figure to mark with a dashed rule, in the points' own units — a
+   *  fund's average cost against its NAV. */
   reference?: number | null;
   referenceLabel?: string;
 }) {
@@ -149,6 +178,7 @@ export function PriceChart({
           width={width}
           height={height}
           stroke={stroke}
+          kind={kind}
           reference={reference}
           referenceLabel={referenceLabel}
         />
@@ -164,12 +194,13 @@ export function PriceChart({
 }
 
 function PriceLine({
-  points, width, height, stroke, reference, referenceLabel,
+  points, width, height, stroke, kind, reference, referenceLabel,
 }: {
-  points: PricePoint[];
+  points: ValuePoint[];
   width: number;
   height: number;
   stroke: string;
+  kind: SeriesKind;
   reference?: number | null;
   referenceLabel?: string;
 }) {
@@ -183,7 +214,7 @@ function PriceLine({
   const plot = Math.max(1, width - gutter);
 
   const shape = useMemo(() => {
-    const values = points.map((p) => p.priceE4);
+    const values = points.map((p) => p.value);
     const low = Math.min(...values);
     const high = Math.max(...values);
     // A line that never moved still deserves to sit in the middle rather than
@@ -193,7 +224,7 @@ function PriceLine({
     const y = (value: number) =>
       height - pad - ((value - floor) / span) * (height - pad * 2);
     const x = (i: number) => (i / (points.length - 1)) * plot;
-    const coords = points.map((p, i) => [x(i), y(p.priceE4)] as [number, number]);
+    const coords = points.map((p, i) => [x(i), y(p.value)] as [number, number]);
     const line = smoothPath(coords);
     return {
       line,
@@ -206,17 +237,6 @@ function PriceLine({
       span,
     };
   }, [points, plot, height]);
-
-  // Axis labels follow the range rather than the number: a NAV moving between
-  // ₹87.20 and ₹88.40 needs its paise, a gold rate in the thousands does not.
-  const tickLabel = (e4: number) => {
-    const spread = shape.span / 10_000;
-    const places = spread < 20 ? 2 : spread < 200 ? 1 : 0;
-    return `₹${(e4 / 10_000).toLocaleString('en-IN', {
-      minimumFractionDigits: places,
-      maximumFractionDigits: places,
-    })}`;
-  };
 
   const at = Math.min(hover ?? points.length - 1, points.length - 1);
   const active = points[at];
@@ -255,7 +275,7 @@ function PriceLine({
               y2={shape.y(value)}
             />
             <text className="price-tick" x={plot + 8} y={shape.y(value) + 4}>
-              {tickLabel(value)}
+              {readTick(kind, value, shape.span)}
             </text>
           </g>
         ))}
@@ -318,7 +338,7 @@ function PriceLine({
         className="price-readout"
         style={{ left: Math.min(Math.max(activeX, 0), Math.max(0, plot - 96)) }}
       >
-        <strong>{unitPrice(active.priceE4)}</strong>
+        <strong>{readValue(kind, active.value)}</strong>
         <span>{shortDayLabel(active.asOf)}</span>
       </div>
     </>

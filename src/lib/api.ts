@@ -13,6 +13,7 @@ import type {
   DebtPaymentInput,
   Overview,
   PricePoint,
+  ValuePoint,
   Transaction,
   TransactionInput,
   TransactionQuery,
@@ -77,9 +78,9 @@ export const api = {
   /** Every holding's line at once, keyed by holding id. */
   holdingSeriesAll: (days: number | null) =>
     call<Record<string, PricePoint[]>>('holding_series_all', { days }),
-  /** What a gram has gone for, day by day, at a purity. Null means 24K. */
-  goldRateSeries: (days: number | null, purityE4: number | null) =>
-    call<PricePoint[]>('gold_rate_series', { days, purityE4 }),
+  /** What the gold held has been worth, day by day. Null counts every piece. */
+  goldValueSeries: (days: number | null, purityE4: number | null) =>
+    call<ValuePoint[]>('gold_value_series', { days, purityE4 }),
   searchSchemes: (query: string) => call<Scheme[]>('search_schemes', { query }),
 
   getSetting: (key: string) => call<string | null>('get_setting', { key }),
