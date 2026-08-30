@@ -396,7 +396,7 @@ export const useSheetClose = () => useContext(SheetCtx);
 
 /** Centred modal with a blurred scrim; Escape and scrim clicks both dismiss. */
 export function Sheet({
-  open, onClose, title, subtitle, children, footer, width = 520,
+  open, onClose, title, subtitle, children, footer, onBack, width = 520,
 }: {
   open: boolean;
   onClose: () => void;
@@ -404,6 +404,9 @@ export function Sheet({
   subtitle?: string;
   children: ReactNode;
   footer?: ReactNode;
+  /** Set when the sheet is showing a page of its own: puts a way back in the
+   *  header, where the title has already changed to say where you are. */
+  onBack?: () => void;
   width?: number;
 }) {
   useEffect(() => {
@@ -441,10 +444,24 @@ export function Sheet({
               aria-label={title}
             >
               <header className="sheet-head">
-                <div>
-                  <h2 className="sheet-title">{title}</h2>
-                  {subtitle && <p className="sheet-sub">{subtitle}</p>}
-                </div>
+                {onBack && (
+                  <IconButton icon="chevron-left" label="Back" onClick={onBack} />
+                )}
+                {/* Keyed on the title, so moving between pages reads as a
+                    change of place rather than text quietly swapping. */}
+                <AnimatePresence mode="wait" initial={false}>
+                  <motion.div
+                    key={title}
+                    className="sheet-heading"
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -6 }}
+                    transition={{ duration: 0.14 }}
+                  >
+                    <h2 className="sheet-title">{title}</h2>
+                    {subtitle && <p className="sheet-sub">{subtitle}</p>}
+                  </motion.div>
+                </AnimatePresence>
                 <IconButton icon="x" label="Close" onClick={onClose} />
               </header>
               <div className="sheet-body">{children}</div>

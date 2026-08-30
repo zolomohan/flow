@@ -630,49 +630,39 @@ export function SplitPeopleEditor({
   );
 }
 
-/* --------------------------------------------------------------- section */
+/* ------------------------------------------------------------------- link */
 
 /**
- * One of the two split panels: a header that says what is set up when it is
- * closed, and the editor itself when it is open.
+ * The way in to one of the two splits: what is set up now, and a chevron.
+ * Dividing a bill is its own job with its own screenful of rows, so it gets a
+ * page of the sheet rather than a drawer underneath the form.
  */
-export function SplitSection({
-  icon, title, summary, open, onToggle, children,
+export function SplitLink({
+  icon, title, summary, on, onOpen,
 }: {
   icon: string;
   title: string;
   summary: string;
-  open: boolean;
-  onToggle: () => void;
-  children: React.ReactNode;
+  /** Whether the bill is actually divided this way, as against merely could be. */
+  on: boolean;
+  onOpen: () => void;
 }) {
   return (
-    <section className={`split-section ${open ? 'is-open' : ''}`}>
-      <button type="button" className="split-section-head" onClick={onToggle}>
-        <span className="split-section-glyph">
-          <Icon name={icon} size={15} strokeWidth={2.1} />
-        </span>
-        <span className="split-section-title">
-          {title}
-          <em>{summary}</em>
-        </span>
-        <motion.span animate={{ rotate: open ? 90 : 0 }} transition={spring}>
-          <Icon name="chevron-right" size={16} />
-        </motion.span>
-      </button>
-      <AnimatePresence initial={false}>
-        {open && (
-          <motion.div
-            className="split-section-body"
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={spring}
-          >
-            <div className="split-section-inner">{children}</div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </section>
+    <motion.button
+      type="button"
+      className={`split-link ${on ? 'is-on' : ''}`}
+      onClick={onOpen}
+      whileTap={{ scale: 0.99 }}
+      transition={spring}
+    >
+      <span className="split-section-glyph">
+        <Icon name={icon} size={15} strokeWidth={2.1} />
+      </span>
+      <span className="split-section-title">
+        {title}
+        <em>{summary}</em>
+      </span>
+      <Icon name="chevron-right" size={16} />
+    </motion.button>
   );
 }

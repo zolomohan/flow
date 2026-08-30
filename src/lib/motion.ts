@@ -26,6 +26,22 @@ export const screenVariants: Variants = {
   exit: { opacity: 0, y: -6, transition: { duration: 0.14, ease: [0.4, 0, 1, 1] } },
 };
 
+/**
+ * A sheet that has pages inside it — a form, and the editor one of its
+ * fields opens. Pages travel the way you are going: in from the right, back
+ * out to the left. `custom` carries the direction, so the page leaving and
+ * the page arriving agree about which way the sheet moved.
+ */
+export const pageVariants: Variants = {
+  enter: (dir: number) => ({ opacity: 0, x: dir * 28 }),
+  settled: { opacity: 1, x: 0, transition: { duration: 0.2, ease: [0.22, 1, 0.36, 1] } },
+  leave: (dir: number) => ({
+    opacity: 0,
+    x: dir * -28,
+    transition: { duration: 0.14, ease: [0.4, 0, 1, 1] },
+  }),
+};
+
 /** Parent of a list that should cascade its children in. */
 export const listVariants: Variants = {
   initial: {},

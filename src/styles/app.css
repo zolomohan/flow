@@ -661,10 +661,12 @@ kbd {
 .sheet-head {
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
   gap: 16px;
   padding: 22px 22px 14px;
 }
+.sheet-heading { flex: 1; min-width: 0; }
+/* The back arrow sits level with the title rather than with its cap-height. */
+.sheet-head > .icon-btn:first-child { margin-top: -2px; }
 .sheet-title { font-size: 18px; font-weight: 600; letter-spacing: var(--tight); }
 .sheet-sub { margin-top: 2px; font-size: 13px; color: var(--ink-3); font-weight: 500; }
 
@@ -1892,6 +1894,10 @@ kbd {
   padding-left: 26px;
   border-left: 1px solid var(--line-soft);
 }
+
+/* A split has a page of the sheet to itself. The floor keeps the modal from
+   collapsing as one page leaves and the next arrives. */
+.tx-page { min-height: 320px; }
 
 /* Anything that reads as a table rather than a field runs under both. */
 .tx-pane-wide { grid-column: 1 / -1; }
@@ -3761,18 +3767,18 @@ kbd {
    Splitting a bill — into categories, and between people
    ================================================================== */
 
-.split-panels { display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
-
-.split-section {
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  background: var(--surface);
+/* Two ways in, side by side under the form — one column each where the form
+   itself has two, stacked where it has one. */
+.split-panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 8px;
   overflow: hidden;
-  transition: border-color var(--fast) var(--ease);
 }
-.split-section.is-open { border-color: var(--line-strong); }
 
-.split-section-head {
+/* A row that leads somewhere: what is set up now, and a chevron saying there
+   is a page behind it. */
+.split-link {
   display: flex;
   align-items: center;
   gap: 11px;
@@ -3780,8 +3786,15 @@ kbd {
   padding: 11px 13px;
   text-align: left;
   color: var(--ink-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease);
 }
-.split-section-head:hover { background: var(--surface-2); }
+.split-link:hover { background: var(--surface-2); border-color: var(--line-strong); }
+/* Set up, as against merely available. */
+.split-link.is-on { border-color: color-mix(in srgb, var(--blue) 40%, var(--line)); }
+.split-link.is-on .split-section-glyph { background: var(--blue-soft); color: var(--blue); }
 .split-section-glyph {
   display: grid;
   place-items: center;
@@ -3792,7 +3805,7 @@ kbd {
   background: var(--surface-inset);
   color: var(--ink-3);
 }
-.split-section.is-open .split-section-glyph { background: var(--blue-soft); color: var(--blue); }
+
 .split-section-title {
   display: flex;
   flex-direction: column;
@@ -3812,8 +3825,7 @@ kbd {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.split-section-body { overflow: hidden; }
-.split-section-inner { padding: 4px 13px 13px; border-top: 1px solid var(--line-soft); }
+
 
 /* ------------------------------------------------------- line items */
 
