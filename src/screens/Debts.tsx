@@ -1,11 +1,14 @@
 import { useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from '../components/Icon';
-import { Button, Card, Empty } from '../components/ui';
+import { Button, Card, Empty, Segmented, type SegmentOption } from '../components/ui';
 import { useStore } from '../lib/store';
 import { dayLabel, initials, money } from '../lib/format';
 import { itemVariants, listVariants, spring } from '../lib/motion';
 import type { Debt, DebtDirection } from '../lib/types';
+
+/** Who owes whom, and what is done with. */
+type DebtTab = 'lent' | 'borrowed' | 'past';
 
 export function Debts({
   onNewDebt, onEditDebt, onRecordPayment,
@@ -15,7 +18,6 @@ export function Debts({
   onRecordPayment: (debt: Debt) => void;
 }) {
   const { debts } = useStore();
-  const [showSettled, setShowSettled] = useState(false);
 
   const open = useMemo(() => debts.filter((d) => !d.settled), [debts]);
   // Newest first: what was squared up last week is worth more than what was
@@ -27,18 +29,35 @@ export function Debts({
         .sort((a, b) => (b.settledAt ?? b.openedOn).localeCompare(a.settledAt ?? a.openedOn)),
     [debts],
   );
-  const settledLent = settled
-    .filter((d) => d.direction === 'lent')
-    .reduce((sum, d) => sum + d.principal, 0);
-  const settledBorrowed = settled
-    .filter((d) => d.direction === 'borrowed')
-    .reduce((sum, d) => sum + d.principal, 0);
-
+  const [tab, setTab] = useState<DebtTab>('lent');
   const lent = open.filter((d) => d.direction === 'lent');
   const borrowed = open.filter((d) => d.direction === 'borrowed');
   const owedToYou = lent.reduce((s, d) => s + d.outstanding, 0);
   const youOwe = borrowed.reduce((s, d) => s + d.outstanding, 0);
   const net = owedToYou - youOwe;
+
+  // Three ways of asking the same question — who owes whom, and what is done
+  // with. Each is its own list rather than three stacked down one page.
+  const tabs: SegmentOption<DebtTab>[] = [
+    {
+      value: 'lent',
+      label: `Owed to you${lent.length ? ` · ${lent.length}` : ''}`,
+      icon: 'arrow-up-right',
+      accent: 'var(--green)',
+    },
+    {
+      value: 'borrowed',
+      label: `You owe${borrowed.length ? ` · ${borrowed.length}` : ''}`,
+      icon: 'arrow-down-left',
+      accent: 'var(--amber)',
+    },
+    {
+      value: 'past',
+      label: `Past${settled.length ? ` · ${settled.length}` : ''}`,
+      icon: 'check',
+    },
+  ];
+  const showing = tab === 'lent' ? lent : tab === 'borrowed' ? borrowed : settled;
 
   return (
     <div className="screen">
@@ -81,7 +100,7 @@ export function Debts({
         </div>
       </div>
 
-      {open.length === 0 ? (
+      {debts.length === 0 ? (
         <Card>
           <Empty
             icon="arrow-left-right"
@@ -101,104 +120,70 @@ export function Debts({
         </Card>
       ) : (
         <>
-          <DebtGroup
-            title="Money you lent"
-            hint="they owe you"
-            debts={lent}
-            onEditDebt={onEditDebt}
-            onRecordPayment={onRecordPayment}
-          />
-          <DebtGroup
-            title="Money you borrowed"
-            hint="you owe them"
-            debts={borrowed}
-            onEditDebt={onEditDebt}
-            onRecordPayment={onRecordPayment}
-          />
+          <div className="screen-tabs">
+            <Segmented options={tabs} value={tab} onChange={setTab} name="debt-tab" />
+          </div>
+
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={tab}
+              className="tab-panel"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              transition={{ duration: 0.16 }}
+            >
+              {showing.length === 0 ? (
+                <Card>
+                  <Empty
+                    icon={tab === 'past' ? 'check' : 'arrow-left-right'}
+                    title={
+                      tab === 'lent'
+                        ? 'Nobody owes you anything'
+                        : tab === 'borrowed'
+                          ? 'You owe nobody anything'
+                          : 'Nothing settled yet'
+                    }
+                    body={
+                      tab === 'past'
+                        ? 'A debt lands here once it has been repaid in full, or written off.'
+                        : 'Record one and it will stand here until it is squared up.'
+                    }
+                    action={
+                      tab === 'past' ? undefined : (
+                        <Button
+                          tone="primary"
+                          icon={tab === 'lent' ? 'arrow-up-right' : 'arrow-down-left'}
+                          onClick={() => onNewDebt(tab === 'lent' ? 'lent' : 'borrowed')}
+                        >
+                          {tab === 'lent' ? 'I lent someone' : 'I borrowed'}
+                        </Button>
+                      )
+                    }
+                  />
+                </Card>
+              ) : (
+                <motion.div
+                  className="debt-grid"
+                  variants={listVariants}
+                  initial="initial"
+                  animate="animate"
+                >
+                  {showing.map((debt) => (
+                    <DebtCard
+                      key={debt.id}
+                      debt={debt}
+                      onEdit={() => onEditDebt(debt)}
+                      onRecordPayment={() => onRecordPayment(debt)}
+                    />
+                  ))}
+                </motion.div>
+              )}
+            </motion.div>
+          </AnimatePresence>
         </>
       )}
-
-      {/* What is done with: repaid, or written off. It is history rather than
-          a position, so it says what it came to and then gets out of the way —
-          but it is a section of the screen, not a footnote to one. */}
-      {settled.length > 0 && (
-        <section className="account-group">
-          <h2 className="group-title">
-            Past debts
-            <span>{money(settledLent + settledBorrowed)}</span>
-            <em>
-              {settled.length} settled
-              {settledLent > 0 && ` · ${money(settledLent)} you had lent`}
-              {settledBorrowed > 0 && ` · ${money(settledBorrowed)} you had borrowed`}
-            </em>
-          </h2>
-          <button className="archived-toggle" onClick={() => setShowSettled((s) => !s)}>
-            <motion.span animate={{ rotate: showSettled ? 90 : 0 }} transition={spring}>
-              <Icon name="chevron-right" size={15} />
-            </motion.span>
-            {showSettled ? 'Hide them' : `Show all ${settled.length}`}
-          </button>
-          <AnimatePresence initial={false}>
-            {showSettled && (
-              <motion.div
-                className="debt-grid"
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                exit={{ opacity: 0, height: 0 }}
-                transition={spring}
-                style={{ overflow: 'hidden' }}
-              >
-                {settled.map((debt) => (
-                  <DebtCard
-                    key={debt.id}
-                    debt={debt}
-                    onEdit={() => onEditDebt(debt)}
-                    onRecordPayment={() => onRecordPayment(debt)}
-                  />
-                ))}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </section>
-      )}
     </div>
-  );
-}
-
-function DebtGroup({
-  title, hint, debts, onEditDebt, onRecordPayment,
-}: {
-  title: string;
-  hint: string;
-  debts: Debt[];
-  onEditDebt: (debt: Debt) => void;
-  onRecordPayment: (debt: Debt) => void;
-}) {
-  if (!debts.length) return null;
-  const total = debts.reduce((s, d) => s + d.outstanding, 0);
-  return (
-    <section className="account-group">
-      <h2 className="group-title">
-        {title}
-        <span>{money(total)}</span>
-        <em>{hint}</em>
-      </h2>
-      <motion.div
-        className="debt-grid"
-        variants={listVariants}
-        initial="initial"
-        animate="animate"
-      >
-        {debts.map((debt) => (
-          <DebtCard
-            key={debt.id}
-            debt={debt}
-            onEdit={() => onEditDebt(debt)}
-            onRecordPayment={() => onRecordPayment(debt)}
-          />
-        ))}
-      </motion.div>
-    </section>
   );
 }
 
