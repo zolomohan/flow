@@ -211,9 +211,22 @@ export function TransactionSheet({
     setPage(null);
   };
 
+  // Taking the last part off a bill, or the last person off it, is a way of
+  // saying it isn't split after all — so the sheet goes back to the
+  // transaction rather than leaving you on a page with nothing on it.
   const editLines = (next: SplitLine[]) => {
     setLines(next);
     setSeeded(false);
+    if (lines.length > 0 && next.length === 0) leavePage();
+  };
+
+  const editPeople = (next: SplitPeople) => {
+    setPeople(next);
+    const had = people.people.some((person) => !person.you);
+    const has = next.people.some((person) => !person.you);
+    // Only the removal counts: with nobody on it yet, changing how it would
+    // be divided is not a reason to be sent back.
+    if (had && !has) leavePage();
   };
 
   const submit = async () => {
@@ -521,7 +534,7 @@ export function TransactionSheet({
                 {page === 'categories' ? (
                   <SplitLinesEditor amount={paise} kind={kind} lines={lines} onChange={editLines} />
                 ) : (
-                  <SplitPeopleEditor amount={paise} kind={kind} split={people} onChange={setPeople} />
+                  <SplitPeopleEditor amount={paise} kind={kind} split={people} onChange={editPeople} />
                 )}
               </div>
             </div>
