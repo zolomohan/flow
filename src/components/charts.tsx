@@ -355,13 +355,15 @@ export interface DonutSlice {
 }
 
 export function Donut({
-  slices, size = 188, thickness = 22, centerLabel, centerValue,
+  slices, size = 188, thickness = 22, centerLabel, centerValue, onSelect,
 }: {
   slices: DonutSlice[];
   size?: number;
   thickness?: number;
   centerLabel?: string;
   centerValue?: string;
+  /** Clicking an arc, when it leads somewhere. */
+  onSelect?: (id: string) => void;
   }) {
   const [hover, setHover] = useState<string | null>(null);
   const total = slices.reduce((sum, s) => sum + s.value, 0);
@@ -416,6 +418,7 @@ export function Donut({
               }}
               onMouseEnter={() => setHover(arc.id)}
               onMouseLeave={() => setHover(null)}
+              onClick={onSelect ? () => onSelect(arc.id) : undefined}
               style={{ cursor: 'pointer' }}
             />
           ))}

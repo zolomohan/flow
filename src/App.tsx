@@ -73,6 +73,13 @@ function Shell() {
     ids: [],
     token: 0,
   });
+  // The same trick for a category picked off a breakdown: the ledger opens
+  // filtered to it, over all time rather than the month you happened to be
+  // looking at, because "show me these" means all of them.
+  const [categoryFocus, setCategoryFocus] = useState<{ ids: string[]; token: number }>({
+    ids: [],
+    token: 0,
+  });
 
   const newTransaction = useCallback((next?: TxDraft) => {
     setEditingTx(null);
@@ -103,6 +110,11 @@ function Shell() {
 
   const openAccountTransactions = useCallback((accountId: string) => {
     setAccountFocus((f) => ({ ids: [accountId], token: f.token + 1 }));
+    setRoute('transactions');
+  }, []);
+
+  const openCategoryTransactions = useCallback((categoryId: string) => {
+    setCategoryFocus((f) => ({ ids: [categoryId], token: f.token + 1 }));
     setRoute('transactions');
   }, []);
 
@@ -238,6 +250,7 @@ function Shell() {
                 onAddTransaction={() => newTransaction()}
                 onGoTransactions={() => setRoute('transactions')}
                 onOpenAccount={openAccountTransactions}
+                onOpenCategory={openCategoryTransactions}
                 onGoInvestments={openInvestments}
               />
             ) : route === 'transactions' ? (
@@ -246,6 +259,7 @@ function Shell() {
                 onSplitTransaction={splitTransaction}
                 onAddTransaction={() => newTransaction()}
                 accountFocus={accountFocus}
+                categoryFocus={categoryFocus}
               />
             ) : route === 'accounts' ? (
               <Accounts onEditAccount={editAccount} onAddAccount={newAccount} />
@@ -264,7 +278,7 @@ function Shell() {
                 onEditLot={(holding, lot) => setLotTarget({ holding, lot })}
               />
             ) : route === 'insights' ? (
-              <Insights />
+              <Insights onOpenCategory={openCategoryTransactions} />
             ) : (
               <Settings />
             )}

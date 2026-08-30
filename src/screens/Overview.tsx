@@ -30,13 +30,16 @@ const LOOSE: Record<HoldingKind, { name: string; icon: string; color: string }> 
 };
 
 export function Overview({
-  onOpenTransaction, onAddTransaction, onGoTransactions, onOpenAccount, onGoInvestments,
+  onOpenTransaction, onAddTransaction, onGoTransactions, onOpenAccount, onOpenCategory,
+  onGoInvestments,
 }: {
   onOpenTransaction: (tx: Transaction) => void;
   onAddTransaction: () => void;
   onGoTransactions: () => void;
   /** Jump to Transactions filtered to one account. */
   onOpenAccount: (accountId: string) => void;
+  /** Opens the ledger filtered to one category, over all time. */
+  onOpenCategory: (categoryId: string) => void;
   /** Jump to Investments, on the tab that holds what was clicked. */
   onGoInvestments: (kind: HoldingKind) => void;
 }) {
@@ -251,6 +254,7 @@ export function Overview({
                 }))}
                 centerLabel="Total spend"
                 centerValue={compactMoney(overview.expense)}
+                onSelect={onOpenCategory}
               />
               <motion.ul
                 key={`${month}-${span}`}
@@ -261,14 +265,21 @@ export function Overview({
               >
                 {topCategories.map((c) => (
                   <motion.li key={c.categoryId} variants={itemVariants}>
-                    <span className="cat-name">
-                      <span className="cat-swatch" style={{ background: c.color }}>
-                        <Icon name={c.icon} size={11} strokeWidth={2.4} />
+                    <button
+                      type="button"
+                      className="cat-row"
+                      onClick={() => onOpenCategory(c.categoryId)}
+                      title={`Show every ${c.name} entry`}
+                    >
+                      <span className="cat-name">
+                        <span className="cat-swatch" style={{ background: c.color }}>
+                          <Icon name={c.icon} size={11} strokeWidth={2.4} />
+                        </span>
+                        {c.name}
                       </span>
-                      {c.name}
-                    </span>
-                    <span className="cat-amount">{money(c.total)}</span>
-                    <Meter value={c.total / categoryPeak} color={c.color} />
+                      <span className="cat-amount">{money(c.total)}</span>
+                      <Meter value={c.total / categoryPeak} color={c.color} />
+                    </button>
                   </motion.li>
                 ))}
               </motion.ul>

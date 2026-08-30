@@ -70,7 +70,8 @@ function rangeBounds(range: Range, month: string) {
 }
 
 export function Transactions({
-  onOpenTransaction, onSplitTransaction, onAddTransaction, accountFocus, picking,
+  onOpenTransaction, onSplitTransaction, onAddTransaction, accountFocus, categoryFocus,
+  picking,
 }: {
   onOpenTransaction: (tx: Transaction) => void;
   /** Opens a row straight into its split editor. Absent while picking. */
@@ -78,6 +79,8 @@ export function Transactions({
   onAddTransaction?: () => void;
   /** Set when arriving from an account elsewhere in the app. */
   accountFocus?: { ids: string[]; token: number };
+  /** Set when arriving from a category on a breakdown. */
+  categoryFocus?: { ids: string[]; token: number };
   /**
    * Rendered inside the link-a-record modal. The screen's own title and the
    * running totals belong to the page rather than the task, and choosing a row
@@ -121,6 +124,22 @@ export function Transactions({
     setAccountIds(accountFocus.ids);
     setShowFilters(true);
   }, [accountFocus?.token]);
+
+  // Arriving from a breakdown: show that category over all time rather than
+  // the month the breakdown happened to be about — the question being asked
+  // is "what is in here", not "what was in here in August".
+  useEffect(() => {
+    if (!categoryFocus?.token) return;
+    setCategoryIds(categoryFocus.ids);
+    setRange('all');
+    setShowFilters(true);
+    // Whatever the ledger was last narrowed by is not part of the question
+    // being asked, and would quietly leave entries out of the answer.
+    setKind('all');
+    setAccountIds([]);
+    setSearch('');
+    setDebounced('');
+  }, [categoryFocus?.token]);
 
   // A selected group stands for itself plus every category filed under it.
   const expandedCategoryIds = useMemo(() => {

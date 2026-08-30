@@ -9,7 +9,12 @@ import { useStore } from '../lib/store';
 import { compactMoney, money, monthLabel, shortMonthLabel } from '../lib/format';
 import { itemVariants, listVariants, spring } from '../lib/motion';
 
-export function Insights() {
+export function Insights({
+  onOpenCategory,
+}: {
+  /** Opens the ledger filtered to one category, over all time. */
+  onOpenCategory: (categoryId: string) => void;
+}) {
   const { overview, month, setMonth, span, setSpan } = useStore();
 
   const stats = useMemo(() => {
@@ -133,7 +138,12 @@ export function Insights() {
               animate="animate"
             >
               {overview.topCategories.map((c) => (
-                <BreakdownRow key={c.categoryId} slice={c} total={categoryTotal} />
+                <BreakdownRow
+                  key={c.categoryId}
+                  slice={c}
+                  total={categoryTotal}
+                  onOpen={onOpenCategory}
+                />
               ))}
             </motion.ul>
           ) : (
@@ -153,41 +163,54 @@ export function Insights() {
   );
 }
 
-/** A group row that unfolds to reveal the leaf categories inside it. */
-function BreakdownRow({ slice, total }: { slice: CategorySlice; total: number }) {
+/**
+ * A group row that unfolds to reveal the leaf categories inside it. The row
+ * itself leads to the ledger — what a breakdown makes you want is the
+ * entries behind the figure — so unfolding is the caret's job alone.
+ */
+function BreakdownRow({
+  slice, total, onOpen,
+}: {
+  slice: CategorySlice;
+  total: number;
+  onOpen: (categoryId: string) => void;
+}) {
   const [open, setOpen] = useState(false);
   const expandable = slice.children.length > 0;
 
   return (
     <motion.li variants={itemVariants} className={expandable ? 'is-expandable' : ''}>
-      <button
-        className="breakdown-row"
-        onClick={() => expandable && setOpen((o) => !o)}
-        aria-expanded={expandable ? open : undefined}
-      >
-        <span className="cat-swatch" style={{ background: slice.color }}>
-          <Icon name={slice.icon} size={12} strokeWidth={2.3} />
-        </span>
-        <div className="breakdown-main">
-          <div className="breakdown-top">
-            <span>
-              {slice.name}
-              {expandable && (
-                <motion.i
-                  className="breakdown-caret"
-                  animate={{ rotate: open ? 90 : 0 }}
-                  transition={spring}
-                >
-                  <Icon name="chevron-right" size={13} />
-                </motion.i>
-              )}
-            </span>
-            <strong>{money(slice.total)}</strong>
+      <div className="breakdown-line">
+        <button
+          className="breakdown-row"
+          onClick={() => onOpen(slice.categoryId)}
+          title={`Show every ${slice.name} entry`}
+        >
+          <span className="cat-swatch" style={{ background: slice.color }}>
+            <Icon name={slice.icon} size={12} strokeWidth={2.3} />
+          </span>
+          <div className="breakdown-main">
+            <div className="breakdown-top">
+              <span>{slice.name}</span>
+              <strong>{money(slice.total)}</strong>
+            </div>
+            <Meter value={slice.total / total} color={slice.color} />
           </div>
-          <Meter value={slice.total / total} color={slice.color} />
-        </div>
-        <span className="breakdown-pct">{Math.round((slice.total / total) * 100)}%</span>
-      </button>
+          <span className="breakdown-pct">{Math.round((slice.total / total) * 100)}%</span>
+        </button>
+        {expandable && (
+          <button
+            className="breakdown-caret"
+            onClick={() => setOpen((o) => !o)}
+            aria-expanded={open}
+            aria-label={open ? `Hide what is in ${slice.name}` : `What is in ${slice.name}`}
+          >
+            <motion.span animate={{ rotate: open ? 90 : 0 }} transition={spring}>
+              <Icon name="chevron-right" size={13} />
+            </motion.span>
+          </button>
+        )}
+      </div>
 
       <AnimatePresence initial={false}>
         {open && (
@@ -200,10 +223,17 @@ function BreakdownRow({ slice, total }: { slice: CategorySlice; total: number })
           >
             {slice.children.map((child) => (
               <li key={child.categoryId}>
-                <span className="child-dot" style={{ background: child.color }} />
-                <span className="child-name">{child.name}</span>
-                <span className="child-count">{child.count}</span>
-                <strong>{money(child.total)}</strong>
+                <button
+                  type="button"
+                  className="child-row"
+                  onClick={() => onOpen(child.categoryId)}
+                  title={`Show every ${child.name} entry`}
+                >
+                  <span className="child-dot" style={{ background: child.color }} />
+                  <span className="child-name">{child.name}</span>
+                  <span className="child-count">{child.count}</span>
+                  <strong>{money(child.total)}</strong>
+                </button>
               </li>
             ))}
           </motion.ul>
