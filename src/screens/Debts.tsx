@@ -6,17 +6,19 @@ import { useStore } from '../lib/store';
 import { DebtDetail } from './DebtDetail';
 import { dayLabel, debtProgress, initials, money } from '../lib/format';
 import { itemVariants, listVariants } from '../lib/motion';
-import type { Debt, DebtDirection, Transaction } from '../lib/types';
+import type { Debt, DebtDirection, DebtPayment, Transaction } from '../lib/types';
 
 /** Who owes whom, and what is done with. */
 type DebtTab = 'lent' | 'borrowed' | 'past';
 
 export function Debts({
-  onNewDebt, onEditDebt, onRecordPayment, onOpenTransaction,
+  onNewDebt, onEditDebt, onRecordPayment, onEditPayment, onOpenTransaction,
 }: {
   onNewDebt: (direction: DebtDirection) => void;
   onEditDebt: (debt: Debt) => void;
   onRecordPayment: (debt: Debt) => void;
+  /** Opens one of a debt's repayments to change or remove it. */
+  onEditPayment: (debt: Debt, payment: DebtPayment) => void;
   /** Opens one of the entries behind a debt, from the debt itself. */
   onOpenTransaction: (tx: Transaction) => void;
 }) {
@@ -73,6 +75,7 @@ export function Debts({
         onBack={() => setOpenId(null)}
         onEdit={() => onEditDebt(viewing)}
         onRecordPayment={() => onRecordPayment(viewing)}
+        onEditPayment={(payment) => onEditPayment(viewing, payment)}
         onOpenTransaction={onOpenTransaction}
       />
     );

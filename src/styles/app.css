@@ -3961,13 +3961,22 @@ kbd {
 
 .debt-payments { overflow: hidden; }
 .debt-payments li {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  padding: 7px 0;
   font-size: 12.5px;
   border-top: 1px solid var(--line-soft);
 }
+/* A repayment is a record like any other: it opens, changes and goes. */
+.debt-payments li > button,
+.debt-payments li > span {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 4px;
+  text-align: left;
+  border-radius: var(--r-sm);
+  transition: background var(--fast) var(--ease);
+}
+.debt-payments li > button:hover { background: var(--surface-2); }
 .debt-payments li:first-child { margin-top: 10px; }
 .debt-payment-date { width: 84px; flex-shrink: 0; color: var(--ink-4); font-weight: 500; }
 .debt-payment-note {
@@ -3978,7 +3987,7 @@ kbd {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.debt-payments strong { font-weight: 600; }
+.debt-payments strong { margin-left: auto; font-weight: 600; }
 
 /* ------------------------------------------------- linking a transaction */
 

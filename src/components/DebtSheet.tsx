@@ -5,9 +5,9 @@ import { TransactionPicker } from './TransactionPicker';
 import { Button, Field, Segmented, Sheet, TextInput, type SegmentOption } from './ui';
 import { useStore } from '../lib/store';
 import {
-  amountChars, money, paiseToRupeeString, rupeesToPaise, settleAmount, toLocalInput,
+  amountChars, dayLabel, money, paiseToRupeeString, rupeesToPaise, settleAmount, toLocalInput,
 } from '../lib/format';
-import type { Debt, DebtDirection } from '../lib/types';
+import type { Debt, DebtDirection, DebtPayment } from '../lib/types';
 
 const DIRECTIONS: SegmentOption<DebtDirection>[] = [
   { value: 'lent', label: 'I lent', icon: 'arrow-up-right', accent: 'var(--green)' },
@@ -217,9 +217,15 @@ export function DebtSheet({
 
 /** Recording a repayment against an existing debt. */
 export function DebtPaymentSheet({
-  open, onClose, debt,
-}: { open: boolean; onClose: () => void; debt: Debt | null }) {
-  const { saveDebtPayment } = useStore();
+  open, onClose, debt, editing,
+}: {
+  open: boolean;
+  onClose: () => void;
+  debt: Debt | null;
+  /** The repayment being changed, when one is. */
+  editing?: DebtPayment | null;
+}) {
+  const { saveDebtPayment, deleteDebtPayment } = useStore();
   const [amount, setAmount] = useState('');
   const [occurredAt, setOccurredAt] = useState(toLocalInput().slice(0, 10));
   const [note, setNote] = useState('');
@@ -229,13 +235,15 @@ export function DebtPaymentSheet({
 
   useEffect(() => {
     if (!open || !debt) return;
-    setAmount(paiseToRupeeString(debt.outstanding));
-    setOccurredAt(toLocalInput().slice(0, 10));
-    setNote('');
-    setTxId(null);
-    setTxLabel(null);
+    // A repayment being changed opens as it stands; a new one opens on what
+    // is left, which is what is usually being paid.
+    setAmount(paiseToRupeeString(editing ? editing.amount : debt.outstanding));
+    setOccurredAt((editing?.occurredAt ?? toLocalInput()).slice(0, 10));
+    setNote(editing?.note ?? '');
+    setTxId(editing?.transactionId ?? null);
+    setTxLabel(editing?.transactionLabel ?? null);
     setError(null);
-  }, [open, debt]);
+  }, [open, debt, editing]);
 
   if (!debt) return null;
 
@@ -243,6 +251,7 @@ export function DebtPaymentSheet({
     const value = rupeesToPaise(amount);
     if (value <= 0) return setError('Enter an amount.');
     await saveDebtPayment({
+      id: editing?.id ?? null,
       debtId: debt.id,
       amount: value,
       occurredAt,
@@ -256,19 +265,36 @@ export function DebtPaymentSheet({
     <Sheet
       open={open}
       onClose={onClose}
-      title="Record a repayment"
+      title={editing ? 'Edit repayment' : 'Record a repayment'}
       subtitle={
-        debt.direction === 'lent'
-          ? `${debt.counterparty} paying you back · ${money(debt.outstanding)} outstanding`
-          : `Paying ${debt.counterparty} back · ${money(debt.outstanding)} outstanding`
+        editing
+          ? `${debt.counterparty} · recorded ${dayLabel(editing.occurredAt)}`
+          : debt.direction === 'lent'
+            ? `${debt.counterparty} paying you back · ${money(debt.outstanding)} outstanding`
+            : `Paying ${debt.counterparty} back · ${money(debt.outstanding)} outstanding`
       }
       width={470}
       footer={
         <>
-          <span />
+          {editing ? (
+            <Button
+              tone="danger"
+              icon="trash-2"
+              onClick={async () => {
+                await deleteDebtPayment(editing.id);
+                onClose();
+              }}
+            >
+              Delete
+            </Button>
+          ) : (
+            <span />
+          )}
           <div className="foot-actions">
             <Button tone="ghost" onClick={onClose}>Cancel</Button>
-            <Button tone="primary" onClick={submit}>Record repayment</Button>
+            <Button tone="primary" onClick={submit}>
+              {editing ? 'Save changes' : 'Record repayment'}
+            </Button>
           </div>
         </>
       }

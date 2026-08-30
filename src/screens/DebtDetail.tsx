@@ -7,7 +7,7 @@ import { api } from '../lib/api';
 import { useStore } from '../lib/store';
 import { dayLabel, debtProgress, initials, money } from '../lib/format';
 import { itemVariants, listVariants, spring } from '../lib/motion';
-import type { Debt, Transaction } from '../lib/types';
+import type { Debt, DebtPayment, Transaction } from '../lib/types';
 
 /** Days between now and a date, said the way you would say it. */
 function since(day: string) {
@@ -25,12 +25,14 @@ function since(day: string) {
  * of hand-offs is the only place the money itself can be read.
  */
 export function DebtDetail({
-  debt, onBack, onEdit, onRecordPayment, onOpenTransaction,
+  debt, onBack, onEdit, onRecordPayment, onEditPayment, onOpenTransaction,
 }: {
   debt: Debt;
   onBack: () => void;
   onEdit: () => void;
   onRecordPayment: () => void;
+  /** Opens one of the repayments to change or remove it. */
+  onEditPayment: (payment: DebtPayment) => void;
   onOpenTransaction: (tx: Transaction) => void;
 }) {
   const { revision } = useStore();
@@ -184,11 +186,13 @@ export function DebtDetail({
             <motion.ul className="debt-payments is-listed" variants={listVariants} initial="initial" animate="animate">
               {debt.payments.map((payment) => (
                 <motion.li key={payment.id} variants={itemVariants} transition={spring}>
-                  <span className="debt-payment-date">{dayLabel(payment.occurredAt)}</span>
-                  <span className="debt-payment-note">
-                    {payment.note ?? payment.transactionLabel ?? 'Repayment'}
-                  </span>
-                  <strong>{money(payment.amount)}</strong>
+                  <button onClick={() => onEditPayment(payment)}>
+                    <span className="debt-payment-date">{dayLabel(payment.occurredAt)}</span>
+                    <span className="debt-payment-note">
+                      {payment.note ?? payment.transactionLabel ?? 'Repayment'}
+                    </span>
+                    <strong>{money(payment.amount)}</strong>
+                  </button>
                 </motion.li>
               ))}
             </motion.ul>

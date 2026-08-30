@@ -23,6 +23,7 @@ import { screenVariants } from './lib/motion';
 import type {
   Account,
   Debt,
+  DebtPayment,
   DebtDirection,
   Holding,
   HoldingKind,
@@ -54,7 +55,9 @@ function Shell() {
   const [debtOpen, setDebtOpen] = useState(false);
   const [editingDebt, setEditingDebt] = useState<Debt | null>(null);
   const [debtDirection, setDebtDirection] = useState<DebtDirection>('lent');
-  const [paymentFor, setPaymentFor] = useState<Debt | null>(null);
+  // The repayment sheet's subject: whose debt, and which repayment when one
+  // is being changed rather than added.
+  const [paying, setPaying] = useState<{ debt: Debt; payment: DebtPayment | null } | null>(null);
   const [holdingOpen, setHoldingOpen] = useState(false);
   const [editingHolding, setEditingHolding] = useState<Holding | null>(null);
   const [holdingKind, setHoldingKind] = useState<HoldingKind>('fund');
@@ -278,7 +281,8 @@ function Shell() {
               <Debts
                 onNewDebt={newDebt}
                 onEditDebt={editDebt}
-                onRecordPayment={setPaymentFor}
+                onRecordPayment={(debt) => setPaying({ debt, payment: null })}
+                onEditPayment={(debt, payment) => setPaying({ debt, payment })}
                 onOpenTransaction={openTransaction}
               />
             ) : route === 'investments' ? (
@@ -319,9 +323,10 @@ function Shell() {
         seedDirection={debtDirection}
       />
       <DebtPaymentSheet
-        open={!!paymentFor}
-        onClose={() => setPaymentFor(null)}
-        debt={paymentFor}
+        open={!!paying}
+        onClose={() => setPaying(null)}
+        debt={paying?.debt ?? null}
+        editing={paying?.payment ?? null}
       />
       <HoldingSheet
         open={holdingOpen}
