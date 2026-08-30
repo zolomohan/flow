@@ -2,12 +2,17 @@ import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from '../components/Icon';
 import { TransactionRow } from '../components/TransactionRow';
-import { Button, Card, Chip, Empty, Segmented, TextInput, type SegmentOption } from '../components/ui';
+import {
+  Button, Card, Chip, Empty, Segmented, Select, TextInput,
+  type SegmentOption, type SelectOption,
+} from '../components/ui';
 import { MonthNav, periodLabel } from '../components/MonthNav';
 import { useStore } from '../lib/store';
 import { dayKey, dayLabel, money, shiftMonth } from '../lib/format';
 import { itemVariants, listVariants, spring } from '../lib/motion';
-import type { Transaction, TransactionSummary, TxKind } from '../lib/types';
+import type {
+  Transaction, TransactionPatch, TransactionSummary, TxKind,
+} from '../lib/types';
 
 type KindFilter = 'all' | TxKind;
 type Range = 'month' | 'quarter' | 'year' | 'all';
@@ -83,6 +88,7 @@ export function Transactions({
 }) {
   const {
     accounts, categories, month, setMonth, listTransactions, transactionSummary, revision,
+    updateTransactions, deleteTransactions, toast,
   } = useStore();
   const [search, setSearch] = useState('');
   const [debounced, setDebounced] = useState('');
@@ -97,6 +103,11 @@ export function Transactions({
   const [summary, setSummary] = useState<TransactionSummary | null>(null);
   const [shown, setShown] = useState(PAGE);
   const [loading, setLoading] = useState(true);
+  // Rows picked out for one change over all of them. Held by id, so a row
+  // stays picked while the list re-queries underneath it.
+  const [picked, setPicked] = useState<string[]>([]);
+  const [anchor, setAnchor] = useState<string | null>(null);
+  const [working, setWorking] = useState(false);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebounced(search), 160);
@@ -200,6 +211,114 @@ export function Transactions({
 
   const toggle = (list: string[], id: string) =>
     list.includes(id) ? list.filter((x) => x !== id) : [...list, id];
+
+  // Only what is actually on screen can stay picked: narrowing the filters
+  // until a row is gone should not leave it in a change you make afterwards.
+  const pickedSet = useMemo(() => {
+    const here = new Set(rows.map((r) => r.id));
+    return new Set(picked.filter((id) => here.has(id)));
+  }, [picked, rows]);
+
+  const pick = (tx: Transaction, range: boolean) => {
+    // Shift picks the run between the last one and this, which is how a
+    // month of one merchant gets filed in a single go.
+    if (range && anchor) {
+      const from = rows.findIndex((r) => r.id === anchor);
+      const to = rows.findIndex((r) => r.id === tx.id);
+      if (from >= 0 && to >= 0) {
+        const [a, b] = from < to ? [from, to] : [to, from];
+        const run = rows.slice(a, b + 1).map((r) => r.id);
+        setPicked((was) => [...new Set([...was, ...run])]);
+        setAnchor(tx.id);
+        return;
+      }
+    }
+    setPicked((was) => toggle(was, tx.id));
+    setAnchor(tx.id);
+  };
+
+  // Only the side of the ledger the picked rows are on: filing an expense
+  // under an income category is not a thing that can be meant.
+  const bulkCategories = useMemo<SelectOption[]>(() => {
+    const kinds = new Set(
+      rows.filter((r) => pickedSet.has(r.id) && r.kind !== 'transfer').map((r) => r.kind),
+    );
+    const wanted = kinds.size === 1 ? [...kinds][0] : null;
+    return categories
+      .filter((c) => !wanted || c.kind === wanted)
+      .map((c) => ({
+        value: c.id,
+        label: c.name,
+        icon: c.icon,
+        color: c.color,
+        child: !!c.parentId,
+        under: c.parentId
+          ? categories.find((p) => p.id === c.parentId)?.name ?? undefined
+          : undefined,
+      }));
+  }, [categories, rows, pickedSet]);
+
+  const bulkAccounts = useMemo<SelectOption[]>(
+    () =>
+      accounts
+        .filter((a) => !a.archived)
+        .map((a) => ({
+          value: a.id,
+          label: a.name,
+          hint: a.institution ?? undefined,
+          icon: a.icon,
+          color: a.color,
+        })),
+    [accounts],
+  );
+
+  const clearPicked = () => {
+    setPicked([]);
+    setAnchor(null);
+  };
+
+  // Escape drops a selection, the way it dismisses everything else.
+  useEffect(() => {
+    if (!picked.length) return;
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && clearPicked();
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [picked.length]);
+
+  // What a change can be applied to, which is not always everything picked:
+  // a transfer has no category, and a split bill takes its own from its parts.
+  const chosen = rows.filter((r) => pickedSet.has(r.id));
+  const categorisable = chosen.filter((r) => r.kind !== 'transfer' && !r.splits.length).length;
+
+  const applyToPicked = async (patch: TransactionPatch, said: string) => {
+    setWorking(true);
+    try {
+      const done = await updateTransactions([...pickedSet], patch);
+      toast(
+        done.skipped
+          ? `${said} · ${done.skipped} left alone`
+          : `${said}`,
+      );
+      clearPicked();
+    } catch {
+      /* the store has already said what went wrong */
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const removePicked = async () => {
+    setWorking(true);
+    try {
+      const gone = await deleteTransactions([...pickedSet]);
+      toast(`${gone} ${gone === 1 ? 'entry' : 'entries'} deleted`);
+      clearPicked();
+    } catch {
+      /* the store has already said what went wrong */
+    } finally {
+      setWorking(false);
+    }
+  };
 
   const activeFilters =
     accountIds.length + categoryIds.length + (side === 'either' ? 0 : 1);
@@ -474,7 +593,10 @@ export function Transactions({
                     {money(day.net, { sign: day.net > 0 })}
                   </span>
                 </header>
-                <motion.div className="tx-list" variants={listing}>
+                <motion.div
+                  className={`tx-list ${pickedSet.size ? 'is-picking' : ''}`}
+                  variants={listing}
+                >
                   {day.items.map((tx) => (
                     <TransactionRow
                       key={tx.id}
@@ -485,6 +607,8 @@ export function Transactions({
                           ? undefined
                           : () => onSplitTransaction(tx)
                       }
+                      selected={pickedSet.has(tx.id)}
+                      onSelect={picking ? undefined : (range) => pick(tx, range)}
                     />
                   ))}
                 </motion.div>
@@ -521,6 +645,88 @@ export function Transactions({
           </div>
         </div>
       )}
+
+      {/* One change over everything picked out. It floats over the ledger
+          rather than sitting in it, so the rows underneath stay where they
+          were while you decide. */}
+      <AnimatePresence>
+        {pickedSet.size > 0 && (
+          <motion.div
+            className="bulk-bar"
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 12 }}
+            transition={spring}
+          >
+            <span className="bulk-count">
+              <strong>{pickedSet.size}</strong>
+              selected
+            </span>
+
+            <div className="bulk-fields">
+              <Select
+                options={bulkCategories}
+                value={null}
+                onChange={(id) =>
+                  id &&
+                  applyToPicked(
+                    { categoryId: id },
+                    `Filed under ${categories.find((c) => c.id === id)?.name ?? 'category'}`,
+                  )
+                }
+                placeholder={
+                  categorisable === pickedSet.size
+                    ? 'Change category'
+                    : `Change category · ${categorisable} of ${pickedSet.size}`
+                }
+                searchable
+                searchPlaceholder="Find a category"
+                disabled={working || categorisable === 0}
+              />
+              <Select
+                options={bulkAccounts}
+                value={null}
+                onChange={(id) =>
+                  id &&
+                  applyToPicked(
+                    { accountId: id },
+                    `Moved to ${accounts.find((a) => a.id === id)?.name ?? 'account'}`,
+                  )
+                }
+                placeholder="Change account"
+                searchable
+                searchPlaceholder="Find an account"
+                disabled={working}
+              />
+            </div>
+
+            <div className="bulk-actions">
+              {pickedSet.size < rows.length && (
+                <Button
+                  size="sm"
+                  tone="ghost"
+                  onClick={() => setPicked(rows.map((r) => r.id))}
+                  disabled={working}
+                >
+                  All {rows.length.toLocaleString('en-IN')}
+                </Button>
+              )}
+              <Button
+                size="sm"
+                tone="danger"
+                icon="trash-2"
+                onClick={removePicked}
+                disabled={working}
+              >
+                Delete
+              </Button>
+              <Button size="sm" tone="ghost" onClick={clearPicked} disabled={working}>
+                Cancel
+              </Button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

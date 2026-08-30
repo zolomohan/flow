@@ -1041,6 +1041,86 @@ kbd {
 
 .tx-bill { position: relative; }
 .tx-bill.is-open { background: var(--surface-2); }
+.tx-bill.is-picked { background: color-mix(in srgb, var(--blue) 8%, transparent); }
+
+/* The box stands where the avatar is rather than beside it, so the ledger
+   keeps its shape whether or not anything is being picked out. It shows on
+   hover, and stays out once a selection is under way. */
+.tx-check {
+  position: absolute;
+  top: 11px;
+  left: 22px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--r-md);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  color: transparent;
+  opacity: 0;
+  transition: opacity var(--fast) var(--ease), background var(--fast) var(--ease),
+    border-color var(--fast) var(--ease);
+}
+.tx-bill:hover .tx-check,
+.tx-list.is-picking .tx-check,
+.tx-check:focus-visible { opacity: 1; }
+.tx-check:hover { border-color: var(--blue); }
+.tx-check.is-on {
+  opacity: 1;
+  background: var(--blue);
+  border-color: var(--blue);
+  color: #fff;
+}
+
+/* What to do with them, floating over the ledger rather than sitting in it. */
+.bulk-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 26px;
+  z-index: 50;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: min(880px, calc(100vw - 48px));
+  padding: 10px 14px;
+  border-radius: var(--r-xl);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-pop);
+}
+.bulk-count {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding-left: 4px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+.bulk-count strong {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.bulk-fields { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.bulk-fields > * { width: 210px; }
+.bulk-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 6px;
+  border-left: 1px solid var(--line-soft);
+}
+
+@media (max-width: 860px) {
+  .bulk-bar { flex-wrap: wrap; justify-content: flex-end; }
+  .bulk-fields > * { width: 170px; }
+}
 
 /* Sits over the chevron, which is decoration — the whole row is the target. */
 .tx-split-action {

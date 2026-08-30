@@ -12,6 +12,7 @@ import { api } from './api';
 import { monthKey } from './format';
 import type {
   Account,
+  BulkResult,
   AccountInput,
   Category,
   CategoryDeleteOptions,
@@ -25,6 +26,7 @@ import type {
   Overview,
   Transaction,
   TransactionInput,
+  TransactionPatch,
   TransactionQuery,
   TransactionSummary,
 } from './types';
@@ -77,6 +79,9 @@ interface Store {
   pricesRefreshing: boolean;
   saveTransaction: (input: TransactionInput) => Promise<Transaction>;
   deleteTransaction: (id: string) => Promise<void>;
+  /** One change over many postings. Resolves with what it actually did. */
+  updateTransactions: (ids: string[], patch: TransactionPatch) => Promise<BulkResult>;
+  deleteTransactions: (ids: string[]) => Promise<number>;
   listTransactions: (query?: TransactionQuery) => Promise<Transaction[]>;
   transactionSummary: (query?: TransactionQuery) => Promise<TransactionSummary>;
   seedDemo: () => Promise<void>;
@@ -290,6 +295,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       pricesRefreshing,
       saveTransaction: (input) => mutate(() => api.saveTransaction(input)),
       deleteTransaction: (id) => mutate(() => api.deleteTransaction(id)),
+      updateTransactions: (ids, patch) => mutate(() => api.updateTransactions(ids, patch)),
+      deleteTransactions: (ids) => mutate(() => api.deleteTransactions(ids)),
       listTransactions: (query) => api.listTransactions(query),
       transactionSummary: (query) => api.transactionSummary(query),
       seedDemo: () => mutate(() => api.seedDemo(), 'Sample book loaded'),

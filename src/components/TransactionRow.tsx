@@ -13,13 +13,19 @@ import type { Transaction } from '../lib/types';
  *  into, and the people who owe some of it, unfold underneath rather than
  *  filling the ledger with entries the bank never saw. */
 export function TransactionRow({
-  tx, onClick, onSplit, showDate,
+  tx, onClick, onSplit, showDate, selected, onSelect,
 }: {
   tx: Transaction;
   onClick?: () => void;
   /** Opens the split editor straight from the row. Left off while picking. */
   onSplit?: () => void;
   showDate?: string;
+  /** Whether this row is in the current selection. Absent means the list
+   *  isn't selectable at all — inside the record picker, say. */
+  selected?: boolean;
+  /** Ticking the box. `range` is true when shift was held, which the ledger
+   *  reads as "everything between the last one and this". */
+  onSelect?: (range: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const isTransfer = tx.kind === 'transfer';
@@ -43,7 +49,23 @@ export function TransactionRow({
   const lent = tx.shares[0]?.direction === 'lent';
 
   return (
-    <motion.div className={`tx-bill ${open ? 'is-open' : ''}`} layout="position">
+    <motion.div
+      className={`tx-bill ${open ? 'is-open' : ''} ${selected ? 'is-picked' : ''}`}
+      layout="position"
+    >
+      {/* The box takes the avatar's place rather than sitting beside it: the
+          row keeps its shape whether or not anything is being picked out. */}
+      {onSelect && (
+        <button
+          type="button"
+          className={`tx-check ${selected ? 'is-on' : ''}`}
+          aria-pressed={selected}
+          aria-label={selected ? 'Deselect' : 'Select'}
+          onClick={(e) => onSelect(e.shiftKey)}
+        >
+          <Icon name="check" size={13} strokeWidth={3} />
+        </button>
+      )}
       <motion.button
         type="button"
         variants={itemVariants}

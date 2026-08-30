@@ -4708,6 +4708,120 @@ mod tests {
         assert_eq!(line[1].price_e4, 1_040_000, "the day's last fetch wins");
     }
 
+    /// A change over many rows applies where it can and says where it could
+    /// not, rather than bending a posting to fit or quietly doing less than
+    /// it claimed.
+    #[test]
+    fn a_bulk_edit_leaves_alone_what_it_cannot_apply_to() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 5_000_000);
+        let other = account(&conn, "Cash", "cash", 0);
+        let food = category(&conn, "Food", None);
+        let travel = category(&conn, "Travel", None);
+        let salary = save_category(
+            &conn,
+            CategoryInput {
+                id: None,
+                kind: "income".into(),
+                name: "Salary".into(),
+                icon: "briefcase".into(),
+                color: "#000000".into(),
+                parent_id: None,
+            },
+        )
+        .unwrap()
+        .id;
+
+        let plain = bill(&conn, &bank, 100_000, Some(food.clone()));
+        let bare = bill(&conn, &bank, 50_000, None);
+        let split = bill(&conn, &bank, 300_000, Some(food.clone()));
+        resplit(&conn, &split, Some(vec![part(200_000, &food), part(100_000, &travel)]), None)
+            .unwrap();
+        let moved = save_transaction(
+            &conn,
+            TransactionInput {
+                id: None,
+                kind: "transfer".into(),
+                amount: 25_000,
+                account_id: bank.clone(),
+                to_account_id: Some(other.clone()),
+                category_id: None,
+                merchant: "Moved".into(),
+                note: None,
+                occurred_at: "2026-08-15T10:00".into(),
+                splits: None,
+                shares: None,
+            },
+        )
+        .unwrap();
+
+        let ids = vec![plain.id.clone(), bare.id.clone(), split.id.clone(), moved.id.clone()];
+        let done = update_transactions(
+            &conn,
+            &ids,
+            TransactionPatch { category_id: Some(travel.clone()), ..Default::default() },
+        )
+        .unwrap();
+        assert_eq!(done.changed, 2, "the two plain expenses take the category");
+        assert_eq!(done.skipped, 2, "the transfer and the split bill do not");
+
+        let filed = |id: &str| -> Option<String> {
+            conn.query_row("SELECT category_id FROM transactions WHERE id = ?1", params![id], |r| {
+                r.get(0)
+            })
+            .unwrap()
+        };
+        assert_eq!(filed(&plain.id).as_deref(), Some(travel.as_str()));
+        assert_eq!(filed(&bare.id).as_deref(), Some(travel.as_str()));
+        assert_eq!(filed(&split.id).as_deref(), Some(food.as_str()), "its parts decide");
+        assert_eq!(filed(&moved.id), None, "a transfer is never categorised");
+
+        // The other side of the ledger is not a category an expense can take.
+        let wrong = update_transactions(
+            &conn,
+            &[plain.id.clone()],
+            TransactionPatch { category_id: Some(salary), ..Default::default() },
+        )
+        .unwrap();
+        assert_eq!((wrong.changed, wrong.skipped), (0, 1));
+        assert_eq!(filed(&plain.id).as_deref(), Some(travel.as_str()), "left as it was");
+
+        // Moving the money's own side over, and clearing what it was filed as.
+        update_transactions(
+            &conn,
+            &[plain.id.clone()],
+            TransactionPatch {
+                account_id: Some(other.clone()),
+                clear_category: Some(true),
+                merchant: Some(" Chai ".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let (acct, merchant): (String, String) = conn
+            .query_row(
+                "SELECT account_id, merchant FROM transactions WHERE id = ?1",
+                params![plain.id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(acct, other);
+        assert_eq!(merchant, "Chai", "trimmed on the way in");
+        assert_eq!(filed(&plain.id), None);
+
+        // A transfer cannot be moved onto the account it already pays into.
+        let collide =
+            update_transactions(&conn, &[moved.id.clone()], TransactionPatch {
+                account_id: Some(other.clone()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!((collide.changed, collide.skipped), (0, 1));
+
+        assert_eq!(delete_transactions(&conn, &[bare.id, split.id]).unwrap(), 2);
+        assert_eq!(list_transactions(&conn, TransactionQuery::default()).unwrap().len(), 2);
+    }
+
     #[test]
     fn quantities_round_once_rather_than_per_lot() {
         // A third of a unit, three times over, at ₹90 — where valuing each lot
