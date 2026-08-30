@@ -7,7 +7,7 @@ import {
   type SegmentOption, type SelectOption,
 } from './ui';
 import {
-  SplitLinesEditor, SplitPeopleEditor, SplitLink,
+  SplitLinesEditor, SplitPeopleEditor, SplitMenu,
   directionFor, emptyPeople, lineFromScratch, linesFor, linesToInput,
   peopleFor, peopleToInput, restOf, shareAmounts,
   type SplitLine, type SplitPeople,
@@ -487,16 +487,37 @@ export function TransactionSheet({
       width={twoPane ? 940 : 600}
       footer={
         <>
-          {editing && !page ? (
-            <Button tone="danger" icon="trash-2" onClick={remove}>
-              Delete
-            </Button>
-          ) : (
-            <span className="foot-hint">
-              <kbd>⌘</kbd>
-              <kbd>↵</kbd> to save
-            </span>
-          )}
+          <div className="foot-lead">
+            {editing && !page && (
+              <Button tone="danger" icon="trash-2" onClick={remove}>
+                Delete
+              </Button>
+            )}
+            {/* Not while you are already inside one: the way out of a split is
+                back to the transaction, and the menu would only offer the way
+                in again. */}
+            {kind !== 'transfer' && !page && (
+              <SplitMenu
+                ways={[
+                  {
+                    which: 'categories',
+                    icon: 'split',
+                    title: 'Split transaction',
+                    summary: partsSummary,
+                    on: split,
+                  },
+                  {
+                    which: 'people',
+                    icon: 'users',
+                    title: 'Split with people',
+                    summary: peopleSummary,
+                    on: owed > 0,
+                  },
+                ]}
+                onPick={openPage}
+              />
+            )}
+          </div>
           <div className="foot-actions">
             {page ? (
               <Button tone="ghost" icon="chevron-left" onClick={leavePage}>
@@ -507,8 +528,13 @@ export function TransactionSheet({
                 Cancel
               </Button>
             )}
+            {/* The shortcut belongs on the thing it presses. */}
             <Button tone="primary" onClick={submit} disabled={saving}>
               {editing ? 'Save changes' : 'Add transaction'}
+              <span className="btn-keys">
+                <kbd>⌘</kbd>
+                <kbd>↵</kbd>
+              </span>
             </Button>
           </div>
         </>
@@ -649,35 +675,38 @@ export function TransactionSheet({
                 )}
               </AnimatePresence>
 
-              {/* The ways in to a split sit under the categories: filing a
-                  bill under several of them, or owing part of it to someone,
-                  are both answers to what the money was for. */}
+              {/* A split bill has no one category, so the picker steps aside —
+                  and what it was filed under instead takes its place, rather
+                  than leaving the column to say nothing at all. */}
               <AnimatePresence initial={false}>
-                {kind !== 'transfer' && (
-                  <motion.div
-                    key="splits"
-                    className="split-panels"
+                {kind !== 'transfer' && split && (
+                  <motion.button
+                    key="recap"
+                    type="button"
+                    className="split-recap"
                     initial={{ opacity: 0, height: 0 }}
                     animate={{ opacity: 1, height: 'auto' }}
                     exit={{ opacity: 0, height: 0 }}
                     transition={spring}
+                    onClick={() => openPage('categories')}
                   >
-                    <SplitLink
-                      icon="split"
-                      title="Split transaction"
-                      summary={partsSummary}
-                      on={split}
-                      onOpen={() => openPage('categories')}
-                    />
-
-                    <SplitLink
-                      icon="users"
-                      title="Split with people"
-                      summary={peopleSummary}
-                      on={owed > 0}
-                      onOpen={() => openPage('people')}
-                    />
-                  </motion.div>
+                    <span className="field-label">
+                      Split
+                      <span className="field-hint">{money(paise)} in {lines.length} parts</span>
+                    </span>
+                    <span className="split-recap-parts">
+                      {linesToInput(lines, paise).map((part, i) => {
+                        const category = palette.find((c) => c.id === part.categoryId);
+                        return (
+                          <span className="split-recap-part" key={i}>
+                            <i style={{ background: category?.color ?? 'var(--ink-4)' }} />
+                            {category?.name ?? 'Uncategorised'}
+                            <em>{money(part.amount)}</em>
+                          </span>
+                        );
+                      })}
+                    </span>
+                  </motion.button>
                 )}
               </AnimatePresence>
             </div>

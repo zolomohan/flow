@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from './Icon';
 import { DateField } from './DateField';
@@ -10,7 +10,7 @@ import { useStore } from '../lib/store';
 import {
   amountChars, money, paiseToRupeeString, rupeesToPaise, settleAmount,
 } from '../lib/format';
-import { itemVariants, listVariants, spring } from '../lib/motion';
+import { itemVariants, listVariants, popover, press, spring } from '../lib/motion';
 import type {
   DebtDirection, Paise, Transaction, TransactionShareInput, TransactionSplitInput, TxKind,
 } from '../lib/types';
@@ -630,39 +630,100 @@ export function SplitPeopleEditor({
   );
 }
 
-/* ------------------------------------------------------------------- link */
+/* ------------------------------------------------------------------- menu */
 
-/**
- * The way in to one of the two splits: what is set up now, and a chevron.
- * Dividing a bill is its own job with its own screenful of rows, so it gets a
- * page of the sheet rather than a drawer underneath the form.
- */
-export function SplitLink({
-  icon, title, summary, on, onOpen,
-}: {
+export interface SplitWay {
+  which: 'categories' | 'people';
   icon: string;
   title: string;
   summary: string;
   /** Whether the bill is actually divided this way, as against merely could be. */
   on: boolean;
-  onOpen: () => void;
+}
+
+/**
+ * The two ways of dividing a bill, on a menu of their own beside the sheet's
+ * close button. Each is a page rather than a drawer, so this is a way in
+ * rather than a switch — and what is set up already is on the row.
+ */
+export function SplitMenu({
+  ways, onPick,
+}: {
+  ways: SplitWay[];
+  onPick: (which: SplitWay['which']) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!root.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      // The sheet closes on Escape too, and the menu is the nearer thing.
+      e.stopPropagation();
+      setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey, true);
+    };
+  }, [open]);
+
+  const divided = ways.some((way) => way.on);
+
   return (
-    <motion.button
-      type="button"
-      className={`split-link ${on ? 'is-on' : ''}`}
-      onClick={onOpen}
-      whileTap={{ scale: 0.99 }}
-      transition={spring}
-    >
-      <span className="split-section-glyph">
-        <Icon name={icon} size={15} strokeWidth={2.1} />
-      </span>
-      <span className="split-section-title">
-        {title}
-        <em>{summary}</em>
-      </span>
-      <Icon name="chevron-right" size={16} />
-    </motion.button>
+    <div className="split-menu" ref={root}>
+      <motion.button
+        type="button"
+        className={`split-menu-trigger ${open ? 'is-open' : ''} ${divided ? 'is-on' : ''}`}
+        onClick={() => setOpen((was) => !was)}
+        whileTap={press}
+        transition={spring}
+      >
+        <Icon name="split" size={14} strokeWidth={2.1} />
+        Split
+        <motion.span animate={{ rotate: open ? 180 : 0 }} transition={spring}>
+          <Icon name="chevron-down" size={14} />
+        </motion.span>
+      </motion.button>
+
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            className="split-menu-pop"
+            variants={popover}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+          >
+            {ways.map((way) => (
+              <button
+                key={way.which}
+                type="button"
+                className={`split-link ${way.on ? 'is-on' : ''}`}
+                onClick={() => {
+                  setOpen(false);
+                  onPick(way.which);
+                }}
+              >
+                <span className="split-section-glyph">
+                  <Icon name={way.icon} size={15} strokeWidth={2.1} />
+                </span>
+                <span className="split-section-title">
+                  {way.title}
+                  <em>{way.summary}</em>
+                </span>
+                <Icon name="chevron-right" size={16} />
+              </button>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }
