@@ -657,8 +657,6 @@ kbd {
   flex-direction: column;
   width: 100%;
   max-height: min(86vh, 820px);
-  /* Some sheets grow a column as you fill them in — glide rather than jump. */
-  transition: max-width var(--base) var(--ease);
   border-radius: var(--r-3xl);
   background: var(--surface);
   border: 1px solid var(--line-soft);
