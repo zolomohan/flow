@@ -429,14 +429,7 @@ export function SplitPeopleEditor({
   split: SplitPeople;
   onChange: (split: SplitPeople) => void;
 }) {
-  const { debts } = useStore();
   const [name, setName] = useState('');
-
-  /** Names already in the book, so repeat company autocompletes. */
-  const known = useMemo(
-    () => [...new Set(debts.map((d) => d.counterparty))].sort(),
-    [debts],
-  );
 
   const amounts = shareAmounts(split, amount);
   const owed = split.people.reduce((sum, p, i) => sum + (p.you ? 0 : amounts[i]), 0);
@@ -463,15 +456,6 @@ export function SplitPeopleEditor({
     set({ people: [...split.people.slice(0, -1), fresh, split.people[split.people.length - 1]] });
     setName('');
   };
-
-  // Who you have split with before, minus whoever is already on this bill and
-  // narrowed by whatever has been typed. Offered as chips rather than a native
-  // dropdown, which neither matched the app nor behaved.
-  const term = name.trim().toLowerCase();
-  const suggestions = known
-    .filter((who) => !split.people.some((p) => p.name.toLowerCase() === who.toLowerCase()))
-    .filter((who) => !term || who.toLowerCase().includes(term))
-    .slice(0, 6);
 
   return (
     <div className="split-people">
@@ -577,21 +561,6 @@ export function SplitPeopleEditor({
         </Button>
       </div>
 
-      {suggestions.length > 0 && (
-        <div className="person-suggest">
-          {suggestions.map((who) => (
-            <button
-              key={who}
-              type="button"
-              className="person-suggest-chip"
-              onClick={() => add(who)}
-            >
-              <Icon name="plus" size={11} strokeWidth={2.4} />
-              {who}
-            </button>
-          ))}
-        </div>
-      )}
       </div>
 
       {split.people.length > 1 && (

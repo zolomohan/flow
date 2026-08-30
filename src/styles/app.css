@@ -4065,22 +4065,6 @@ kbd {
 
 /* Who you have split with before — chips rather than a native dropdown, which
    looked foreign and behaved worse. */
-.person-suggest { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
-.person-suggest-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 10px 4px 7px;
-  border-radius: var(--r-full);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--ink-3);
-  transition: border-color var(--fast) var(--ease), color var(--fast) var(--ease);
-}
-.person-suggest-chip:hover { border-color: var(--blue); color: var(--blue); }
-
 .split-due { display: flex; flex-direction: column; gap: 5px; }
 .split-tally {
   display: flex;
