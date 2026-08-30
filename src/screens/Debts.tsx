@@ -181,6 +181,24 @@ export function Debts({
                     }
                   />
                 </Card>
+              ) : tab === 'past' ? (
+                // What is done with runs both ways, and the two do not belong
+                // in one list: one is money that came home, the other money
+                // that was owed and isn't any more.
+                <>
+                  <SettledGroup
+                    title="You lent"
+                    debts={showing.filter((d) => d.direction === 'lent')}
+                    onOpen={setOpenId}
+                    onRecordPayment={onRecordPayment}
+                  />
+                  <SettledGroup
+                    title="You borrowed"
+                    debts={showing.filter((d) => d.direction === 'borrowed')}
+                    onOpen={setOpenId}
+                    onRecordPayment={onRecordPayment}
+                  />
+                </>
               ) : (
                 <motion.div
                   className="debt-grid"
@@ -203,6 +221,50 @@ export function Debts({
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * One side of the past: what it came to, how much of it came back, and how
+ * much was let go — then the debts themselves.
+ */
+function SettledGroup({
+  title, debts, onOpen, onRecordPayment,
+}: {
+  title: string;
+  debts: Debt[];
+  onOpen: (id: string) => void;
+  onRecordPayment: (debt: Debt) => void;
+}) {
+  if (!debts.length) return null;
+  const principal = debts.reduce((sum, d) => sum + d.principal, 0);
+  const forgiven = debts.reduce((sum, d) => sum + debtProgress(d).forgivenAmount, 0);
+  return (
+    <section className="account-group">
+      <h2 className="group-title">
+        {title}
+        <span>{money(principal)}</span>
+        <em>
+          {debts.length} {debts.length === 1 ? 'debt' : 'debts'}
+          {forgiven > 0 ? ` · ${money(forgiven)} forgiven` : ' · all of it back'}
+        </em>
+      </h2>
+      <motion.div
+        className="debt-grid"
+        variants={listVariants}
+        initial="initial"
+        animate="animate"
+      >
+        {debts.map((debt) => (
+          <DebtCard
+            key={debt.id}
+            debt={debt}
+            onOpen={() => onOpen(debt.id)}
+            onRecordPayment={() => onRecordPayment(debt)}
+          />
+        ))}
+      </motion.div>
+    </section>
   );
 }
 
