@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from './Icon';
-import { DateField } from './DateField';
 import {
   Button, IconButton, Segmented, Select, TextInput,
   type SegmentOption, type SelectOption,
@@ -422,10 +421,9 @@ export function peopleToInput(
  * `directionFor`.
  */
 export function SplitPeopleEditor({
-  amount, kind, split, onChange,
+  amount, split, onChange,
 }: {
   amount: Paise;
-  kind: TxKind;
   split: SplitPeople;
   onChange: (split: SplitPeople) => void;
 }) {
@@ -563,37 +561,14 @@ export function SplitPeopleEditor({
 
       </div>
 
-      {split.people.length > 1 && (
-        <>
-          <div className="split-due">
-            <span className="field-label">
-              Due <span className="field-hint">optional — the same date for everyone</span>
-            </span>
-            <DateField
-              value={split.dueOn}
-              onChange={(dueOn) => set({ dueOn })}
-              placeholder="No due date"
-              allowClear
-            />
-          </div>
-          <p className={`split-tally ${mine < 0 ? 'is-over' : ''}`}>
-            {mine < 0 ? (
-              <>
-                <Icon name="alert-circle" size={13} />
-                The others come to {money(owed)} — more than the {money(amount)} bill, so
-                there is nothing left for your own share.
-              </>
-            ) : (
-              <>
-                <Icon name="users" size={13} />
-                {money(owed)}{' '}
-                {directionFor(kind) === 'lent' ? 'owed back to you' : 'you owe them'} — saved
-                as {split.people.length - 1}{' '}
-                {split.people.length === 2 ? 'debt' : 'debts'} on the Debts screen.
-              </>
-            )}
-          </p>
-        </>
+      {/* Only when it has gone wrong: the rows themselves say who owes what,
+          and saying it again underneath was one line too many. */}
+      {mine < 0 && (
+        <p className="split-tally is-over">
+          <Icon name="alert-circle" size={13} />
+          The others come to {money(owed)} — more than the {money(amount)} bill, so there is
+          nothing left for your own share.
+        </p>
       )}
     </div>
   );

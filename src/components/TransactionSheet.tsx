@@ -556,7 +556,7 @@ export function TransactionSheet({
                 {page === 'categories' ? (
                   <SplitLinesEditor amount={paise} kind={kind} lines={lines} onChange={editLines} />
                 ) : (
-                  <SplitPeopleEditor amount={paise} kind={kind} split={people} onChange={editPeople} />
+                  <SplitPeopleEditor amount={paise} split={people} onChange={editPeople} />
                 )}
               </div>
             </div>

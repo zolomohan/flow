@@ -4076,7 +4076,6 @@ kbd {
 
 /* Who you have split with before — chips rather than a native dropdown, which
    looked foreign and behaved worse. */
-.split-due { display: flex; flex-direction: column; gap: 5px; }
 .split-tally {
   display: flex;
   align-items: center;
