@@ -295,10 +295,10 @@ export function TransactionSheet({
     onClose();
   };
 
-  // The right-hand column holds the category picker alone. A transfer files
-  // under nothing and a split bill files under several, so in both cases the
-  // form has one column of fields and the sheet narrows to suit.
-  const twoPane = kind !== 'transfer' && !split;
+  // The right-hand column says what the money was for: the categories, and
+  // the two ways of splitting it. Only a transfer has none of that — it moves
+  // between your own accounts — so only a transfer drops to one column.
+  const twoPane = kind !== 'transfer';
 
   const accentVar =
     kind === 'income' ? 'var(--green)' : kind === 'transfer' ? 'var(--blue)' : 'var(--ink)';
@@ -484,7 +484,7 @@ export function TransactionSheet({
       onBack={page ? leavePage : undefined}
       title={heading.title}
       subtitle={heading.subtitle}
-      width={page ? 980 : twoPane ? 900 : 600}
+      width={twoPane ? 940 : 600}
       footer={
         <>
           {editing && !page ? (
@@ -518,7 +518,7 @@ export function TransactionSheet({
         {page ? (
           <motion.div
             key={page}
-            className="tx-form is-two-pane is-split-page"
+            className="tx-form is-two-pane"
             style={{ ['--accent' as any]: accentVar }}
             custom={back ? -1 : 1}
             variants={pageVariants}
@@ -649,11 +649,9 @@ export function TransactionSheet({
                 )}
               </AnimatePresence>
 
-            </div>
-
-            {/* The way in to either split. What is set up now is on the row, so
-                the form still says what it is doing without the editors on it. */}
-            <div className="tx-pane-wide">
+              {/* The ways in to a split sit under the categories: filing a
+                  bill under several of them, or owing part of it to someone,
+                  are both answers to what the money was for. */}
               <AnimatePresence initial={false}>
                 {kind !== 'transfer' && (
                   <motion.div

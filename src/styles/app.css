@@ -1881,8 +1881,10 @@ kbd {
    A transaction is a short form with one tall field in it — the category
    grid — and stacking everything under that leaves the rest below the fold
    for no reason. */
+/* The fields keep one width wherever they are — the form, either split page
+   — so moving between them changes what is beside them and nothing else. */
 .tx-form.is-two-pane {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: 360px minmax(0, 1fr);
   gap: 0 26px;
 }
 .tx-pane { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-content: start; }
@@ -1899,17 +1901,9 @@ kbd {
    beside it — a bill divided is the same bill. The editor takes the wider
    column, and the floor keeps the modal from collapsing between pages. */
 .tx-page { min-height: 300px; }
-.tx-form.is-split-page { grid-template-columns: minmax(280px, 5fr) minmax(0, 7fr); }
-@media (max-width: 940px) {
-  .tx-form.is-split-page { grid-template-columns: minmax(0, 1fr); }
-}
-
-/* Anything that reads as a table rather than a field runs under both. */
-.tx-pane-wide { grid-column: 1 / -1; }
-.tx-pane-wide:not(:empty) { margin-top: 16px; }
 
 /* Narrow enough that two columns would each be a squeeze — stack them. */
-@media (max-width: 940px) {
+@media (max-width: 980px) {
   .tx-form.is-two-pane { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   .tx-form.is-two-pane .tx-pane-detail { padding-left: 0; border-left: 0; }
 }
@@ -3774,12 +3768,7 @@ kbd {
 
 /* Two ways in, side by side under the form — one column each where the form
    itself has two, stacked where it has one. */
-.split-panels {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 8px;
-  overflow: hidden;
-}
+.split-panels { display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
 
 /* A row that leads somewhere: what is set up now, and a chevron saying there
    is a page behind it. */
