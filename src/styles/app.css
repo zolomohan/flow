@@ -3838,12 +3838,10 @@ kbd {
 
 /* The rows and whatever acts on them, held together as one thing rather than
    left as loose siblings of the panel. */
-.split-block {
-  padding: 4px 11px 11px;
-  border-radius: var(--r-md);
-  background: var(--surface-inset);
-  border: 1px solid var(--line-soft);
-}
+/* The editor has a pane of its own now, so the rows sit straight on it: a
+   grey tray inside a column that is already set apart was one box too many.
+   The parts hold themselves together instead, each with its own outline. */
+.split-block { padding: 2px 0 0; }
 
 /* How the bill divides, in one glance and in the categories' own colours. */
 .split-bar {
@@ -3867,7 +3865,7 @@ kbd {
   padding: 9px 11px 9px 13px;
   border-radius: var(--r-md);
   background: var(--surface);
-  border: 1px solid transparent;
+  border: 1px solid var(--line-soft);
   transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease);
 }
 /* The category's colour, carried as a stripe rather than a second swatch —
@@ -3928,7 +3926,13 @@ kbd {
 /* ---------------------------------------------------------- people */
 
 .split-people { display: flex; flex-direction: column; gap: 9px; padding-top: 10px; }
-.person-list { display: flex; flex-direction: column; }
+.person-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
 
 /* One grid rather than a flex run, so the weight, the amount and the remove
    button hold the same columns however the split is being worked out. The
@@ -3939,7 +3943,7 @@ kbd {
   grid-template-columns: minmax(0, 1fr) 122px 34px;
   align-items: center;
   gap: 9px;
-  padding: 7px 0;
+  padding: 7px 11px;
   overflow: hidden;
 }
 .person-list.is-weighted .person-row {
@@ -3969,9 +3973,7 @@ kbd {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--line-soft);
+  margin-top: 9px;
 }
 .person-add .input { flex: 1; min-width: 0; height: 34px; }
 
