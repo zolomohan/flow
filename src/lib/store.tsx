@@ -31,6 +31,13 @@ import type {
   TransactionSummary,
 } from './types';
 
+/**
+ * Settings the book keeps for itself, by the key they are stored under. They
+ * live here rather than on the screen that toggles them: the screens that
+ * obey a setting have no business importing the one that sets it.
+ */
+export const REQUIRE_NOTE = 'require_note';
+
 export interface Toast {
   id: number;
   message: string;
@@ -57,6 +64,9 @@ interface Store {
   setSpan: (n: number) => void;
   theme: 'light' | 'dark';
   toggleTheme: () => void;
+  /** The book's own preferences, as they are stored: strings, keyed. */
+  settings: Record<string, string>;
+  saveSetting: (key: string, value: string) => Promise<void>;
   toasts: Toast[];
   toast: (message: string, tone?: Toast['tone'], undo?: () => void) => void;
   dismissToast: (id: number) => void;
@@ -108,6 +118,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [pricesRefreshing, setPricesRefreshing] = useState(false);
   const [overview, setOverview] = useState<Overview | null>(null);
+  const [settings, setSettings] = useState<Record<string, string>>({});
   const [month, setMonth] = useState(monthKey());
   const [span, setSpan] = useState(1);
   const [revision, setRevision] = useState(0);
@@ -142,21 +153,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const refresh = useCallback(
     async (forMonth: string, forSpan: number) => {
-      const [nextAccounts, nextCategories, nextUsage, nextDebts, nextHoldings, nextOverview] =
-        await Promise.all([
-          api.listAccounts(),
-          api.listCategories(),
-          api.categoryUsage(),
-          api.listDebts(),
-          api.listHoldings(),
-          api.overview(forMonth, forSpan),
-        ]);
+      const [
+        nextAccounts, nextCategories, nextUsage, nextDebts, nextHoldings, nextOverview,
+        nextSettings,
+      ] = await Promise.all([
+        api.listAccounts(),
+        api.listCategories(),
+        api.categoryUsage(),
+        api.listDebts(),
+        api.listHoldings(),
+        api.overview(forMonth, forSpan),
+        api.listSettings(),
+      ]);
       setAccounts(nextAccounts);
       setCategories(nextCategories);
       setCategoryUsage(nextUsage);
       setDebts(nextDebts);
       setHoldings(nextHoldings);
       setOverview(nextOverview);
+      setSettings(nextSettings);
     },
     [],
   );
@@ -239,6 +254,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setSpan,
       theme,
       toggleTheme,
+      settings,
+      // Kept locally as well as written down, so a toggle answers at once
+      // rather than after a round trip through the book.
+      saveSetting: async (key, value) => {
+        setSettings((was) => ({ ...was, [key]: value }));
+        await api.setSetting(key, value);
+      },
       toasts,
       toast,
       dismissToast,
@@ -315,6 +337,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       span,
       theme,
       toggleTheme,
+      settings,
       toasts,
       toast,
       dismissToast,

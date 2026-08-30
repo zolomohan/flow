@@ -89,6 +89,7 @@ export const api = {
   searchSchemes: (query: string) => call<Scheme[]>('search_schemes', { query }),
 
   getSetting: (key: string) => call<string | null>('get_setting', { key }),
+  listSettings: () => call<Record<string, string>>('list_settings'),
   setSetting: (key: string, value: string) => call<void>('set_setting', { key, value }),
 
   seedDemo: () => call<void>('seed_demo'),

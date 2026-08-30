@@ -246,6 +246,15 @@ fn migrate(conn: &Connection) -> Result<()> {
     migrate_gold_to_grams(conn)?;
     conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_cat_parent ON categories(parent_id);")
         .map_err(oops)?;
+    // Sub-categories wear their group's colour. Books that predate the rule
+    // are brought into line here rather than left half one way.
+    conn.execute(
+        "UPDATE categories SET color = (SELECT p.color FROM categories p WHERE p.id = categories.parent_id)
+         WHERE parent_id IS NOT NULL
+           AND color <> (SELECT p.color FROM categories p WHERE p.id = categories.parent_id)",
+        [],
+    )
+    .map_err(oops)?;
     seed_categories(conn)
 }
 
@@ -503,24 +512,29 @@ pub fn list_categories(conn: &Connection) -> Result<Vec<Category>> {
 pub fn save_category(conn: &Connection, input: CategoryInput) -> Result<Category> {
     // Nesting is exactly one level deep, and a category can never be its own
     // ancestor — reject anything that would build a deeper or cyclic tree.
+    let mut color = input.color;
     let parent_id = match input.parent_id.filter(|p| !p.is_empty()) {
         None => None,
         Some(parent) => {
             if Some(&parent) == input.id.as_ref() {
                 return Err("A category cannot be its own parent.".into());
             }
-            let grandparent: Option<String> = conn
+            let (grandparent, parent_color): (Option<String>, String) = conn
                 .query_row(
-                    "SELECT parent_id FROM categories WHERE id = ?1",
+                    "SELECT parent_id, color FROM categories WHERE id = ?1",
                     params![parent],
-                    |r| r.get(0),
+                    |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .optional()
                 .map_err(oops)?
-                .flatten();
+                .ok_or("That group no longer exists.")?;
             if grandparent.is_some() {
                 return Err("Categories only nest one level deep.".into());
             }
+            // A sub-category is a shade of its group, not a colour of its own:
+            // the charts read the group, and two tones for one thing only ever
+            // looked like a mistake.
+            color = parent_color;
             Some(parent)
         }
     };
@@ -530,15 +544,22 @@ pub fn save_category(conn: &Connection, input: CategoryInput) -> Result<Category
             conn.execute(
                 "UPDATE categories SET kind = ?2, name = ?3, icon = ?4, color = ?5, parent_id = ?6
                  WHERE id = ?1",
-                params![id, input.kind, input.name, input.icon, input.color, parent_id],
+                params![id, input.kind, input.name, input.icon, color, parent_id],
             )
             .map_err(oops)?;
-            // Moving a group under a parent would orphan its children two
-            // levels down, so lift them to the top instead.
             if parent_id.is_some() {
+                // Moving a group under a parent would orphan its children two
+                // levels down, so lift them to the top instead.
                 conn.execute(
                     "UPDATE categories SET parent_id = NULL WHERE parent_id = ?1",
                     params![id],
+                )
+                .map_err(oops)?;
+            } else {
+                // Recolouring a group recolours everything filed under it.
+                conn.execute(
+                    "UPDATE categories SET color = ?2 WHERE parent_id = ?1",
+                    params![id, color],
                 )
                 .map_err(oops)?;
             }
@@ -556,7 +577,7 @@ pub fn save_category(conn: &Connection, input: CategoryInput) -> Result<Category
             conn.execute(
                 "INSERT INTO categories (id, kind, name, icon, color, sort_order, parent_id)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![id, input.kind, input.name, input.icon, input.color, next, parent_id],
+                params![id, input.kind, input.name, input.icon, color, next, parent_id],
             )
             .map_err(oops)?;
             id
@@ -3088,6 +3109,19 @@ pub fn setting(conn: &Connection, key: &str) -> Result<Option<String>> {
     )
     .optional()
     .map_err(oops)
+}
+
+/// Every setting at once, for the app to hold while it runs. There are few of
+/// them and they are all small, so a screen reads one out of memory rather
+/// than asking the database each time it renders.
+pub fn settings(conn: &Connection) -> Result<HashMap<String, String>> {
+    let mut stmt = conn.prepare("SELECT key, value FROM settings").map_err(oops)?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map_err(oops)?
+        .collect::<rusqlite::Result<HashMap<_, _>>>()
+        .map_err(oops)?;
+    Ok(rows)
 }
 
 pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {

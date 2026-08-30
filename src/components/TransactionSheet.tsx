@@ -12,7 +12,7 @@ import {
   peopleFor, peopleToInput, restOf, shareAmounts,
   type SplitLine, type SplitPeople,
 } from './SplitEditors';
-import { useStore } from '../lib/store';
+import { REQUIRE_NOTE, useStore } from '../lib/store';
 import {
   amountChars, money, paiseToRupeeString, rupeesToPaise, settleAmount, sumPreview,
   toLocalInput,
@@ -46,8 +46,13 @@ export function TransactionSheet({
   /** Set when the sheet was opened by the Split action rather than by a row. */
   splitFocus?: SplitFocus | null;
 }) {
-  const { accounts, categories, saveTransaction, deleteTransaction, toast } = useStore();
+  const {
+    accounts, categories, saveTransaction, deleteTransaction, toast, settings,
+  } = useStore();
   const live = useMemo(() => accounts.filter((a) => !a.archived), [accounts]);
+  // A book can ask for a note on everything new. What is already in it stays
+  // as it is — the rule is about what you are writing down now.
+  const needsNote = settings[REQUIRE_NOTE] === '1' && !editing;
 
   const [kind, setKind] = useState<TxKind>('expense');
   const [amount, setAmount] = useState('');
@@ -235,6 +240,7 @@ export function TransactionSheet({
   const submit = async () => {
     if (!paise) return setError('Enter an amount.');
     if (!accountId) return setError('Pick an account.');
+    if (needsNote && !note.trim()) return setError('Add a note — this book asks for one.');
     if (kind === 'transfer' && !toAccountId) return setError('Pick a destination account.');
     if (kind === 'transfer' && toAccountId === accountId)
       return setError('A transfer needs two different accounts.');
@@ -417,11 +423,14 @@ export function TransactionSheet({
         </div>
       </Field>
 
-      <Field label="Note" hint="optional">
+      <Field label="Note" hint={needsNote ? 'required' : 'optional'}>
         <TextInput
           value={note}
-          placeholder="Anything worth remembering"
-          onChange={(e) => setNote(e.target.value)}
+          placeholder={needsNote ? 'What was this for?' : 'Anything worth remembering'}
+          onChange={(e) => {
+            setNote(e.target.value);
+            setError(null);
+          }}
         />
       </Field>
     </div>

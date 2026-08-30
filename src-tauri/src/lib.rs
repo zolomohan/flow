@@ -227,6 +227,11 @@ fn get_setting(db: State<Db>, key: String) -> R<Option<String>> {
 }
 
 #[tauri::command]
+fn list_settings(db: State<Db>) -> R<std::collections::HashMap<String, String>> {
+    with_db(&db, db::settings)
+}
+
+#[tauri::command]
 fn set_setting(db: State<Db>, key: String, value: String) -> R<()> {
     with_db(&db, |c| db::set_setting(c, &key, &value))
 }
@@ -298,6 +303,7 @@ pub fn run() {
             gold_value_series,
             search_schemes,
             get_setting,
+            list_settings,
             set_setting,
             seed_demo,
             reset_all,

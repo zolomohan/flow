@@ -5,7 +5,7 @@ import {
   Button, Card, CardHead, Empty, Field, IconButton, Segmented, Select, Sheet, TextInput,
   type SegmentOption, type SelectOption,
 } from '../components/ui';
-import { useStore } from '../lib/store';
+import { REQUIRE_NOTE, useStore } from '../lib/store';
 import { itemVariants, listVariants, spring } from '../lib/motion';
 import type { Category, CategoryKind } from '../lib/types';
 
@@ -22,19 +22,20 @@ const SWATCHES = [
 /** "3 transactions" / "1 transaction" — used all over the category surfaces. */
 const plural = (n: number) => `${n} transaction${n === 1 ? '' : 's'}`;
 
-type Tab = 'categories' | 'appearance' | 'data';
+type Tab = 'categories' | 'preferences' | 'data';
 
 const TABS: SegmentOption<Tab>[] = [
   { value: 'categories', label: 'Categories', icon: 'tags' },
-  { value: 'appearance', label: 'Appearance', icon: 'sun' },
+  { value: 'preferences', label: 'Preferences', icon: 'settings' },
   { value: 'data', label: 'Your data', icon: 'download' },
 ];
 
 const BLURBS: Record<Tab, string> = {
   categories: 'Rename, regroup, and retire the labels behind every transaction.',
-  appearance: 'How Midas looks while you use it.',
+  preferences: 'How Midas looks, and what it asks of you while you use it.',
   data: 'The SQLite file on this Mac, and what you can do to it.',
 };
+
 
 /** Which face of the category sheet to open on, and what it is opening for. */
 type Mode = 'form' | 'move' | 'delete';
@@ -44,6 +45,8 @@ interface SheetRequest {
   category: Category | null;
   kind: CategoryKind;
   mode: Mode;
+  /** Set when adding a sub-category from a group's own plus button. */
+  parentId?: string | null;
 }
 
 export function Settings({ onOpenCategory }: {
@@ -86,7 +89,7 @@ export function Settings({ onOpenCategory }: {
           {tab === 'categories' && (
             <CategoriesPanel onOpen={open} onOpenCategory={onOpenCategory} />
           )}
-          {tab === 'appearance' && <AppearancePanel />}
+          {tab === 'preferences' && <PreferencesPanel />}
           {tab === 'data' && <DataPanel />}
         </motion.div>
       </AnimatePresence>
@@ -162,6 +165,9 @@ function CategoriesPanel({ onOpen, onOpenCategory }: {
                   count={count(group.id)}
                   subCount={children.length}
                   subTotal={children.reduce((sum, c) => sum + count(c.id), 0)}
+                  onAddSub={() =>
+                    onOpen({ category: null, kind, mode: 'form', parentId: group.id })
+                  }
                   onOpen={onOpen}
                   onOpenCategory={onOpenCategory}
                 />
@@ -189,7 +195,7 @@ function CategoriesPanel({ onOpen, onOpenCategory }: {
 }
 
 function CategoryRow({
-  category, count, subCount = 0, subTotal = 0, sub = false, onOpen, onOpenCategory,
+  category, count, subCount = 0, subTotal = 0, sub = false, onAddSub, onOpen, onOpenCategory,
 }: {
   category: Category;
   count: number;
@@ -197,6 +203,8 @@ function CategoryRow({
   /** Transactions sitting in this group's sub-categories, which a move can sweep up too. */
   subTotal?: number;
   sub?: boolean;
+  /** Only a group can hold sub-categories, so only a group gets the plus. */
+  onAddSub?: () => void;
   onOpen: (request: SheetRequest) => void;
   onOpenCategory: (categoryId: string) => void;
 }) {
@@ -226,6 +234,14 @@ function CategoryRow({
         </span>
       </button>
       <div className="cat-row-actions">
+        {onAddSub && (
+          <IconButton
+            icon="plus"
+            label={`Add a sub-category to ${category.name}`}
+            size={30}
+            onClick={onAddSub}
+          />
+        )}
         <IconButton icon="pencil" label={`Edit ${category.name}`} size={30} onClick={go('form')} />
         <IconButton
           icon="arrow-left-right"
@@ -248,9 +264,11 @@ function CategoryRow({
 
 /* ------------------------------------------------------------- Appearance */
 
-function AppearancePanel() {
-  const { theme, toggleTheme } = useStore();
+function PreferencesPanel() {
+  const { theme, toggleTheme, settings, saveSetting } = useStore();
+  const requireNote = settings[REQUIRE_NOTE] === '1';
   return (
+    <>
     <Card>
       <CardHead title="Theme" hint="Midas follows whichever you pick" />
       <div className="theme-row">
@@ -275,6 +293,23 @@ function AppearancePanel() {
         ))}
       </div>
     </Card>
+
+    <Card>
+      <CardHead
+        title="Entering transactions"
+        hint="A new entry can’t be saved without a note. What is already in the book is left as it is."
+      />
+      <button
+        type="button"
+        className={`settle-toggle ${requireNote ? 'is-on' : ''}`}
+        onClick={() => saveSetting(REQUIRE_NOTE, requireNote ? '0' : '1')}
+      >
+        <span className="settle-box">{requireNote && <Icon name="check" size={12} />}</span>
+        Ask for a note on every new transaction
+        <small>{requireNote ? 'on' : 'off'}</small>
+      </button>
+    </Card>
+    </>
   );
 }
 
@@ -358,17 +393,29 @@ function CategorySheet({
 
   useEffect(() => {
     if (!open || !request) return;
+    const parent = request.category?.parentId ?? request.parentId ?? null;
     setMode(request.mode);
     setName(request.category?.name ?? '');
     setIcon(request.category?.icon ?? 'circle-dashed');
-    setColor(request.category?.color ?? SWATCHES[0]);
+    setColor(
+      // A sub-category is opened in its group's colour, which is the only
+      // colour it can have.
+      categories.find((c) => c.id === parent)?.color
+        ?? request.category?.color
+        ?? SWATCHES[0],
+    );
     setThisKind(request.category?.kind ?? request.kind);
-    setParentId(request.category?.parentId ?? null);
+    setParentId(parent);
     setTarget(null);
     setScope('own');
     setChildFate('keep');
     setBusy(false);
-  }, [open, request]);
+  }, [open, request, categories]);
+
+  const parentGroup = useMemo(
+    () => categories.find((c) => c.id === parentId) ?? null,
+    [categories, parentId],
+  );
 
   const children = useMemo(
     () => (editing ? categories.filter((c) => c.parentId === editing.id) : []),
@@ -422,8 +469,14 @@ function CategorySheet({
 
   const titles: Record<Mode, { title: string; subtitle: string }> = {
     form: {
-      title: editing ? 'Edit category' : 'New category',
-      subtitle: 'Used to group transactions and colour the charts',
+      title: editing
+        ? 'Edit category'
+        : parentGroup
+          ? 'New sub-category'
+          : 'New category',
+      subtitle: parentGroup
+        ? `Filed under ${parentGroup.name}, in its colour`
+        : 'Used to group transactions and colour the charts',
     },
     move: {
       title: `Move transactions out of ${editing?.name ?? ''}`,
@@ -467,7 +520,7 @@ function CategorySheet({
                   }));
                 }}
               >
-                {editing ? 'Save changes' : 'Add category'}
+                {editing ? 'Save changes' : parentGroup ? 'Add sub-category' : 'Add category'}
               </Button>
             </div>
           </>
@@ -530,14 +583,34 @@ function CategorySheet({
             <Select
               options={parentOptions}
               value={parentId}
-              onChange={setParentId}
+              onChange={(next) => {
+                setParentId(next);
+                const group = categories.find((c) => c.id === next);
+                if (group) setColor(group.color);
+              }}
               placeholder="Top level"
               allowClear
             />
           </Field>
 
           <div>
-            <span className="field-label">Colour</span>
+            <span className="field-label">
+              Colour
+              {parentGroup && (
+                <span className="field-hint">sub-categories wear their group's</span>
+              )}
+            </span>
+            {parentGroup ? (
+              <motion.p
+                className="cat-inherited"
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={spring}
+              >
+                <i style={{ background: color }} />
+                Taken from {parentGroup.name}
+              </motion.p>
+            ) : (
             <div className="swatch-row">
               {SWATCHES.map((s) => (
                 <motion.button
@@ -555,6 +628,7 @@ function CategorySheet({
                 </motion.button>
               ))}
             </div>
+            )}
           </div>
 
           <div>
