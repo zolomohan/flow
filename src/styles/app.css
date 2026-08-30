@@ -482,6 +482,16 @@ kbd {
   font-weight: 500;
   transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
 }
+.textarea {
+  height: auto;
+  min-height: 38px;
+  padding: 9px 12px;
+  line-height: 1.45;
+  resize: none;
+  overflow: hidden;
+  font-family: inherit;
+}
+
 .input::placeholder { color: var(--ink-4); font-weight: 400; }
 .input:hover { border-color: var(--line-strong); }
 .input:focus { border-color: var(--blue); box-shadow: var(--ring); }

@@ -1,6 +1,7 @@
 import {
   createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState,
   type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode,
+  type TextareaHTMLAttributes,
 } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'motion/react';
@@ -172,6 +173,28 @@ export function Field({
 
 export function TextInput({ className = '', ...rest }: InputHTMLAttributes<HTMLInputElement>) {
   return <input className={`input ${className}`} {...rest} />;
+}
+
+/**
+ * A field that can run to several lines. It grows with what is typed rather
+ * than scrolling inside a fixed box — a note worth writing is worth being able
+ * to see all of while you write it.
+ */
+export function TextArea({
+  className = '', value, ...rest
+}: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  // Measured after every change: reset to nothing first, or scrollHeight only
+  // ever reports the height it already has and the box can never shrink back.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }, [value]);
+  return (
+    <textarea ref={ref} rows={1} value={value} className={`input textarea ${className}`} {...rest} />
+  );
 }
 
 /* ------------------------------------------------------------------ Select */

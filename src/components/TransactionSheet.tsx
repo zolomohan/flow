@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from './Icon';
 import { DateField } from './DateField';
 import {
-  Button, Chip, Confirm, Field, IconButton, Segmented, Select, Sheet, TextInput,
+  Button, Chip, Confirm, Field, IconButton, Segmented, Select, Sheet, TextArea, TextInput,
   type SegmentOption, type SelectOption,
 } from './ui';
 import {
@@ -685,7 +685,7 @@ export function TransactionSheet({
       </Field>
 
       <Field label="Note" hint={needsNote ? 'required' : 'optional'}>
-        <TextInput
+        <TextArea
           value={note}
           placeholder={needsNote ? 'What was this for?' : 'Anything worth remembering'}
           onChange={(e) => {
