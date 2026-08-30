@@ -1123,10 +1123,23 @@ kbd {
 }
 
 /* Sits over the chevron, which is decoration — the whole row is the target. */
-.tx-split-action {
+/* What can be done to a row without opening it, over the chevron, which is
+   decoration — the whole row is still the target. */
+.tx-row-actions {
   position: absolute;
   top: 12px;
   right: 16px;
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(4px);
+  transition: opacity var(--fast) var(--ease), transform var(--fast) var(--ease);
+}
+.tx-bill:hover .tx-row-actions { opacity: 1; pointer-events: auto; transform: translateX(0); }
+.tx-bill:hover .tx-chevron { opacity: 0; }
+
+.tx-split-action {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -1138,14 +1151,8 @@ kbd {
   font-size: 11.5px;
   font-weight: 600;
   color: var(--ink-2);
-  opacity: 0;
-  pointer-events: none;
-  transform: translateX(4px);
-  transition: opacity var(--fast) var(--ease), transform var(--fast) var(--ease),
-              color var(--fast) var(--ease), border-color var(--fast) var(--ease);
+  transition: color var(--fast) var(--ease), border-color var(--fast) var(--ease);
 }
-.tx-bill:hover .tx-split-action { opacity: 1; pointer-events: auto; transform: translateX(0); }
-.tx-bill:hover .tx-chevron { opacity: 0; }
 .tx-split-action:hover { color: var(--blue); border-color: var(--blue); }
 
 .tx-bill-strip {

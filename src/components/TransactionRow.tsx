@@ -13,12 +13,14 @@ import type { Transaction } from '../lib/types';
  *  into, and the people who owe some of it, unfold underneath rather than
  *  filling the ledger with entries the bank never saw. */
 export function TransactionRow({
-  tx, onClick, onSplit, showDate, selected, onSelect,
+  tx, onClick, onSplit, onDebt, showDate, selected, onSelect,
 }: {
   tx: Transaction;
   onClick?: () => void;
   /** Opens the split editor straight from the row. Left off while picking. */
   onSplit?: () => void;
+  /** Turns the whole posting into a debt someone owes. Left off while picking. */
+  onDebt?: () => void;
   showDate?: string;
   /** Whether this row is in the current selection. Absent means the list
    *  isn't selectable at all — inside the record picker, say. */
@@ -96,11 +98,28 @@ export function TransactionRow({
         </span>
       </motion.button>
 
-      {onSplit && !isTransfer && (
-        <button type="button" className="tx-split-action" onClick={onSplit}>
-          <Icon name="split" size={14} strokeWidth={2.1} />
-          Split
-        </button>
+      {/* A transfer moves money between your own accounts: there is nobody to
+          owe any of it and nothing to file it under twice. */}
+      {!isTransfer && (onSplit || onDebt) && (
+        <div className="tx-row-actions">
+          {onDebt && (
+            <button
+              type="button"
+              className="tx-split-action"
+              title="Make the whole of this a debt in someone's name"
+              onClick={onDebt}
+            >
+              <Icon name="user-round" size={14} strokeWidth={2.1} />
+              Debt
+            </button>
+          )}
+          {onSplit && (
+            <button type="button" className="tx-split-action" onClick={onSplit}>
+              <Icon name="split" size={14} strokeWidth={2.1} />
+              Split
+            </button>
+          )}
+        </div>
       )}
 
       {split && (

@@ -104,6 +104,15 @@ function Shell() {
     setTxOpen(true);
   }, []);
 
+  // The whole of a posting owed by one person: the same sheet again, opened
+  // on its people page with nobody's share reserved.
+  const oweTransaction = useCallback((tx: Transaction) => {
+    setDraft(undefined);
+    setEditingTx(tx);
+    setSplitFocus('debt');
+    setTxOpen(true);
+  }, []);
+
   const newAccount = useCallback(() => {
     setEditingAccount(null);
     setAccountOpen(true);
@@ -258,6 +267,7 @@ function Shell() {
               <Transactions
                 onOpenTransaction={openTransaction}
                 onSplitTransaction={splitTransaction}
+                onOweTransaction={oweTransaction}
                 onAddTransaction={() => newTransaction()}
                 accountFocus={accountFocus}
                 categoryFocus={categoryFocus}

@@ -33,8 +33,12 @@ export interface TxDraft {
   categoryId?: string;
 }
 
-/** Which split panel the sheet opens showing, when it was opened to split. */
-export type SplitFocus = 'people' | 'categories';
+/**
+ * Which page the sheet opens on, when it was opened to divide a bill rather
+ * than to read it. `debt` is the people page with nobody's share reserved:
+ * the whole of the posting becomes a debt in one person's name.
+ */
+export type SplitFocus = 'people' | 'categories' | 'debt';
 
 export function TransactionSheet({
   open, onClose, editing, draft, splitFocus,
@@ -109,8 +113,14 @@ export function TransactionSheet({
     // The sheet opens on a split page only when it was asked for by name —
     // the Split action on a row. Otherwise it opens on the transaction, with
     // whatever divisions it already carries summarised underneath.
-    setPage(splitFocus ?? null);
+    setPage(splitFocus === 'debt' ? 'people' : splitFocus ?? null);
     setBack(false);
+    // The whole of it is theirs, so no row of yours holds any of it back.
+    // Only for a posting nobody owes anything on yet: one that already has
+    // shares is opened as it stands.
+    if (splitFocus === 'debt' && !editing?.shares.length) {
+      setPeople({ ...emptyPeople(), people: [] });
+    }
     // Landing straight on the categories page with nothing on it would be a
     // blank screen where a bill was expected: it gets the same two rows
     // opening the page from the form does, and they go the same way if
@@ -199,7 +209,14 @@ export function TransactionSheet({
 
   const openPage = (which: SplitFocus) => {
     setBack(false);
-    setPage(which);
+    setPage(which === 'debt' ? 'people' : which);
+    // Owed in full: your own row goes, so the one person picked up next takes
+    // all of it rather than half. Never over shares that already exist —
+    // clearing those would throw away debts somebody is repaying.
+    if (which === 'debt') {
+      if (owed === 0) setPeople({ ...emptyPeople(), people: [] });
+      return;
+    }
     // Emptied of everyone, including you, on a previous visit: start it over
     // rather than opening on a list with nothing in it.
     if (which === 'people' && people.people.length === 0) setPeople(emptyPeople());
@@ -542,6 +559,19 @@ export function TransactionSheet({
                     summary: peopleSummary,
                     on: owed > 0,
                   },
+                  // Only while nothing is owed on it yet: once it is, the
+                  // people page above is where it is changed.
+                  ...(owed === 0
+                    ? [
+                        {
+                          which: 'debt' as const,
+                          icon: 'user-round',
+                          title: 'Owed by someone',
+                          summary: 'The whole of it becomes a debt in their name',
+                          on: false,
+                        },
+                      ]
+                    : []),
                 ]}
                 onPick={openPage}
               />

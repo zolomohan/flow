@@ -70,12 +70,15 @@ function rangeBounds(range: Range, month: string) {
 }
 
 export function Transactions({
-  onOpenTransaction, onSplitTransaction, onAddTransaction, accountFocus, categoryFocus,
+  onOpenTransaction, onSplitTransaction, onOweTransaction, onAddTransaction,
+  accountFocus, categoryFocus,
   picking,
 }: {
   onOpenTransaction: (tx: Transaction) => void;
   /** Opens a row straight into its split editor. Absent while picking. */
   onSplitTransaction?: (tx: Transaction) => void;
+  /** Makes the whole of a row a debt in someone's name. Absent while picking. */
+  onOweTransaction?: (tx: Transaction) => void;
   onAddTransaction?: () => void;
   /** Set when arriving from an account elsewhere in the app. */
   accountFocus?: { ids: string[]; token: number };
@@ -625,6 +628,11 @@ export function Transactions({
                         picking || !onSplitTransaction
                           ? undefined
                           : () => onSplitTransaction(tx)
+                      }
+                      onDebt={
+                        picking || !onOweTransaction
+                          ? undefined
+                          : () => onOweTransaction(tx)
                       }
                       selected={pickedSet.has(tx.id)}
                       onSelect={picking ? undefined : (range) => pick(tx, range)}

@@ -594,7 +594,7 @@ export function SplitPeopleEditor({
 /* ------------------------------------------------------------------- menu */
 
 export interface SplitWay {
-  which: 'categories' | 'people';
+  which: 'categories' | 'people' | 'debt';
   icon: string;
   title: string;
   summary: string;
