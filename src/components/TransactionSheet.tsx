@@ -265,6 +265,11 @@ export function TransactionSheet({
     onClose();
   };
 
+  // The right-hand column holds the category picker alone. A transfer files
+  // under nothing and a split bill files under several, so in both cases the
+  // form has one column of fields and the sheet narrows to suit.
+  const twoPane = kind !== 'transfer' && !split;
+
   const accentVar =
     kind === 'income' ? 'var(--green)' : kind === 'transfer' ? 'var(--blue)' : 'var(--ink)';
 
@@ -280,7 +285,7 @@ export function TransactionSheet({
             ? 'Money landing in an account'
             : 'Money leaving an account'
       }
-      width={900}
+      width={twoPane ? 900 : 600}
       footer={
         <>
           {editing ? (
@@ -305,15 +310,15 @@ export function TransactionSheet({
       }
     >
       <div
-        className="tx-form is-two-pane"
+        className={`tx-form ${twoPane ? 'is-two-pane' : ''}`}
         style={{ ['--accent' as any]: accentVar }}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit();
         }}
       >
-        {/* What the money did, and what it was for. The two columns are the
-            two halves of the question — how much, out of where, under what —
-            against the detail you may or may not bother filling in. */}
+        {/* The form on the left, the category grid on the right: a grid of
+            chips reads as a block, and stacking it above the fields pushed
+            the date and the note off the bottom of the sheet. */}
         <div className="tx-pane">
           <Segmented options={KINDS} value={kind} onChange={setKind} name="tx-kind" size="lg" />
 
@@ -395,6 +400,14 @@ export function TransactionSheet({
             </AnimatePresence>
           </div>
 
+          <Field label={kind === 'transfer' ? 'Description' : 'Merchant or payee'}>
+            <TextInput
+              value={merchant}
+              placeholder={kind === 'income' ? 'Monthly salary' : 'Swiggy'}
+              onChange={(e) => setMerchant(e.target.value)}
+            />
+          </Field>
+
           <Field label="When">
             <div className="when-row">
               <DateField
@@ -410,6 +423,14 @@ export function TransactionSheet({
                 }
               />
             </div>
+          </Field>
+
+          <Field label="Note" hint="optional">
+            <TextInput
+              value={note}
+              placeholder="Anything worth remembering"
+              onChange={(e) => setNote(e.target.value)}
+            />
           </Field>
         </div>
 
@@ -506,21 +527,6 @@ export function TransactionSheet({
             )}
           </AnimatePresence>
 
-          <Field label={kind === 'transfer' ? 'Description' : 'Merchant or payee'}>
-            <TextInput
-              value={merchant}
-              placeholder={kind === 'income' ? 'Monthly salary' : 'Swiggy'}
-              onChange={(e) => setMerchant(e.target.value)}
-            />
-          </Field>
-
-          <Field label="Note" hint="optional">
-            <TextInput
-              value={note}
-              placeholder="Anything worth remembering"
-              onChange={(e) => setNote(e.target.value)}
-            />
-          </Field>
         </div>
 
         {/* The split editors are rows of fields rather than a column of them,

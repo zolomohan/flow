@@ -649,6 +649,8 @@ kbd {
   flex-direction: column;
   width: 100%;
   max-height: min(86vh, 820px);
+  /* Some sheets grow a column as you fill them in — glide rather than jump. */
+  transition: max-width var(--base) var(--ease);
   border-radius: var(--r-3xl);
   background: var(--surface);
   border: 1px solid var(--line-soft);
@@ -1883,8 +1885,10 @@ kbd {
 }
 .tx-pane { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-content: start; }
 .tx-pane > * { min-width: 0; }
-/* A rule rather than a box: the two halves are one form, not two. */
-.tx-pane-detail {
+/* A rule rather than a box: the two halves are one form, not two. It is only
+   drawn where there are two — a transfer has no category to put on the right,
+   and the sheet narrows to one column. */
+.tx-form.is-two-pane .tx-pane-detail {
   padding-left: 26px;
   border-left: 1px solid var(--line-soft);
 }
@@ -1896,7 +1900,7 @@ kbd {
 /* Narrow enough that two columns would each be a squeeze — stack them. */
 @media (max-width: 940px) {
   .tx-form.is-two-pane { grid-template-columns: minmax(0, 1fr); gap: 16px; }
-  .tx-pane-detail { padding-left: 0; border-left: 0; }
+  .tx-form.is-two-pane .tx-pane-detail { padding-left: 0; border-left: 0; }
 }
 
 .amount-well {
