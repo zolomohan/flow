@@ -3,7 +3,9 @@ import { AnimatePresence, motion } from 'motion/react';
 import { ACCOUNT_ICONS, Icon } from './Icon';
 import { Button, Field, Segmented, Sheet, TextInput, type SegmentOption } from './ui';
 import { useStore } from '../lib/store';
-import { money, paiseToRupeeString, rupeesToPaise } from '../lib/format';
+import {
+  amountChars, money, paiseToRupeeString, rupeesToPaise, settleAmount,
+} from '../lib/format';
 import { itemVariants, listVariants, spring } from '../lib/motion';
 import type { Account, AccountKind } from '../lib/types';
 
@@ -181,10 +183,10 @@ export function AccountSheet({
                 value={opening}
                 placeholder="0"
                 // A leading minus is allowed: an account can start overdrawn,
-                // and an imported opening balance often is.
-                onChange={(e) =>
-                  setOpening(e.target.value.replace(/[^0-9.-]/g, '').replace(/(?!^)-/g, ''))
-                }
+                // and an imported opening balance often is. So is a sum —
+                // an opening balance is often several things added up.
+                onChange={(e) => setOpening(amountChars(e.target.value))}
+                onBlur={() => setOpening(settleAmount(opening))}
               />
             </div>
           </Field>
@@ -204,7 +206,8 @@ export function AccountSheet({
                       inputMode="decimal"
                       value={limit}
                       placeholder="0"
-                      onChange={(e) => setLimit(e.target.value.replace(/[^0-9.]/g, ''))}
+                      onChange={(e) => setLimit(amountChars(e.target.value))}
+                      onBlur={() => setLimit(settleAmount(limit))}
                     />
                   </div>
                 </Field>

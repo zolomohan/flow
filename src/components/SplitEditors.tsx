@@ -7,7 +7,9 @@ import {
   type SegmentOption, type SelectOption,
 } from './ui';
 import { useStore } from '../lib/store';
-import { money, paiseToRupeeString, rupeesToPaise } from '../lib/format';
+import {
+  amountChars, money, paiseToRupeeString, rupeesToPaise, settleAmount,
+} from '../lib/format';
 import { itemVariants, listVariants, spring } from '../lib/motion';
 import type {
   DebtDirection, Paise, Transaction, TransactionShareInput, TransactionSplitInput, TxKind,
@@ -225,9 +227,8 @@ export function SplitLinesEditor({
                     title={
                       i === last ? 'Whatever is left of the bill, filled in for you' : undefined
                     }
-                    onChange={(e) =>
-                      patch(line.key, { amount: e.target.value.replace(/[^0-9.]/g, '') })
-                    }
+                    onChange={(e) => patch(line.key, { amount: amountChars(e.target.value) })}
+                    onBlur={() => patch(line.key, { amount: settleAmount(line.amount) })}
                   />
                 </div>
                 <IconButton
@@ -517,9 +518,8 @@ export function SplitPeopleEditor({
                         : person.weight
                     }
                     disabled={person.you && split.method === 'percent'}
-                    onChange={(e) =>
-                      patch(person.key, { weight: e.target.value.replace(/[^0-9.]/g, '') })
-                    }
+                    onChange={(e) => patch(person.key, { weight: amountChars(e.target.value) })}
+                    onBlur={() => patch(person.key, { weight: settleAmount(person.weight) })}
                   />
                   <span>{split.method === 'percent' ? '%' : 'shares'}</span>
                 </div>
@@ -541,9 +541,8 @@ export function SplitPeopleEditor({
                         ? 'Worked out from how the bill is being split'
                         : undefined
                   }
-                  onChange={(e) =>
-                    patch(person.key, { exact: e.target.value.replace(/[^0-9.]/g, '') })
-                  }
+                  onChange={(e) => patch(person.key, { exact: amountChars(e.target.value) })}
+                  onBlur={() => patch(person.key, { exact: settleAmount(person.exact) })}
                 />
               </div>
 

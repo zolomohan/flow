@@ -1873,6 +1873,32 @@ kbd {
 }
 .tx-form > * { min-width: 0; }
 
+/* Two columns: what the money did on the left, what it was for on the right.
+   A transaction is a short form with one tall field in it — the category
+   grid — and stacking everything under that leaves the rest below the fold
+   for no reason. */
+.tx-form.is-two-pane {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0 26px;
+}
+.tx-pane { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-content: start; }
+.tx-pane > * { min-width: 0; }
+/* A rule rather than a box: the two halves are one form, not two. */
+.tx-pane-detail {
+  padding-left: 26px;
+  border-left: 1px solid var(--line-soft);
+}
+
+/* Anything that reads as a table rather than a field runs under both. */
+.tx-pane-wide { grid-column: 1 / -1; }
+.tx-pane-wide:not(:empty) { margin-top: 16px; }
+
+/* Narrow enough that two columns would each be a squeeze — stack them. */
+@media (max-width: 940px) {
+  .tx-form.is-two-pane { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .tx-pane-detail { padding-left: 0; border-left: 0; }
+}
+
 .amount-well {
   position: relative;
   display: flex;
@@ -1910,6 +1936,20 @@ kbd {
   color: var(--accent);
 }
 .amount-input::placeholder { color: var(--ink-4); }
+
+/* The sum's answer, beside what was typed rather than replacing it — you can
+   still see the working until the field is left. */
+.amount-sum {
+  flex: none;
+  align-self: flex-end;
+  padding-bottom: 7px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: var(--tight);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
 
 .form-error {
   display: flex;

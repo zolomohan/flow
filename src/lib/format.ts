@@ -44,12 +44,109 @@ function trim(n: number) {
   return n >= 100 ? String(Math.round(n)) : n.toFixed(1).replace(/\.0$/, '');
 }
 
+/* ------------------------------------------------------------ arithmetic */
+
+/**
+ * Amount fields take sums, not just numbers: a bill is often three things
+ * added up, or a rate times a quantity, and doing that in your head before
+ * typing is work the app can save you. `1200+350`, `4*249`, `(500+80)/2` and
+ * `2x3` all read as what they come to.
+ *
+ * Hand-parsed rather than handed to `eval`: this is typed input, and a
+ * calculator that can only ever return a number is worth thirty lines.
+ */
+export function evaluateAmount(input: string): number | null {
+  // `x` is what people type for "times" — it is never anything else in a
+  // field that only holds numbers.
+  const text = input.replace(/[xX]/g, '*').replace(/\s+/g, '');
+  if (!text) return null;
+  let at = 0;
+
+  const number = (): number | null => {
+    // Unary sign, so `-500` and `100*-2` both read.
+    let sign = 1;
+    while (text[at] === '-' || text[at] === '+') {
+      if (text[at] === '-') sign = -sign;
+      at++;
+    }
+    if (text[at] === '(') {
+      at++;
+      const inner = sum();
+      if (inner === null || text[at] !== ')') return null;
+      at++;
+      return sign * inner;
+    }
+    const start = at;
+    while (at < text.length && (text[at] === '.' || (text[at] >= '0' && text[at] <= '9'))) at++;
+    if (at === start) return null;
+    const value = Number(text.slice(start, at));
+    return Number.isFinite(value) ? sign * value : null;
+  };
+
+  const product = (): number | null => {
+    let value = number();
+    if (value === null) return null;
+    while (text[at] === '*' || text[at] === '/') {
+      const operator = text[at++];
+      const next = number();
+      if (next === null) return null;
+      // Dividing by nothing is a half-typed expression, not an answer.
+      if (operator === '/' && next === 0) return null;
+      value = operator === '*' ? value * next : value / next;
+    }
+    return value;
+  };
+
+  function sum(): number | null {
+    let value = product();
+    if (value === null) return null;
+    while (text[at] === '+' || text[at] === '-') {
+      const operator = text[at++];
+      const next = product();
+      if (next === null) return null;
+      value = operator === '+' ? value + next : value - next;
+    }
+    return value;
+  }
+
+  const value = sum();
+  // Anything left over is a typo rather than a sum — `12..5`, `4+`, `(3`.
+  return at === text.length && value !== null && Number.isFinite(value) ? value : null;
+}
+
+/** What an amount field is allowed to hold while it is being typed. */
+export function amountChars(input: string) {
+  return input.replace(/[^0-9.+\-*/()xX ]/g, '');
+}
+
+/** Whether there is a sum in there, as against a plain number. */
+export function isSum(input: string) {
+  return /[+*/xX]/.test(input) || /.-/.test(input.trim());
+}
+
+/**
+ * What a field settles to when it loses focus: the sum worked out, so what
+ * stands in the box is what will be saved. A half-typed expression is left
+ * exactly as it is rather than being second-guessed.
+ */
+export function settleAmount(input: string) {
+  if (!isSum(input)) return input;
+  const value = evaluateAmount(input);
+  if (value === null) return input;
+  // Money is worth two places; a quantity may want four. Trailing zeros go
+  // either way, so `50/2` settles to `25` rather than `25.0000`.
+  return String(Number(value.toFixed(4)));
+}
+
+/** The running answer, for showing beside a sum as it is typed. */
+export function sumPreview(input: string): number | null {
+  return isSum(input) ? evaluateAmount(input) : null;
+}
+
 export function rupeesToPaise(input: string): Paise {
-  const negative = input.trim().startsWith('-');
-  const cleaned = input.replace(/[^0-9.]/g, '');
-  if (!cleaned) return 0;
-  const paise = Math.round(parseFloat(cleaned) * 100);
-  return negative ? -paise : paise;
+  const value = evaluateAmount(input);
+  if (value === null) return 0;
+  return Math.round(value * 100);
 }
 
 export function paiseToRupeeString(paise: Paise): string {

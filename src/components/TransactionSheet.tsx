@@ -13,7 +13,10 @@ import {
   type SplitLine, type SplitPeople,
 } from './SplitEditors';
 import { useStore } from '../lib/store';
-import { money, paiseToRupeeString, rupeesToPaise, toLocalInput } from '../lib/format';
+import {
+  amountChars, money, paiseToRupeeString, rupeesToPaise, settleAmount, sumPreview,
+  toLocalInput,
+} from '../lib/format';
 import { itemVariants, listVariants, spring } from '../lib/motion';
 import type { Transaction, TransactionInput, TxKind } from '../lib/types';
 
@@ -122,6 +125,8 @@ export function TransactionSheet({
   // shares live, which is how a split is usually arrived at: the total lands
   // first, the company second.
   const paise = rupeesToPaise(amount);
+  // What the sum in the well comes to, while it is still a sum.
+  const typed = sumPreview(amount);
   // The parts always come to the bill — the last one takes whatever is left —
   // so the only thing that can go wrong is the typed ones overrunning it.
   const split = lines.length > 0;
@@ -271,7 +276,7 @@ export function TransactionSheet({
             ? 'Money landing in an account'
             : 'Money leaving an account'
       }
-      width={560}
+      width={900}
       footer={
         <>
           {editing ? (
@@ -296,257 +301,285 @@ export function TransactionSheet({
       }
     >
       <div
-        className="tx-form"
+        className="tx-form is-two-pane"
         style={{ ['--accent' as any]: accentVar }}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit();
         }}
       >
-        <Segmented options={KINDS} value={kind} onChange={setKind} name="tx-kind" size="lg" />
+        {/* What the money did, and what it was for. The two columns are the
+            two halves of the question — how much, out of where, under what —
+            against the detail you may or may not bother filling in. */}
+        <div className="tx-pane">
+          <Segmented options={KINDS} value={kind} onChange={setKind} name="tx-kind" size="lg" />
 
-        <div className="amount-well">
-          <span className="amount-symbol">₹</span>
-          <input
-            ref={amountRef}
-            className="amount-input"
-            inputMode="decimal"
-            placeholder="0"
-            value={amount}
-            onChange={(e) => {
-              setAmount(e.target.value.replace(/[^0-9.]/g, ''));
-              setError(null);
-            }}
-          />
-        </div>
-
-        <AnimatePresence>
-          {error && (
-            <motion.p
-              className="form-error"
-              initial={{ opacity: 0, y: -4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0 }}
-            >
-              <Icon name="alert-circle" size={14} />
-              {error}
-            </motion.p>
-          )}
-        </AnimatePresence>
-
-        <div className="tx-accounts">
-          <Field label={kind === 'income' ? 'Into account' : 'From account'}>
-            <Select
-              options={accountOptions}
-              value={accountId}
-              onChange={setAccountId}
-              placeholder="Choose an account"
+          <div className="amount-well">
+            <span className="amount-symbol">₹</span>
+            <input
+              ref={amountRef}
+              className="amount-input"
+              inputMode="decimal"
+              placeholder="0"
+              value={amount}
+              onChange={(e) => {
+                setAmount(amountChars(e.target.value));
+                setError(null);
+              }}
+              onBlur={() => setAmount(settleAmount(amount))}
             />
-          </Field>
-          <AnimatePresence mode="popLayout">
-            {kind === 'transfer' && (
-              <motion.div
-                key="to"
-                className="tx-transfer-to"
-                initial={{ opacity: 0, x: 12 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 12 }}
-                transition={spring}
+            {/* A bill is often three things added up. The answer shows as it is
+                typed, and the sum settles into it when the field is left. */}
+            <AnimatePresence>
+              {typed !== null && (
+                <motion.span
+                  className="amount-sum"
+                  initial={{ opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.14 }}
+                >
+                  = {money(Math.round(typed * 100))}
+                </motion.span>
+              )}
+            </AnimatePresence>
+          </div>
+
+          <AnimatePresence>
+            {error && (
+              <motion.p
+                className="form-error"
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
               >
-                <IconButton icon="arrow-left-right" label="Swap accounts" onClick={swap} />
-                <Field label="Into account">
-                  <Select
-                    options={accountOptions.filter((o) => o.value !== accountId)}
-                    value={toAccountId}
-                    onChange={setToAccountId}
-                    placeholder="Choose an account"
-                  />
-                </Field>
+                <Icon name="alert-circle" size={14} />
+                {error}
+              </motion.p>
+            )}
+          </AnimatePresence>
+
+          <div className="tx-accounts">
+            <Field label={kind === 'income' ? 'Into account' : 'From account'}>
+              <Select
+                options={accountOptions}
+                value={accountId}
+                onChange={setAccountId}
+                placeholder="Choose an account"
+              />
+            </Field>
+            <AnimatePresence mode="popLayout">
+              {kind === 'transfer' && (
+                <motion.div
+                  key="to"
+                  className="tx-transfer-to"
+                  initial={{ opacity: 0, x: 12 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 12 }}
+                  transition={spring}
+                >
+                  <IconButton icon="arrow-left-right" label="Swap accounts" onClick={swap} />
+                  <Field label="Into account">
+                    <Select
+                      options={accountOptions.filter((o) => o.value !== accountId)}
+                      value={toAccountId}
+                      onChange={setToAccountId}
+                      placeholder="Choose an account"
+                    />
+                  </Field>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
+          <AnimatePresence mode="popLayout">
+            {kind !== 'transfer' && !split && (
+              <motion.div
+                key="category"
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                transition={spring}
+                style={{ overflow: 'hidden' }}
+              >
+                <span className="field-label">
+                  Category
+                  {selected && <span className="field-hint">{selected.name}</span>}
+                </span>
+                <motion.div
+                  className="cat-grid"
+                  variants={listVariants}
+                  initial="initial"
+                  animate="animate"
+                >
+                  {groups.map((group) => {
+                    const active = group.id === categoryId;
+                    const inside = group.id === openGroupId;
+                    return (
+                      <motion.button
+                        key={group.id}
+                        type="button"
+                        variants={itemVariants}
+                        whileTap={{ scale: 0.95 }}
+                        className={`cat-chip ${active ? 'is-active' : ''} ${
+                          inside && !active ? 'is-inside' : ''
+                        }`}
+                        style={{ ['--cat' as any]: group.color }}
+                        onClick={() => setCategoryId(active ? null : group.id)}
+                      >
+                        <span className="cat-glyph">
+                          <Icon name={group.icon} size={15} strokeWidth={2.1} />
+                        </span>
+                        {group.name}
+                        {group.children.length > 0 && (
+                          <span className="cat-count">{group.children.length}</span>
+                        )}
+                        {active && (
+                          <motion.span
+                            layoutId="cat-ring"
+                            className="cat-ring"
+                            transition={spring}
+                          />
+                        )}
+                      </motion.button>
+                    );
+                  })}
+                </motion.div>
+
+                <AnimatePresence mode="popLayout">
+                  {openGroup && openGroup.children.length > 0 && (
+                    <motion.div
+                      key={openGroup.id}
+                      className="cat-sub"
+                      style={{ ['--cat' as any]: openGroup.color }}
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={spring}
+                    >
+                      <div className="cat-sub-inner">
+                        <span className="cat-sub-label">In {openGroup.name}</span>
+                        <div className="cat-sub-chips">
+                          {openGroup.children.map((child) => {
+                            const active = child.id === categoryId;
+                            return (
+                              <button
+                                key={child.id}
+                                type="button"
+                                className={`cat-sub-chip ${active ? 'is-active' : ''}`}
+                                style={{ ['--cat' as any]: child.color }}
+                                onClick={() => setCategoryId(active ? openGroup.id : child.id)}
+                              >
+                                <Icon name={child.icon} size={13} strokeWidth={2.2} />
+                                {child.name}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </motion.div>
             )}
           </AnimatePresence>
         </div>
 
-        <AnimatePresence mode="popLayout">
-          {kind !== 'transfer' && !split && (
-            <motion.div
-              key="category"
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              transition={spring}
-              style={{ overflow: 'hidden' }}
-            >
-              <span className="field-label">
-                Category
-                {selected && <span className="field-hint">{selected.name}</span>}
-              </span>
-              <motion.div
-                className="cat-grid"
-                variants={listVariants}
-                initial="initial"
-                animate="animate"
-              >
-                {groups.map((group) => {
-                  const active = group.id === categoryId;
-                  const inside = group.id === openGroupId;
-                  return (
-                    <motion.button
-                      key={group.id}
-                      type="button"
-                      variants={itemVariants}
-                      whileTap={{ scale: 0.95 }}
-                      className={`cat-chip ${active ? 'is-active' : ''} ${
-                        inside && !active ? 'is-inside' : ''
-                      }`}
-                      style={{ ['--cat' as any]: group.color }}
-                      onClick={() => setCategoryId(active ? null : group.id)}
-                    >
-                      <span className="cat-glyph">
-                        <Icon name={group.icon} size={15} strokeWidth={2.1} />
-                      </span>
-                      {group.name}
-                      {group.children.length > 0 && (
-                        <span className="cat-count">{group.children.length}</span>
-                      )}
-                      {active && (
-                        <motion.span
-                          layoutId="cat-ring"
-                          className="cat-ring"
-                          transition={spring}
-                        />
-                      )}
-                    </motion.button>
-                  );
-                })}
-              </motion.div>
-
-              <AnimatePresence mode="popLayout">
-                {openGroup && openGroup.children.length > 0 && (
-                  <motion.div
-                    key={openGroup.id}
-                    className="cat-sub"
-                    style={{ ['--cat' as any]: openGroup.color }}
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    exit={{ opacity: 0, height: 0 }}
-                    transition={spring}
-                  >
-                    <div className="cat-sub-inner">
-                      <span className="cat-sub-label">In {openGroup.name}</span>
-                      <div className="cat-sub-chips">
-                        {openGroup.children.map((child) => {
-                          const active = child.id === categoryId;
-                          return (
-                            <button
-                              key={child.id}
-                              type="button"
-                              className={`cat-sub-chip ${active ? 'is-active' : ''}`}
-                              style={{ ['--cat' as any]: child.color }}
-                              onClick={() => setCategoryId(active ? openGroup.id : child.id)}
-                            >
-                              <Icon name={child.icon} size={13} strokeWidth={2.2} />
-                              {child.name}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        <Field label={kind === 'transfer' ? 'Description' : 'Merchant or payee'}>
-          <TextInput
-            value={merchant}
-            placeholder={kind === 'income' ? 'Monthly salary' : 'Swiggy'}
-            onChange={(e) => setMerchant(e.target.value)}
-          />
-        </Field>
-
-        <Field label="When">
-          <div className="when-row">
-            <DateField
-              value={occurredAt.slice(0, 10)}
-              onChange={(iso) => setOccurredAt(`${iso}T${occurredAt.slice(11, 16) || '12:00'}`)}
-            />
+        <div className="tx-pane tx-pane-detail">
+          <Field label={kind === 'transfer' ? 'Description' : 'Merchant or payee'}>
             <TextInput
-              type="time"
-              className="time-input"
-              value={occurredAt.slice(11, 16)}
-              onChange={(e) =>
-                setOccurredAt(`${occurredAt.slice(0, 10)}T${e.target.value || '12:00'}`)
-              }
+              value={merchant}
+              placeholder={kind === 'income' ? 'Monthly salary' : 'Swiggy'}
+              onChange={(e) => setMerchant(e.target.value)}
             />
-          </div>
-        </Field>
+          </Field>
 
-        <Field label="Note" hint="optional">
-          <TextInput
-            value={note}
-            placeholder="Anything worth remembering"
-            onChange={(e) => setNote(e.target.value)}
-          />
-        </Field>
-
-        <AnimatePresence initial={false}>
-          {kind !== 'transfer' && (
-            <motion.div
-              key="splits"
-              className="split-panels"
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              transition={spring}
-            >
-              <SplitSection
-                icon="split"
-                title="Split transaction"
-                summary={
-                  split
-                    ? `${lines.length} parts of ${money(paise)} · ${partNames || 'pick categories'}`
-                    : 'File one bill under more than one category'
+          <Field label="When">
+            <div className="when-row">
+              <DateField
+                value={occurredAt.slice(0, 10)}
+                onChange={(iso) => setOccurredAt(`${iso}T${occurredAt.slice(11, 16) || '12:00'}`)}
+              />
+              <TextInput
+                type="time"
+                className="time-input"
+                value={occurredAt.slice(11, 16)}
+                onChange={(e) =>
+                  setOccurredAt(`${occurredAt.slice(0, 10)}T${e.target.value || '12:00'}`)
                 }
-                open={panel === 'categories'}
-                onToggle={() => togglePanel('categories')}
-              >
-                <SplitLinesEditor
-                  amount={paise}
-                  kind={kind}
-                  lines={lines}
-                  onChange={editLines}
-                />
-              </SplitSection>
+              />
+            </div>
+          </Field>
 
-              <SplitSection
-                icon="users"
-                title="Split with people"
-                summary={
-                  owed > 0
-                    ? `${people.people.length - 1} ${
-                        people.people.length === 2 ? 'person' : 'people'
-                      } · ${money(owed)} ${
-                        directionFor(kind) === 'lent' ? 'owed back to you' : 'you owe them'
-                      }`
-                    : kind === 'income'
-                      ? 'Owe part of this to the people it was for'
-                      : 'Turn everyone else’s share into a debt they owe you'
-                }
-                open={panel === 'people'}
-                onToggle={() => togglePanel('people')}
+          <Field label="Note" hint="optional">
+            <TextInput
+              value={note}
+              placeholder="Anything worth remembering"
+              onChange={(e) => setNote(e.target.value)}
+            />
+          </Field>
+
+        </div>
+
+        {/* The split editors are rows of fields rather than a column of them,
+            so they run the width of the form under both panes. */}
+        <div className="tx-pane-wide">
+          <AnimatePresence initial={false}>
+            {kind !== 'transfer' && (
+              <motion.div
+                key="splits"
+                className="split-panels"
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                transition={spring}
               >
-                <SplitPeopleEditor
-                  amount={paise}
-                  kind={kind}
-                  split={people}
-                  onChange={setPeople}
-                />
-              </SplitSection>
-            </motion.div>
-          )}
-        </AnimatePresence>
+                <SplitSection
+                  icon="split"
+                  title="Split transaction"
+                  summary={
+                    split
+                      ? `${lines.length} parts of ${money(paise)} · ${partNames || 'pick categories'}`
+                      : 'File one bill under more than one category'
+                  }
+                  open={panel === 'categories'}
+                  onToggle={() => togglePanel('categories')}
+                >
+                  <SplitLinesEditor
+                    amount={paise}
+                    kind={kind}
+                    lines={lines}
+                    onChange={editLines}
+                  />
+                </SplitSection>
+
+                <SplitSection
+                  icon="users"
+                  title="Split with people"
+                  summary={
+                    owed > 0
+                      ? `${people.people.length - 1} ${
+                          people.people.length === 2 ? 'person' : 'people'
+                        } · ${money(owed)} ${
+                          directionFor(kind) === 'lent' ? 'owed back to you' : 'you owe them'
+                        }`
+                      : kind === 'income'
+                        ? 'Owe part of this to the people it was for'
+                        : 'Turn everyone else’s share into a debt they owe you'
+                  }
+                  open={panel === 'people'}
+                  onToggle={() => togglePanel('people')}
+                >
+                  <SplitPeopleEditor
+                    amount={paise}
+                    kind={kind}
+                    split={people}
+                    onChange={setPeople}
+                  />
+                </SplitSection>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
       </div>
     </Sheet>
   );

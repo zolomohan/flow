@@ -4,7 +4,9 @@ import { DateField } from './DateField';
 import { TransactionPicker } from './TransactionPicker';
 import { Button, Field, Segmented, Sheet, TextInput, type SegmentOption } from './ui';
 import { useStore } from '../lib/store';
-import { money, paiseToRupeeString, rupeesToPaise, toLocalInput } from '../lib/format';
+import {
+  amountChars, money, paiseToRupeeString, rupeesToPaise, settleAmount, toLocalInput,
+} from '../lib/format';
 import type { Debt, DebtDirection } from '../lib/types';
 
 const DIRECTIONS: SegmentOption<DebtDirection>[] = [
@@ -153,9 +155,10 @@ export function DebtSheet({
                 value={amount}
                 placeholder="0"
                 onChange={(e) => {
-                  setAmount(e.target.value.replace(/[^0-9.]/g, ''));
+                  setAmount(amountChars(e.target.value));
                   setError(null);
                 }}
+                onBlur={() => setAmount(settleAmount(amount))}
               />
             </div>
           </Field>
@@ -281,9 +284,10 @@ export function DebtPaymentSheet({
                 value={amount}
                 placeholder="0"
                 onChange={(e) => {
-                  setAmount(e.target.value.replace(/[^0-9.]/g, ''));
+                  setAmount(amountChars(e.target.value));
                   setError(null);
                 }}
+                onBlur={() => setAmount(settleAmount(amount))}
               />
             </div>
           </Field>

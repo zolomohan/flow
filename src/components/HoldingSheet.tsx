@@ -8,7 +8,10 @@ import {
 } from './ui';
 import { api } from '../lib/api';
 import { useStore } from '../lib/store';
-import { money, paiseToRupeeString, quantity, rupeesToPaise, toLocalInput } from '../lib/format';
+import {
+  amountChars, evaluateAmount, money, paiseToRupeeString, quantity, rupeesToPaise,
+  settleAmount, toLocalInput,
+} from '../lib/format';
 import type { InvestmentLot, Transaction } from '../lib/types';
 import type { Holding, HoldingKind, LotKind, Scheme } from '../lib/types';
 
@@ -37,10 +40,11 @@ const LOT_KINDS: SegmentOption<LotKind>[] = [
   { value: 'sell', label: 'Sold', icon: 'arrow-up-right', accent: 'var(--amber)' },
 ];
 
-/** Grams and units are typed as decimals but stored scaled by 10^4. */
+/** Grams and units are typed as decimals — or as sums, the same as money —
+ *  but stored scaled by 10^4. */
 function toScaled(input: string) {
-  const value = Number(input.replace(/[^0-9.]/g, ''));
-  if (!Number.isFinite(value)) return 0;
+  const value = evaluateAmount(input);
+  if (value === null || value < 0) return 0;
   return Math.round(value * 10_000);
 }
 
@@ -232,9 +236,10 @@ export function HoldingSheet({
                   value={grams}
                   placeholder="0"
                   onChange={(e) => {
-                    setGrams(e.target.value.replace(/[^0-9.]/g, ''));
+                    setGrams(amountChars(e.target.value));
                     setError(null);
                   }}
+                  onBlur={() => setGrams(settleAmount(grams))}
                 />
                 <span>g</span>
               </div>
@@ -616,9 +621,10 @@ export function LotSheet({
                 value={qty}
                 placeholder="0"
                 onChange={(e) => {
-                  setQty(e.target.value.replace(/[^0-9.]/g, ''));
+                  setQty(amountChars(e.target.value));
                   setError(null);
                 }}
+                onBlur={() => setQty(settleAmount(qty))}
               />
               <span>{unit}</span>
             </div>
@@ -630,7 +636,8 @@ export function LotSheet({
                 inputMode="decimal"
                 value={amount}
                 placeholder="0"
-                onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ''))}
+                onChange={(e) => setAmount(amountChars(e.target.value))}
+                onBlur={() => setAmount(settleAmount(amount))}
               />
             </div>
           </Field>
