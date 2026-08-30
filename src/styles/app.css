@@ -4019,7 +4019,9 @@ kbd {
 
 /* ---------------------------------------------------------- people */
 
-.split-people { display: flex; flex-direction: column; gap: 9px; padding-top: 10px; }
+/* No lead-in at the top: the method tabs sit level with the kind tabs in the
+   column beside them, and a padding here would drop them by exactly itself. */
+.split-people { display: flex; flex-direction: column; gap: 9px; }
 .person-list {
   display: flex;
   flex-direction: column;
