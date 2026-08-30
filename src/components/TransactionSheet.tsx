@@ -395,6 +395,25 @@ export function TransactionSheet({
             </AnimatePresence>
           </div>
 
+          <Field label="When">
+            <div className="when-row">
+              <DateField
+                value={occurredAt.slice(0, 10)}
+                onChange={(iso) => setOccurredAt(`${iso}T${occurredAt.slice(11, 16) || '12:00'}`)}
+              />
+              <TextInput
+                type="time"
+                className="time-input"
+                value={occurredAt.slice(11, 16)}
+                onChange={(e) =>
+                  setOccurredAt(`${occurredAt.slice(0, 10)}T${e.target.value || '12:00'}`)
+                }
+              />
+            </div>
+          </Field>
+        </div>
+
+        <div className="tx-pane tx-pane-detail">
           <AnimatePresence mode="popLayout">
             {kind !== 'transfer' && !split && (
               <motion.div
@@ -486,32 +505,13 @@ export function TransactionSheet({
               </motion.div>
             )}
           </AnimatePresence>
-        </div>
 
-        <div className="tx-pane tx-pane-detail">
           <Field label={kind === 'transfer' ? 'Description' : 'Merchant or payee'}>
             <TextInput
               value={merchant}
               placeholder={kind === 'income' ? 'Monthly salary' : 'Swiggy'}
               onChange={(e) => setMerchant(e.target.value)}
             />
-          </Field>
-
-          <Field label="When">
-            <div className="when-row">
-              <DateField
-                value={occurredAt.slice(0, 10)}
-                onChange={(iso) => setOccurredAt(`${iso}T${occurredAt.slice(11, 16) || '12:00'}`)}
-              />
-              <TextInput
-                type="time"
-                className="time-input"
-                value={occurredAt.slice(11, 16)}
-                onChange={(e) =>
-                  setOccurredAt(`${occurredAt.slice(0, 10)}T${e.target.value || '12:00'}`)
-                }
-              />
-            </div>
           </Field>
 
           <Field label="Note" hint="optional">
@@ -521,7 +521,6 @@ export function TransactionSheet({
               onChange={(e) => setNote(e.target.value)}
             />
           </Field>
-
         </div>
 
         {/* The split editors are rows of fields rather than a column of them,

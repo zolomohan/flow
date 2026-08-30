@@ -2040,12 +2040,15 @@ kbd {
 }
 
 .cat-sub { overflow: hidden; }
+/* A wash of the group's own colour rather than a grey box: the panel belongs
+   to the category above it, and mixing the tint into the inset grey left it
+   reading as neither one thing nor the other. */
 .cat-sub-inner {
   margin-top: 8px;
   padding: 11px 13px;
   border-radius: var(--r-lg);
-  background: color-mix(in srgb, var(--cat) 6%, var(--surface-inset));
-  border: 1px solid color-mix(in srgb, var(--cat) 20%, transparent);
+  background: color-mix(in srgb, var(--cat) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--cat) 22%, transparent);
 }
 .cat-sub-label {
   display: block;
