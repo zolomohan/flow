@@ -133,7 +133,7 @@ export function Segmented<T extends string>({
             )}
             <span className="segment-label">
               {option.icon && <Icon name={option.icon} size={size === 'sm' ? 14 : 16} />}
-              {option.label}
+              <span className="segment-text">{option.label}</span>
             </span>
           </button>
         );

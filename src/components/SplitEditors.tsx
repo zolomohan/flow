@@ -464,7 +464,7 @@ export function SplitPeopleEditor({
         value={split.method}
         onChange={(method) => set({ method })}
         name="split-method"
-        size="sm"
+        size="lg"
       />
 
       <div className="split-block">
