@@ -3842,7 +3842,14 @@ kbd {
   background: var(--surface-inset);
   overflow: hidden;
 }
-.debt-bar span { display: block; height: 100%; border-radius: 99px; background: var(--tint); }
+/* Two runs, side by side: what came back, and what was let go. A settled
+   debt fills the bar between them however little of it was ever paid. */
+.debt-bar { display: flex; }
+.debt-bar span { display: block; height: 100%; }
+.debt-bar-paid { background: var(--tint); border-radius: 99px 0 0 99px; }
+.debt-bar-forgiven { background: var(--red); border-radius: 0 99px 99px 0; }
+.debt-bar-paid:only-child,
+.debt-bar span:first-child:last-child { border-radius: 99px; }
 
 .debt-meta { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .debt-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; min-width: 0; }
@@ -3864,6 +3871,7 @@ kbd {
 }
 .debt-tag.is-done { background: var(--green-soft); color: var(--green); }
 .debt-tag.is-late { background: var(--red-soft); color: var(--red); }
+.debt-tag.is-forgiven { background: var(--red-soft); color: var(--red); }
 .debt-tag.is-link { background: var(--blue-soft); color: var(--blue); }
 .debt-tag.is-toggle { cursor: pointer; }
 .debt-tag.is-toggle:hover { color: var(--ink); }

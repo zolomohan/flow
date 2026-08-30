@@ -4,7 +4,7 @@ import { Icon } from '../components/Icon';
 import { Button, Card, Empty, Segmented, type SegmentOption } from '../components/ui';
 import { useStore } from '../lib/store';
 import { DebtDetail } from './DebtDetail';
-import { dayLabel, initials, money } from '../lib/format';
+import { dayLabel, debtProgress, initials, money } from '../lib/format';
 import { itemVariants, listVariants } from '../lib/motion';
 import type { Debt, DebtDirection, Transaction } from '../lib/types';
 
@@ -206,10 +206,33 @@ export function Debts({
   );
 }
 
+/**
+ * What came back, and what was let go. A settled debt fills the bar either
+ * way — the red is the part of it nobody paid.
+ */
+function DebtBar({ bar }: { bar: ReturnType<typeof debtProgress> }) {
+  return (
+    <div className="debt-bar">
+      <motion.span
+        className="debt-bar-paid"
+        initial={{ width: 0 }}
+        animate={{ width: `${Math.min(100, bar.repaid)}%` }}
+        transition={{ duration: 0.7, ease: [0.06, 0.94, 0.67, 1.01] }}
+      />
+      <motion.span
+        className="debt-bar-forgiven"
+        initial={{ width: 0 }}
+        animate={{ width: `${Math.min(100, bar.forgiven)}%` }}
+        transition={{ duration: 0.7, delay: 0.08, ease: [0.06, 0.94, 0.67, 1.01] }}
+      />
+    </div>
+  );
+}
+
 function DebtCard({
   debt, onOpen, onRecordPayment,
 }: { debt: Debt; onOpen: () => void; onRecordPayment: () => void }) {
-  const progress = debt.principal ? debt.paid / debt.principal : 0;
+  const bar = debtProgress(debt);
   const lent = debt.direction === 'lent';
   const overdue =
     !debt.settled && !!debt.dueOn && debt.dueOn < new Date().toISOString().slice(0, 10);
@@ -232,22 +255,26 @@ function DebtCard({
           </span>
         </span>
         <span className="debt-amount">
-          <strong>{money(debt.outstanding)}</strong>
-          <span>of {money(debt.principal)}</span>
+          <strong>{money(debt.settled ? debt.principal : debt.outstanding)}</strong>
+          <span>
+            {debt.settled
+              ? bar.forgivenAmount > 0
+                ? `${money(bar.forgivenAmount)} forgiven`
+                : 'repaid in full'
+              : `of ${money(debt.principal)}`}
+          </span>
         </span>
       </button>
 
-      <div className="debt-bar">
-        <motion.span
-          initial={{ width: 0 }}
-          animate={{ width: `${Math.min(100, progress * 100)}%` }}
-          transition={{ duration: 0.7, ease: [0.06, 0.94, 0.67, 1.01] }}
-        />
-      </div>
+      <DebtBar bar={bar} />
 
       <div className="debt-meta">
         <span className="debt-tags">
-          {debt.settled && <span className="debt-tag is-done">Settled</span>}
+          {debt.settled && (
+            <span className={`debt-tag ${bar.forgivenAmount > 0 ? 'is-forgiven' : 'is-done'}`}>
+              {bar.forgivenAmount > 0 ? 'Forgiven' : 'Settled'}
+            </span>
+          )}
           {overdue && <span className="debt-tag is-late">Overdue</span>}
           {debt.dueOn && !debt.settled && !overdue && (
             <span className="debt-tag">Due {dayLabel(debt.dueOn)}</span>

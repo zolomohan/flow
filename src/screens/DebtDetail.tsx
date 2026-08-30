@@ -4,7 +4,7 @@ import { Icon } from '../components/Icon';
 import { BigMoney } from '../components/Money';
 import { Button, Card, CardHead, Empty } from '../components/ui';
 import { useStore } from '../lib/store';
-import { dayLabel, initials, money } from '../lib/format';
+import { dayLabel, debtProgress, initials, money } from '../lib/format';
 import { itemVariants, listVariants, spring } from '../lib/motion';
 import type { Debt, Transaction } from '../lib/types';
 
@@ -49,7 +49,7 @@ export function DebtDetail({
   }, [debt.counterparty, listTransactions]);
 
   const lent = debt.direction === 'lent';
-  const progress = debt.principal ? debt.paid / debt.principal : 0;
+  const bar = debtProgress(debt);
   const overdue =
     !debt.settled && !!debt.dueOn && debt.dueOn < new Date().toISOString().slice(0, 10);
 
@@ -83,9 +83,24 @@ export function DebtDetail({
         <div className="detail-top">
           <div className="detail-hero-main">
             <span className="detail-label">
-              {debt.settled ? 'Was' : lent ? 'Still owed to you' : 'You still owe'}
+              {debt.settled
+                ? bar.forgivenAmount > 0
+                  ? 'Forgiven'
+                  : 'Repaid in full'
+                : lent
+                  ? 'Still owed to you'
+                  : 'You still owe'}
             </span>
-            <BigMoney value={debt.settled ? debt.principal : debt.outstanding} className="hero-amount" />
+            <BigMoney
+              value={
+                debt.settled
+                  ? bar.forgivenAmount > 0
+                    ? bar.forgivenAmount
+                    : debt.principal
+                  : debt.outstanding
+              }
+              className="hero-amount"
+            />
             <p className="detail-hero-sub">
               {debt.paid > 0
                 ? `${money(debt.paid)} of ${money(debt.principal)} back`
@@ -94,7 +109,11 @@ export function DebtDetail({
             </p>
           </div>
           <div className="debt-tags">
-            {debt.settled && <span className="debt-tag is-done">Settled</span>}
+            {debt.settled && (
+              <span className={`debt-tag ${bar.forgivenAmount > 0 ? 'is-forgiven' : 'is-done'}`}>
+                {bar.forgivenAmount > 0 ? 'Forgiven' : 'Settled'}
+              </span>
+            )}
             {overdue && <span className="debt-tag is-late">Overdue</span>}
             {debt.fromSplit && (
               <span className="debt-tag is-link">
@@ -105,18 +124,31 @@ export function DebtDetail({
           </div>
         </div>
 
+        {/* Settled fills it either way: the red is the part nobody paid. */}
         <div className="debt-bar detail-bar">
           <motion.span
+            className="debt-bar-paid"
             initial={{ width: 0 }}
-            animate={{ width: `${Math.min(100, progress * 100)}%` }}
+            animate={{ width: `${Math.min(100, bar.repaid)}%` }}
             transition={{ duration: 0.7, ease: [0.06, 0.94, 0.67, 1.01] }}
+          />
+          <motion.span
+            className="debt-bar-forgiven"
+            initial={{ width: 0 }}
+            animate={{ width: `${Math.min(100, bar.forgiven)}%` }}
+            transition={{ duration: 0.7, delay: 0.08, ease: [0.06, 0.94, 0.67, 1.01] }}
           />
         </div>
 
         <div className="detail-figures">
           <Figure label="Principal" value={money(debt.principal)} hint={lent ? 'you handed over' : 'they handed over'} />
           <Figure label="Repaid" value={money(debt.paid)} hint={`${debt.payments.length} ${debt.payments.length === 1 ? 'payment' : 'payments'}`} />
-          <Figure label="Outstanding" value={money(debt.outstanding)} hint={debt.settled ? 'settled either way' : 'still to come'} />
+          <Figure
+            label={debt.settled ? 'Forgiven' : 'Outstanding'}
+            value={money(debt.settled ? bar.forgivenAmount : debt.outstanding)}
+            hint={debt.settled ? 'written off, not chased' : 'still to come'}
+            tone={debt.settled && bar.forgivenAmount > 0 ? 'red' : undefined}
+          />
           <Figure label="Opened" value={dayLabel(debt.openedOn)} hint={since(debt.openedOn)} />
         </div>
 
@@ -197,11 +229,13 @@ export function DebtDetail({
   );
 }
 
-function Figure({ label, value, hint }: { label: string; value: string; hint?: string }) {
+function Figure({
+  label, value, hint, tone,
+}: { label: string; value: string; hint?: string; tone?: 'red' }) {
   return (
     <div className="detail-figure">
       <span>{label}</span>
-      <strong>{value}</strong>
+      <strong className={tone === 'red' ? 'is-down' : undefined}>{value}</strong>
       {hint && <small>{hint}</small>}
     </div>
   );

@@ -287,3 +287,25 @@ export function perUnit(amount: Paise, quantityE4: Scaled): Paise {
 export function accountWorth(account: Account): Paise {
   return account.balance + account.revaluation;
 }
+
+/**
+ * How a debt's bar reads: what came back, and what was let go.
+ *
+ * A settled debt is finished whether or not the money arrived — forgiving
+ * the rest is a way of closing it — so the two together always fill the bar
+ * once it is settled, and the part nobody paid is shown for what it is.
+ */
+export function debtProgress(debt: {
+  principal: Paise;
+  paid: Paise;
+  settled: boolean;
+}): { repaid: number; forgiven: number; forgivenAmount: Paise } {
+  if (debt.principal <= 0) return { repaid: 0, forgiven: 0, forgivenAmount: 0 };
+  const back = Math.min(Math.max(debt.paid, 0), debt.principal);
+  const written = debt.settled ? debt.principal - back : 0;
+  return {
+    repaid: (back / debt.principal) * 100,
+    forgiven: (written / debt.principal) * 100,
+    forgivenAmount: written,
+  };
+}
