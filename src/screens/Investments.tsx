@@ -263,7 +263,7 @@ export function Investments({
                     />
                   ) : undefined
                 }
-                footnote="Today's weight run back over the market — London's daily fix, converted at the ECB's rupee rate and marked up for duty and GST."
+                footnote="Each piece counted from the day it was acquired, at the weight it is today, over London's daily fix — converted at the ECB's rupee rate and marked up for duty and GST."
               />
             )}
 
@@ -425,6 +425,7 @@ function HoldingCard({
 
   const footnotes = [
     holding.closed ? 'closed' : null,
+    isGold && holding.acquiredOn ? `since ${shortDayLabel(holding.acquiredOn)}` : null,
     !isGold && share > 0.001 ? `${percent(share * 100)} of holdings` : null,
     !isGold && holding.lots.length
       ? `${holding.lots.length} ${holding.lots.length === 1 ? 'entry' : 'entries'}`

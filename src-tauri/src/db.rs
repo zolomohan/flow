@@ -169,6 +169,9 @@ fn migrate(conn: &Connection) -> Result<()> {
             purity_e4   INTEGER CHECK (purity_e4 IS NULL OR (purity_e4 > 0 AND purity_e4 <= 10000)),
             -- Grams held, for gold. A fund is measured by its lots instead.
             grams_e4    INTEGER NOT NULL DEFAULT 0 CHECK (grams_e4 >= 0),
+            -- The day gold came into your hands, when you know it. A fund
+            -- gets its dates from its lots and leaves this null.
+            acquired_on TEXT,
             note        TEXT,
             closed_at   TEXT,
             created_at  TEXT NOT NULL
@@ -230,6 +233,7 @@ fn migrate(conn: &Connection) -> Result<()> {
         "owns_transaction INTEGER NOT NULL DEFAULT 0",
     )?;
     add_column_if_missing(conn, "investment_lots", "allotted_at", "allotted_at TEXT")?;
+    add_column_if_missing(conn, "holdings", "acquired_on", "acquired_on TEXT")?;
     add_column_if_missing(
         conn,
         "accounts",
@@ -1660,7 +1664,7 @@ pub fn list_holdings(conn: &Connection) -> Result<Vec<Holding>> {
     let mut stmt = conn
         .prepare(
             "SELECT h.id, h.kind, h.name, h.account_id, a.name, h.scheme_code, h.isin,
-                    h.purity_e4, h.note, h.closed_at, h.created_at,
+                    h.purity_e4, h.note, h.closed_at, h.created_at, h.acquired_on,
                     CASE WHEN h.kind = 'gold' THEN h.grams_e4 ELSE
                       COALESCE((SELECT SUM(CASE WHEN l.kind = 'buy' THEN l.quantity_e4
                                                 ELSE -l.quantity_e4 END)
@@ -1681,9 +1685,9 @@ pub fn list_holdings(conn: &Connection) -> Result<Vec<Holding>> {
             let scheme_code: Option<String> = r.get(5)?;
             let purity_e4: Option<Scaled> = r.get(7)?;
             let closed_at: Option<String> = r.get(9)?;
-            let units_e4: Scaled = r.get(11)?;
-            let invested: Paise = r.get(12)?;
-            let realised: Paise = r.get(13)?;
+            let units_e4: Scaled = r.get(12)?;
+            let invested: Paise = r.get(13)?;
+            let realised: Paise = r.get(14)?;
             let priced = book.price_for(&kind, scheme_code.as_deref(), purity_e4);
             let market_value = priced
                 .as_ref()
@@ -1702,6 +1706,7 @@ pub fn list_holdings(conn: &Connection) -> Result<Vec<Holding>> {
                 closed: closed_at.is_some(),
                 closed_at,
                 created_at: r.get(10)?,
+                acquired_on: r.get(11)?,
                 units_e4,
                 invested,
                 realised,
@@ -1794,6 +1799,21 @@ pub fn save_holding(conn: &Connection, input: HoldingInput) -> Result<()> {
         (None, None, Some(purity), grams)
     };
 
+    // A fund is dated by its lots; only gold carries a day of its own, and a
+    // day it hasn't reached yet would draw a chart of metal you don't have.
+    let acquired_on = input
+        .acquired_on
+        .map(|d| d.trim().to_string())
+        .filter(|d| !d.is_empty() && input.kind == "gold");
+    if let Some(day) = &acquired_on {
+        if NaiveDate::parse_from_str(day, "%Y-%m-%d").is_err() {
+            return Err("That acquisition date isn't a date.".into());
+        }
+        if *day > Utc::now().date_naive().format("%Y-%m-%d").to_string() {
+            return Err("Gold can't have been acquired in the future.".into());
+        }
+    }
+
     // Gold sits in a locker, not in an account: nothing posts on its behalf,
     // so there is no investment account for it to move money through.
     let account_id = input
@@ -1842,7 +1862,8 @@ pub fn save_holding(conn: &Connection, input: HoldingInput) -> Result<()> {
             };
             conn.execute(
                 "UPDATE holdings SET kind = ?2, name = ?3, account_id = ?4, scheme_code = ?5,
-                        isin = ?6, purity_e4 = ?7, grams_e4 = ?8, note = ?9, closed_at = ?10
+                        isin = ?6, purity_e4 = ?7, grams_e4 = ?8, note = ?9, closed_at = ?10,
+                        acquired_on = ?11
                  WHERE id = ?1",
                 params![
                     id,
@@ -1854,14 +1875,16 @@ pub fn save_holding(conn: &Connection, input: HoldingInput) -> Result<()> {
                     purity_e4,
                     grams_e4,
                     input.note,
-                    closed_at
+                    closed_at,
+                    acquired_on
                 ],
             )
         }
         None => conn.execute(
             "INSERT INTO holdings (id, kind, name, account_id, scheme_code, isin,
-                                   purity_e4, grams_e4, note, closed_at, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                                   purity_e4, grams_e4, note, closed_at, created_at,
+                                   acquired_on)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 new_id(),
                 input.kind,
@@ -1873,7 +1896,8 @@ pub fn save_holding(conn: &Connection, input: HoldingInput) -> Result<()> {
                 grams_e4,
                 input.note,
                 if input.closed == Some(true) { Some(now()) } else { None },
-                now()
+                now(),
+                acquired_on
             ],
         ),
     }
@@ -2446,17 +2470,17 @@ pub fn gold_value_series(
 ) -> Result<Vec<ValuePoint>> {
     let mut stmt = conn
         .prepare(
-            "SELECT COALESCE(purity_e4, 10000), grams_e4 FROM holdings
+            "SELECT COALESCE(purity_e4, 10000), grams_e4, acquired_on FROM holdings
              WHERE kind = 'gold' AND closed_at IS NULL AND grams_e4 > 0",
         )
         .map_err(oops)?;
-    let mut pieces: Vec<(Scaled, Scaled)> = stmt
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+    let mut pieces: Vec<(Scaled, Scaled, Option<String>)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
         .map_err(oops)?
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(oops)?;
     if let Some(wanted) = purity_e4 {
-        pieces.retain(|(purity, _)| *purity == wanted);
+        pieces.retain(|(purity, _, _)| *purity == wanted);
     }
     if pieces.is_empty() {
         return Ok(Vec::new());
@@ -2466,7 +2490,7 @@ pub fn gold_value_series(
     // of the same karat ride the same rate, and the rate is the expensive part.
     let since = since_date(days);
     let mut lines: HashMap<Scaled, Vec<PricePoint>> = HashMap::new();
-    for (purity, _) in &pieces {
+    for (purity, _, _) in &pieces {
         if !lines.contains_key(purity) {
             lines.insert(*purity, gold_series(conn, *purity, since.as_deref())?);
         }
@@ -2476,17 +2500,26 @@ pub fn gold_value_series(
     let mut order: Vec<&str> = Vec::new();
     // Dates come out of the fix in order, and every fineness shares them, so
     // walking the first line keeps the days in order without a second sort.
-    if let Some(first) = pieces.first().and_then(|(p, _)| lines.get(p)) {
+    if let Some(first) = pieces.first().and_then(|(p, _, _)| lines.get(p)) {
         for point in first {
             order.push(&point.as_of);
         }
     }
-    for (purity, grams_e4) in &pieces {
+    for (purity, grams_e4, acquired_on) in &pieces {
         for point in &lines[purity] {
+            // A piece counts from the day it came into your hands. One with no
+            // date on it counts throughout: an unknown day is not a claim that
+            // you didn't own it.
+            if acquired_on.as_deref().is_some_and(|day| point.as_of.as_str() < day) {
+                continue;
+            }
             *totals.entry(&point.as_of).or_insert(0) +=
                 market_value_paise(*grams_e4, point.price_e4);
         }
     }
+    // Days before you owned anything drop out rather than plotting a run of
+    // zeros: the line starts where the metal does. Once a piece is counted it
+    // stays counted, so nothing goes missing out of the middle.
     Ok(order
         .into_iter()
         .filter_map(|as_of| {
@@ -2999,6 +3032,7 @@ mod tests {
                 isin: None,
                 purity_e4: None,
                 grams_e4: None,
+                acquired_on: None,
                 note: None,
                 closed: None,
             },
@@ -3058,6 +3092,7 @@ mod tests {
                 isin: None,
                 purity_e4: Some(10_000),
                 grams_e4: Some(grams_e4),
+                acquired_on: None,
                 note: None,
                 closed: None,
             },
@@ -3235,6 +3270,7 @@ mod tests {
                 isin: None,
                 purity_e4: Some(9_160),
                 grams_e4: None,
+                acquired_on: None,
                 note: None,
                 closed: None,
             },
@@ -3460,6 +3496,7 @@ mod tests {
                     isin: None,
                     purity_e4: None,
                     grams_e4: None,
+                    acquired_on: None,
                     note: None,
                     closed: None,
                 },
@@ -4373,6 +4410,7 @@ mod tests {
                 isin: None,
                 purity_e4: Some(9_160),
                 grams_e4: Some(20 * 10_000),
+                acquired_on: None,
                 note: None,
                 closed: None,
             },
@@ -4414,6 +4452,7 @@ mod tests {
                 isin: None,
                 purity_e4: Some(9_160),
                 grams_e4: Some(20 * 10_000),
+                acquired_on: None,
                 note: None,
                 closed: None,
             },
@@ -4448,6 +4487,63 @@ mod tests {
             only_22k[1].value < line[1].value,
             "narrowing to one fineness leaves the other pieces out"
         );
+    }
+
+    /// A piece counts from the day it was acquired, so the line steps up when
+    /// it arrives rather than pretending you held it all along.
+    #[test]
+    fn gold_counts_from_the_day_it_was_acquired() {
+        let conn = book();
+        save_holding(
+            &conn,
+            HoldingInput {
+                id: None,
+                kind: "gold".into(),
+                name: "Coin".into(),
+                account_id: None,
+                scheme_code: None,
+                isin: None,
+                purity_e4: Some(10_000),
+                grams_e4: Some(10 * 10_000),
+                acquired_on: Some("2026-08-29".into()),
+                note: None,
+                closed: None,
+            },
+        )
+        .unwrap();
+        gold_price_at(&conn, 100);
+        let landed = gold_landed_e4(&conn).unwrap();
+        let ounce = 100 * 311_035 * 10_000 / landed;
+        store_history(
+            &conn,
+            KEY_GOLD,
+            &[("2026-08-28".into(), ounce), ("2026-08-29".into(), ounce)],
+        )
+        .unwrap();
+
+        let line = gold_value_series(&conn, None, None).unwrap();
+        assert_eq!(line.len(), 1, "the 28th owned nothing, so it isn't a day");
+        assert_eq!(line[0].as_of, "2026-08-29");
+        assert_eq!(line[0].value, 100_000, "10 g at ₹100 the day it arrived");
+
+        // A day it hasn't reached is metal you don't have.
+        let err = save_holding(
+            &conn,
+            HoldingInput {
+                id: None,
+                kind: "gold".into(),
+                name: "Later".into(),
+                account_id: None,
+                scheme_code: None,
+                isin: None,
+                purity_e4: Some(10_000),
+                grams_e4: Some(10_000),
+                acquired_on: Some("2099-01-01".into()),
+                note: None,
+                closed: None,
+            },
+        );
+        assert!(err.is_err(), "an acquisition date in the future is refused");
     }
 
     /// Spot and the fix are different feeds that sit a couple of percent apart.

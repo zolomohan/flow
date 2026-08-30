@@ -414,6 +414,10 @@ pub struct Holding {
     pub note: Option<String>,
     pub closed_at: Option<String>,
     pub created_at: String,
+    /// The day gold came into your hands, when it is known — what the value
+    /// line counts it from. Always `None` for a fund, which is dated by its
+    /// lots instead.
+    pub acquired_on: Option<String>,
     // Derived.
     /// Grams or units held, scaled by 10^4. Gold carries the grams you typed;
     /// a fund carries what its lots add up to.
@@ -447,6 +451,9 @@ pub struct HoldingInput {
     /// How much gold you hold, in grams scaled by 10^4. Gold is weighed, not
     /// traded: this is the whole of it, and it is ignored for a fund.
     pub grams_e4: Option<Scaled>,
+    /// The day the gold was acquired (YYYY-MM-DD), when it is known. Optional
+    /// — plenty of gold has been in the family longer than anyone remembers.
+    pub acquired_on: Option<String>,
     pub note: Option<String>,
     /// Explicitly close or reopen the position.
     pub closed: Option<bool>,

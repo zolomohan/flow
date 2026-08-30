@@ -353,6 +353,11 @@ export interface Holding {
   note: string | null;
   closedAt: string | null;
   createdAt: string;
+  /**
+   * The day gold came into your hands, when it is known — what the value
+   * line counts it from. Null for a fund, which is dated by its lots.
+   */
+  acquiredOn: string | null;
   /** Grams for gold, units for a fund. */
   unitsE4: Scaled;
   /** Both are zero for gold: an object you own, not a position you traded. */
@@ -378,6 +383,9 @@ export interface HoldingInput {
   /** Grams of gold held, scaled. Gold is weighed, not traded, so this is the
    *  whole of the position; a fund ignores it and counts its lots instead. */
   gramsE4: Scaled | null;
+  /** The day it was acquired, YYYY-MM-DD. Optional — plenty of gold has been
+   *  in the family longer than anyone remembers. */
+  acquiredOn: string | null;
   note: string | null;
   closed?: boolean | null;
 }

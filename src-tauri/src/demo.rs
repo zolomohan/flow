@@ -390,14 +390,21 @@ fn seed_holdings(
 ) -> Result<()> {
     let created = chrono::Utc::now().to_rfc3339();
 
+    // Bought a year and a half ago, so the sample book's value line has a day
+    // to start from rather than running back to the beginning of the market.
+    let acquired = (chrono::Utc::now().date_naive() - chrono::Duration::days(540))
+        .format("%Y-%m-%d")
+        .to_string();
     conn.execute(
-        "INSERT INTO holdings (id, kind, name, purity_e4, grams_e4, note, created_at)
-         VALUES (?1, 'gold', ?2, 9160, 205000, ?3, ?4)",
+        "INSERT INTO holdings (id, kind, name, purity_e4, grams_e4, note, created_at,
+                               acquired_on)
+         VALUES (?1, 'gold', ?2, 9160, 205000, ?3, ?4, ?5)",
         params![
             Uuid::new_v4().to_string(),
             "Gold — coins & chain",
             "22K, in the locker",
-            created
+            created,
+            acquired
         ],
     )
     .map_err(|e| e.to_string())?;

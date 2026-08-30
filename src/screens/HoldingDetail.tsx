@@ -206,7 +206,15 @@ export function HoldingDetail({
             <Figure label="Held for" value={heldFor(first)} hint={`since ${dayLabel(first)}`} />
           )}
           {isGold && (
-            <Figure label="Added" value={heldFor(holding.createdAt)} hint={`on ${dayLabel(holding.createdAt)}`} />
+            <Figure
+              label="Held for"
+              value={heldFor(holding.acquiredOn ?? holding.createdAt)}
+              hint={
+                holding.acquiredOn
+                  ? `acquired ${dayLabel(holding.acquiredOn)}`
+                  : `added to the book ${dayLabel(holding.createdAt)}`
+              }
+            />
           )}
         </div>
       </Card>
@@ -318,6 +326,10 @@ export function HoldingDetail({
               <>
                 <Fact label="Weight" value={quantity(holding.unitsE4, 'g')} />
                 <Fact label="Purity" value={`${carats(holding.purityE4)} · ${((holding.purityE4 ?? 10_000) / 10_000 * 100).toFixed(1)}% fine`} />
+                <Fact
+                  label="Acquired"
+                  value={holding.acquiredOn ? dayLabel(holding.acquiredOn) : 'not recorded'}
+                />
               </>
             )}
             <Fact

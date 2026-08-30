@@ -65,6 +65,7 @@ export function HoldingSheet({
   const [name, setName] = useState('');
   const [purity, setPurity] = useState('9160');
   const [grams, setGrams] = useState('');
+  const [acquiredOn, setAcquiredOn] = useState('');
   const [schemeCode, setSchemeCode] = useState<string | null>(null);
   const [isin, setIsin] = useState<string | null>(null);
   const [accountId, setAccountId] = useState<string | null>(null);
@@ -80,6 +81,7 @@ export function HoldingSheet({
       setName(editing.name);
       setPurity(String(editing.purityE4 ?? 10_000));
       setGrams(editing.kind === 'gold' ? fromScaled(editing.unitsE4) : '');
+      setAcquiredOn(editing.acquiredOn ?? '');
       setSchemeCode(editing.schemeCode);
       setIsin(editing.isin);
       setAccountId(editing.accountId);
@@ -90,6 +92,7 @@ export function HoldingSheet({
       setName('');
       setPurity('9160');
       setGrams('');
+      setAcquiredOn('');
       setSchemeCode(null);
       setIsin(null);
       setAccountId(null);
@@ -133,6 +136,7 @@ export function HoldingSheet({
         isin: kind === 'fund' ? isin : null,
         purityE4: kind === 'gold' ? Number(purity) : null,
         gramsE4: kind === 'gold' ? gramsE4 : null,
+        acquiredOn: kind === 'gold' && acquiredOn ? acquiredOn : null,
         note: note.trim() || null,
         closed,
       });
@@ -247,6 +251,18 @@ export function HoldingSheet({
                 name="holding-purity"
               />
             </div>
+            <Field
+              label="Acquired"
+              hint="optional — the value chart counts it from this day on"
+            >
+              <DateField
+                value={acquiredOn}
+                onChange={setAcquiredOn}
+                placeholder="As long as you can remember"
+                max={toLocalInput().slice(0, 10)}
+                allowClear
+              />
+            </Field>
           </>
         )}
 
