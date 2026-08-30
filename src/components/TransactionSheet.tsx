@@ -184,8 +184,7 @@ export function TransactionSheet({
   // Closing it again without touching them puts the bill back as it was:
   // looking inside a panel is not the same as asking for a split.
   // Leaving the categories page having touched nothing puts the bill back as
-  // it was, whether you went back to the form or sideways to the people:
-  // looking at a split is not the same as asking for one.
+  // it was: looking at a split is not the same as asking for one.
   const dropSeeded = () => {
     if (page === 'categories' && seeded) {
       setLines([]);
@@ -194,7 +193,6 @@ export function TransactionSheet({
   };
 
   const openPage = (which: SplitFocus) => {
-    if (which !== page) dropSeeded();
     setBack(false);
     setPage(which);
     if (which !== 'categories') return;
@@ -524,30 +522,6 @@ export function TransactionSheet({
                   <SplitLinesEditor amount={paise} kind={kind} lines={lines} onChange={editLines} />
                 ) : (
                   <SplitPeopleEditor amount={paise} kind={kind} split={people} onChange={setPeople} />
-                )}
-              </div>
-            </div>
-
-            {/* The other way of dividing the same bill is one step sideways
-                rather than back out through the form. */}
-            <div className="tx-pane-wide">
-              <div className="split-panels">
-                {page === 'categories' ? (
-                  <SplitLink
-                    icon="users"
-                    title="Split with people"
-                    summary={peopleSummary}
-                    on={owed > 0}
-                    onOpen={() => openPage('people')}
-                  />
-                ) : (
-                  <SplitLink
-                    icon="split"
-                    title="Split transaction"
-                    summary={partsSummary}
-                    on={split}
-                    onOpen={() => openPage('categories')}
-                  />
                 )}
               </div>
             </div>
