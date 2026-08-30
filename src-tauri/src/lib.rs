@@ -122,6 +122,12 @@ fn save_debt(db: State<Db>, input: DebtInput) -> R<()> {
     with_db(&db, |c| db::save_debt(c, input))
 }
 
+/// The postings one debt is made of.
+#[tauri::command]
+fn debt_entries(db: State<Db>, id: String) -> R<Vec<Transaction>> {
+    with_db(&db, |c| db::debt_entries(c, &id))
+}
+
 #[tauri::command]
 fn delete_debt(db: State<Db>, id: String) -> R<()> {
     with_db(&db, |c| db::delete_debt(c, &id))
@@ -290,6 +296,7 @@ pub fn run() {
             list_debts,
             save_debt,
             delete_debt,
+            debt_entries,
             save_debt_payment,
             delete_debt_payment,
             list_holdings,

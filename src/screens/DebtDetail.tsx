@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { Icon } from '../components/Icon';
 import { BigMoney } from '../components/Money';
 import { Button, Card, CardHead, Empty } from '../components/ui';
+import { api } from '../lib/api';
 import { useStore } from '../lib/store';
 import { dayLabel, debtProgress, initials, money } from '../lib/format';
 import { itemVariants, listVariants, spring } from '../lib/motion';
@@ -32,21 +33,24 @@ export function DebtDetail({
   onRecordPayment: () => void;
   onOpenTransaction: (tx: Transaction) => void;
 }) {
-  const { listTransactions } = useStore();
+  const { revision } = useStore();
   const [entries, setEntries] = useState<Transaction[] | null>(null);
 
-  // Only some debts hold a link to a posting; the rest are joined to the
-  // ledger by the one thing they share, which is the name on them.
+  // What the debt is actually made of — the posting that opened it, the ones
+  // that repaid it, and whatever else was filed against it. Asked for by the
+  // link rather than by the name on them, which found a funeral and a plate
+  // of momos looking for a mother.
   useEffect(() => {
     let live = true;
     setEntries(null);
-    listTransactions({ search: debt.counterparty, limit: 200 })
+    api
+      .debtEntries(debt.id)
       .then((rows) => live && setEntries(rows))
       .catch(() => live && setEntries([]));
     return () => {
       live = false;
     };
-  }, [debt.counterparty, listTransactions]);
+  }, [debt.id, revision]);
 
   const lent = debt.direction === 'lent';
   const bar = debtProgress(debt);
@@ -195,14 +199,16 @@ export function DebtDetail({
           <div className="card-pad">
             <CardHead
               title="In the ledger"
-              hint={`everything naming ${debt.counterparty}${entries ? ` · ${entries.length}` : ''}`}
+              hint={`what it is made of${entries ? ` · ${entries.length}` : ''}`}
             />
           </div>
           <div className="debt-entries is-listed">
             {entries === null ? (
               <p className="debt-entries-empty">Looking…</p>
             ) : entries.length === 0 ? (
-              <p className="debt-entries-empty">Nothing in the ledger says that name.</p>
+              <p className="debt-entries-empty">
+                Nothing in the ledger is filed against this one.
+              </p>
             ) : (
               <ul>
                 {entries.map((tx) => (

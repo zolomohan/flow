@@ -66,6 +66,8 @@ export const api = {
   listDebts: () => call<Debt[]>('list_debts'),
   saveDebt: (input: DebtInput) => call<void>('save_debt', { input }),
   deleteDebt: (id: string) => call<void>('delete_debt', { id }),
+  /** The postings one debt is made of — linked, not guessed at by name. */
+  debtEntries: (id: string) => call<Transaction[]>('debt_entries', { id }),
   saveDebtPayment: (input: DebtPaymentInput) =>
     call<void>('save_debt_payment', { input }),
   deleteDebtPayment: (id: string) => call<void>('delete_debt_payment', { id }),

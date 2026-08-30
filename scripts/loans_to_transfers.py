@@ -77,6 +77,16 @@ def rebuild_debts(conn: sqlite3.Connection, account_id: str, book: Path,
         conn.execute("VACUUM INTO ?", (str(backup),))
         print(f"book copied to {backup.name}")
 
+    # The app writes this table too; a book it has not opened since may not
+    # have it yet, and the script should not depend on which ran first.
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS debt_entries (
+               debt_id        TEXT NOT NULL REFERENCES debts(id) ON DELETE CASCADE,
+               transaction_id TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+               PRIMARY KEY (debt_id, transaction_id)
+           ) WITHOUT ROWID"""
+    )
+
     rows = conn.execute(
         """SELECT t.id, t.amount, t.occurred_at, t.merchant, COALESCE(t.note, '') note,
                   t.to_account_id = ? AS outward
@@ -98,7 +108,7 @@ def rebuild_debts(conn: sqlite3.Connection, account_id: str, book: Path,
             """DELETE FROM debts
                WHERE from_split = 0 AND transaction_id IS NULL
                  AND note LIKE '% out, % back, over %'"""
-        ).rowcount
+        ).rowcount  # their payments and entries go with them, by cascade
         if gone:
             print(f"{gone} debt records from a previous run cleared")
 
@@ -146,6 +156,14 @@ def rebuild_debts(conn: sqlite3.Connection, account_id: str, book: Path,
                     now,
                 ),
             )
+            # Which postings this debt is made of, said outright: the whole
+            # run of hand-offs, both directions, so its page never has to
+            # guess by the name on them.
+            for item in items:
+                conn.execute(
+                    "INSERT OR IGNORE INTO debt_entries (debt_id, transaction_id) VALUES (?, ?)",
+                    (debt_id, item["id"]),
+                )
             for payment in payments:
                 conn.execute(
                     """INSERT INTO debt_payments (id, debt_id, amount, occurred_at, note,

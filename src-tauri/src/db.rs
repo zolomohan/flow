@@ -218,6 +218,17 @@ fn migrate(conn: &Connection) -> Result<()> {
             PRIMARY KEY (key, as_of)
         ) WITHOUT ROWID;
 
+        -- The postings a debt is made of. A debt that came from one bill
+        -- points at it directly, and a repayment points at whatever paid it,
+        -- but a debt written over years of hand-offs is made of many — and
+        -- the only alternative to saying which is guessing by name, which
+        -- finds a funeral and a plate of momos looking for a mother.
+        CREATE TABLE IF NOT EXISTS debt_entries (
+            debt_id        TEXT NOT NULL REFERENCES debts(id) ON DELETE CASCADE,
+            transaction_id TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+            PRIMARY KEY (debt_id, transaction_id)
+        ) WITHOUT ROWID;
+
         CREATE TABLE IF NOT EXISTS settings (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -1747,6 +1758,38 @@ pub fn save_debt(conn: &Connection, input: DebtInput) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Everything the ledger holds for one debt: the posting that opened it, the
+/// postings that repaid it, and whatever else was filed against it. Ordered
+/// as the ledger is, newest first.
+pub fn debt_entries(conn: &Connection, debt_id: &str) -> Result<Vec<Transaction>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT transaction_id FROM debt_entries WHERE debt_id = ?1
+             UNION
+             SELECT transaction_id FROM debts
+              WHERE id = ?1 AND transaction_id IS NOT NULL
+             UNION
+             SELECT transaction_id FROM debt_payments
+              WHERE debt_id = ?1 AND transaction_id IS NOT NULL",
+        )
+        .map_err(oops)?;
+    let ids = stmt
+        .query_map(params![debt_id], |r| r.get::<_, String>(0))
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?;
+    drop(stmt);
+
+    let mut rows = Vec::with_capacity(ids.len());
+    for id in ids {
+        if let Ok(tx) = get_transaction(conn, &id) {
+            rows.push(tx);
+        }
+    }
+    rows.sort_by(|a, b| b.occurred_at.cmp(&a.occurred_at));
+    Ok(rows)
 }
 
 pub fn delete_debt(conn: &Connection, id: &str) -> Result<()> {
