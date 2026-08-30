@@ -3884,6 +3884,66 @@ kbd {
 }
 .debt-repay:hover { border-color: var(--tint); color: var(--tint); }
 
+/* What the debt is made of, as the ledger has it. */
+.debt-entries { margin-top: 4px; }
+.debt-entries-head {
+  padding: 8px 2px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: var(--wide);
+  text-transform: uppercase;
+  color: var(--ink-4);
+  border-top: 1px solid var(--line-soft);
+}
+.debt-entries-empty { padding: 2px 2px 8px; font-size: 12.5px; color: var(--ink-4); }
+.debt-entries ul { display: flex; flex-direction: column; }
+.debt-entries li + li { border-top: 1px solid var(--line-soft); }
+.debt-entries button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 2px;
+  text-align: left;
+  border-radius: var(--r-sm);
+  transition: background var(--fast) var(--ease);
+}
+.debt-entries button:hover { background: var(--surface-2); }
+.debt-entry-date {
+  flex: none;
+  width: 86px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ink-4);
+}
+.debt-entry-what {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink-2);
+}
+.debt-entry-what em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--ink-4);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.debt-entry-amount {
+  flex: none;
+  font-size: 12.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.debt-entry-amount.is-income { color: var(--green); }
+.debt-entry-amount.is-transfer { color: var(--ink-3); }
+
 .debt-payments { overflow: hidden; }
 .debt-payments li {
   display: flex;

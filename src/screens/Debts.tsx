@@ -1,21 +1,23 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from '../components/Icon';
 import { Button, Card, Empty, Segmented, type SegmentOption } from '../components/ui';
 import { useStore } from '../lib/store';
 import { dayLabel, initials, money } from '../lib/format';
 import { itemVariants, listVariants, spring } from '../lib/motion';
-import type { Debt, DebtDirection } from '../lib/types';
+import type { Debt, DebtDirection, Transaction } from '../lib/types';
 
 /** Who owes whom, and what is done with. */
 type DebtTab = 'lent' | 'borrowed' | 'past';
 
 export function Debts({
-  onNewDebt, onEditDebt, onRecordPayment,
+  onNewDebt, onEditDebt, onRecordPayment, onOpenTransaction,
 }: {
   onNewDebt: (direction: DebtDirection) => void;
   onEditDebt: (debt: Debt) => void;
   onRecordPayment: (debt: Debt) => void;
+  /** Opens one of the entries behind a debt, from the debt itself. */
+  onOpenTransaction: (tx: Transaction) => void;
 }) {
   const { debts } = useStore();
 
@@ -175,6 +177,7 @@ export function Debts({
                       debt={debt}
                       onEdit={() => onEditDebt(debt)}
                       onRecordPayment={() => onRecordPayment(debt)}
+                      onOpenTransaction={onOpenTransaction}
                     />
                   ))}
                 </motion.div>
@@ -188,9 +191,31 @@ export function Debts({
 }
 
 function DebtCard({
-  debt, onEdit, onRecordPayment,
-}: { debt: Debt; onEdit: () => void; onRecordPayment: () => void }) {
+  debt, onEdit, onRecordPayment, onOpenTransaction,
+}: {
+  debt: Debt;
+  onEdit: () => void;
+  onRecordPayment: () => void;
+  onOpenTransaction: (tx: Transaction) => void;
+}) {
+  const { listTransactions } = useStore();
   const [open, setOpen] = useState(false);
+  // The postings behind a debt. Only some debts hold a link to one — the rest
+  // are joined to the ledger by the only thing they share, which is the name
+  // on them, so that is what this asks the ledger for.
+  const [entries, setEntries] = useState<Transaction[] | null>(null);
+  const [showing, setShowing] = useState(false);
+
+  useEffect(() => {
+    if (!showing || entries) return;
+    let live = true;
+    listTransactions({ search: debt.counterparty, limit: 60 })
+      .then((rows) => live && setEntries(rows))
+      .catch(() => live && setEntries([]));
+    return () => {
+      live = false;
+    };
+  }, [showing, entries, debt.counterparty, listTransactions]);
   const progress = debt.principal ? debt.paid / debt.principal : 0;
   const lent = debt.direction === 'lent';
   const overdue =
@@ -248,6 +273,12 @@ function DebtCard({
               {debt.payments.length} {debt.payments.length === 1 ? 'repayment' : 'repayments'}
             </button>
           )}
+          <button className="debt-tag is-toggle" onClick={() => setShowing((v) => !v)}>
+            <motion.span animate={{ rotate: showing ? 90 : 0 }} transition={spring}>
+              <Icon name="chevron-right" size={11} />
+            </motion.span>
+            Entries
+          </button>
         </span>
         {!debt.settled && (
           <button className="debt-repay" onClick={onRecordPayment}>
@@ -258,6 +289,44 @@ function DebtCard({
       </div>
 
       <AnimatePresence initial={false}>
+        {showing && (
+          <motion.div
+            className="debt-entries"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={spring}
+            style={{ overflow: 'hidden' }}
+          >
+            <p className="debt-entries-head">
+              Everything in the ledger naming {debt.counterparty}
+              {entries && ` · ${entries.length}`}
+            </p>
+            {entries === null ? (
+              <p className="debt-entries-empty">Looking…</p>
+            ) : entries.length === 0 ? (
+              <p className="debt-entries-empty">Nothing in the ledger says that name.</p>
+            ) : (
+              <ul>
+                {entries.map((tx) => (
+                  <li key={tx.id}>
+                    <button onClick={() => onOpenTransaction(tx)}>
+                      <span className="debt-entry-date">{dayLabel(tx.occurredAt)}</span>
+                      <span className="debt-entry-what">
+                        {tx.merchant || tx.categoryName || 'Entry'}
+                        {tx.note && <em>{tx.note}</em>}
+                      </span>
+                      <span className={`debt-entry-amount is-${tx.kind}`}>
+                        {tx.kind === 'income' ? '+' : tx.kind === 'expense' ? '−' : ''}
+                        {money(tx.amount)}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </motion.div>
+        )}
         {open && debt.payments.length > 0 && (
           <motion.ul
             className="debt-payments"

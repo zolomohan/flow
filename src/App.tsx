@@ -279,6 +279,7 @@ function Shell() {
                 onNewDebt={newDebt}
                 onEditDebt={editDebt}
                 onRecordPayment={setPaymentFor}
+                onOpenTransaction={openTransaction}
               />
             ) : route === 'investments' ? (
               <Investments
