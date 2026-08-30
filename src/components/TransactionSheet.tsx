@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from './Icon';
 import { DateField } from './DateField';
 import {
-  Button, Field, IconButton, Segmented, Select, Sheet, TextInput,
+  Button, Chip, Confirm, Field, IconButton, Segmented, Select, Sheet, TextInput,
   type SegmentOption, type SelectOption,
 } from './ui';
 import {
@@ -540,8 +540,13 @@ export function TransactionSheet({
     }
   };
 
+  // Armed by the footer button, answered in a dialog: the delete itself only
+  // runs once the second, deliberate click lands somewhere else on screen.
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
   const remove = async () => {
     if (!editing) return;
+    setConfirmingDelete(false);
     await deleteTransaction(editing.id);
     toast('Transaction deleted');
     onClose();
@@ -1077,10 +1082,24 @@ export function TransactionSheet({
                   </motion.button>
                 )}
               </AnimatePresence>
+
+              {labelPicker}
             </div>
           </motion.div>
         )}
       </AnimatePresence>
+      <Confirm
+        stacked
+        open={confirmingDelete}
+        title="Delete this transaction?"
+        confirmLabel="Delete"
+        onConfirm={remove}
+        onCancel={() => setConfirmingDelete(false)}
+      >
+        {editing
+          ? `${money(editing.amount)}${editing.merchant ? ` to ${editing.merchant}` : ''} \u2014 this cannot be undone.`
+          : 'This cannot be undone.'}
+      </Confirm>
     </Sheet>
   );
 }

@@ -504,6 +504,92 @@ export function Sheet({
   );
 }
 
+/* ---------------------------------------------------------------- Confirm */
+
+/**
+ * The last word before something that cannot be taken back. A dialog rather
+ * than a second click on the same button: a delete that fires from where the
+ * pointer already rests is a delete nobody agreed to.
+ */
+export function Confirm({
+  open, onConfirm, onCancel, title, children,
+  confirmLabel = 'Delete', icon = 'trash-2', tone = 'danger', busy = false,
+  stacked = false,
+}: {
+  open: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+  title: string;
+  children?: ReactNode;
+  confirmLabel?: string;
+  icon?: string;
+  tone?: ButtonTone;
+  busy?: boolean;
+  /** Opened from inside a sheet, which it has to sit above. */
+  stacked?: boolean;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    // Captured, so Escape answers this and stops there. Whatever is underneath
+    // listens on the same document and would otherwise close along with it.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      onCancel();
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
+  }, [open, onCancel]);
+
+  // Through a portal: the sheet this opens from is animated, and a transformed
+  // ancestor anchors a fixed scrim to itself rather than to the window.
+  return createPortal(
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          className={`scrim ${stacked ? 'is-stacked' : ''}`}
+          variants={sheetBackdrop}
+          initial="initial"
+          animate="animate"
+          exit="exit"
+          onMouseDown={(e) => e.target === e.currentTarget && onCancel()}
+        >
+          <motion.div
+            className="sheet is-confirm"
+            variants={sheetPanel}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            role="alertdialog"
+            aria-modal="true"
+            aria-label={title}
+          >
+            <header className="sheet-head">
+              <div className="sheet-heading">
+                <h2 className="sheet-title">{title}</h2>
+              </div>
+            </header>
+            {children && (
+              <div className="sheet-body">
+                <p className="confirm-body">{children}</p>
+              </div>
+            )}
+            <footer className="sheet-foot">
+              <div className="foot-actions">
+                <Button tone="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
+                <Button tone={tone} icon={icon} onClick={onConfirm} disabled={busy} autoFocus>
+                  {confirmLabel}
+                </Button>
+              </div>
+            </footer>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>,
+    document.body,
+  );
+}
+
 /* --------------------------------------------------------------- MoreMenu */
 
 export interface MenuItem {

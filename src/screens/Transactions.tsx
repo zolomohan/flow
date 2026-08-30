@@ -1,15 +1,16 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from '../components/Icon';
+import { ImportSheet } from '../components/ImportSheet';
 import { TransactionRow } from '../components/TransactionRow';
 import {
-  Button, Card, Chip, Empty, Segmented, Select, TextInput,
+  Button, Card, Chip, Confirm, Empty, Segmented, Select, TextInput,
   type SegmentOption, type SelectOption,
 } from '../components/ui';
 import { MonthNav, periodLabel } from '../components/MonthNav';
 import { useStore } from '../lib/store';
 import { dayKey, dayLabel, money, shiftMonth } from '../lib/format';
-import { itemVariants, listVariants, spring } from '../lib/motion';
+import { itemVariants, listVariants, popover, spring } from '../lib/motion';
 import type {
   Transaction, TransactionPatch, TransactionSummary, TxKind,
 } from '../lib/types';
@@ -378,7 +379,12 @@ export function Transactions({
     }
   };
 
+  // A bulk delete is the one action here with no way back, so it is asked
+  // for twice: once on the toolbar, once in a dialog that says how many.
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
   const removePicked = async () => {
+    setConfirmingDelete(false);
     setWorking(true);
     try {
       const gone = await deleteTransactions([...pickedSet]);
@@ -956,7 +962,36 @@ export function Transactions({
           </motion.div>
         )}
       </AnimatePresence>
+
+      <ImportSheet open={importOpen} onClose={() => setImportOpen(false)} />
+
+      <Confirm
+        open={confirmingDelete}
+        title={
+          pickedSet.size === 1
+            ? 'Delete this entry?'
+            : `Delete ${pickedSet.size.toLocaleString('en-IN')} entries?`
+        }
+        confirmLabel={pickedSet.size === 1 ? 'Delete' : `Delete ${pickedSet.size}`}
+        busy={working}
+        onConfirm={removePicked}
+        onCancel={() => setConfirmingDelete(false)}
+      >
+        {pickedSet.size === 1
+          ? 'This cannot be undone.'
+          : 'They go together, and this cannot be undone.'}
+      </Confirm>
     </div>
+  );
+}
+
+/** Whether everything picked still wears the Triage label — the only rows
+ *  "Mark reviewed" is a sensible thing to say about. */
+function chosenHaveTriage(rows: Transaction[], pickedSet: Set<string>) {
+  const chosen = rows.filter((r) => pickedSet.has(r.id));
+  return (
+    chosen.length > 0 &&
+    chosen.every((r) => r.labels.some((l) => l.name === 'Triage'))
   );
 }
 

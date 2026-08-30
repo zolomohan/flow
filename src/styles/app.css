@@ -689,6 +689,14 @@ kbd {
    from its parent, which is the thing that moves. */
 .sheet-canvas { flex: none; }
 
+.sheet.is-confirm { max-width: 400px; }
+.confirm-body {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+
 .sheet-foot {
   display: flex;
   align-items: center;
