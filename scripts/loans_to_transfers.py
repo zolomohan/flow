@@ -45,6 +45,12 @@ OUT = re.compile(r"^Me\s*→\s*([^:]+?)\s*(?::\s*(.*))?$")
 IN = re.compile(r"^(.+?)\s*→\s*Me\s*(?::\s*(.*))?$")
 
 
+def reason(note: str) -> str:
+    """What a hand-off says it was for — the half after the colon."""
+    hit = OUT.match(note.strip()) or IN.match(note.strip())
+    return (hit.group(2) or "").strip() if hit else ""
+
+
 def counterparty(merchant: str, note: str) -> str:
     """Who the money passed between, from whichever field says so."""
     for pattern in (OUT, IN):
@@ -97,9 +103,15 @@ def rebuild_debts(conn: sqlite3.Connection, account_id: str, book: Path,
     ).fetchall()
 
     now = dt.datetime.now(dt.timezone.utc).isoformat()
-    people = collections.defaultdict(list)
+    # One debt per thread, not per person. A thread is a name and a reason —
+    # "Sankar : Mom's Surgery" — because that is the unit that has a
+    # direction: he handed the money over and was paid back. Rolling a
+    # person's threads together makes a two-year tab of shared dinners look
+    # like one loan, and puts the arrow on whichever side happened to move
+    # more money.
+    threads = collections.defaultdict(list)
     for row in rows:
-        people[counterparty(row["merchant"], row["note"])].append(row)
+        threads[(counterparty(row["merchant"], row["note"]), reason(row["note"]))].append(row)
 
     with conn:
         # Only the ones this script wrote: a debt of your own naming the same
@@ -113,32 +125,32 @@ def rebuild_debts(conn: sqlite3.Connection, account_id: str, book: Path,
             print(f"{gone} debt records from a previous run cleared")
 
         written = 0
-        for who, items in sorted(people.items()):
+        for (who, why), items in sorted(threads.items()):
             out = [r for r in items if r["outward"]]
             back = [r for r in items if not r["outward"]]
             gave, got = sum(r["amount"] for r in out), sum(r["amount"] for r in back)
-            # Whoever handed over more holds the debt; the rest is repayment
-            # against it, and what is left of it is what was forgiven.
-            lent = gave >= got
-            principal = max(gave, got)
+            # Whoever moved first lent it. Everything the other way is
+            # repayment against that — which is the only reading under which
+            # money you borrowed and paid back in full is not a debt somebody
+            # forgave you.
+            lent = bool(items[0]["outward"])
+            principal = gave if lent else got
             payments = back if lent else out
             if principal <= 0:
                 continue
-            reasons = set()
-            for item in items:
-                note = item["note"].strip()
-                hit = OUT.match(note) or IN.match(note)
-                if hit and hit.group(2):
-                    reasons.add(hit.group(2).strip())
-            forgiven = principal - sum(r["amount"] for r in payments)
+            paid = sum(r["amount"] for r in payments)
+            forgiven = max(principal - paid, 0)
+            over = max(paid - principal, 0)
             story = (
                 f"{gave / 100:,.0f} out, {got / 100:,.0f} back, over "
                 f"{items[0]['occurred_at'][:10]} to {items[-1]['occurred_at'][:10]}."
             )
             if forgiven > 0:
                 story += f" {forgiven / 100:,.0f} forgiven."
-            if reasons:
-                story += " " + ", ".join(sorted(reasons))
+            if over > 0:
+                story += f" {over / 100:,.0f} more than was owed."
+            if why:
+                story += f" {why}"
             debt_id = str(uuid.uuid4())
             conn.execute(
                 """INSERT INTO debts (id, direction, counterparty, principal, opened_on,

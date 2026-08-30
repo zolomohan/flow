@@ -2,11 +2,10 @@ import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { Icon } from '../components/Icon';
 import { BigMoney } from '../components/Money';
-import { Button, Card, CardHead, Empty } from '../components/ui';
+import { Button, Card, CardHead } from '../components/ui';
 import { api } from '../lib/api';
 import { useStore } from '../lib/store';
 import { dayLabel, debtProgress, initials, money } from '../lib/format';
-import { itemVariants, listVariants, spring } from '../lib/motion';
 import type { Debt, DebtPayment, Transaction } from '../lib/types';
 
 /** Days between now and a date, said the way you would say it. */
@@ -56,6 +55,42 @@ export function DebtDetail({
 
   const lent = debt.direction === 'lent';
   const bar = debtProgress(debt);
+
+  // A repayment and the posting that made it are one thing, not two: the row
+  // stands for the repayment, and the posting behind it is a click away
+  // inside. Everything else is the money that was handed over in the first
+  // place — which is the whole of a debt written over a run of hand-offs.
+  const byTransaction = new Map(
+    debt.payments.filter((p) => p.transactionId).map((p) => [p.transactionId!, p]),
+  );
+  const rows = [
+    ...(entries ?? []).map((tx) => {
+      const payment = byTransaction.get(tx.id);
+      return {
+        key: tx.id,
+        day: tx.occurredAt,
+        amount: payment?.amount ?? tx.amount,
+        what: tx.merchant || tx.categoryName || 'Entry',
+        detail: tx.note ?? undefined,
+        tag: payment ? 'Repaid' : lent ? 'Lent' : 'Borrowed',
+        tone: payment ? 'back' : 'out',
+        open: () => (payment ? onEditPayment(payment) : onOpenTransaction(tx)),
+      };
+    }),
+    // A repayment recorded on its own, with no posting behind it.
+    ...debt.payments
+      .filter((p) => !p.transactionId || !(entries ?? []).some((tx) => tx.id === p.transactionId))
+      .map((p) => ({
+        key: p.id,
+        day: p.occurredAt,
+        amount: p.amount,
+        what: p.note ?? p.transactionLabel ?? 'Repayment',
+        detail: undefined,
+        tag: 'Repaid',
+        tone: 'back' as const,
+        open: () => onEditPayment(p),
+      })),
+  ].sort((a, b) => b.day.localeCompare(a.day));
   const overdue =
     !debt.settled && !!debt.dueOn && debt.dueOn < new Date().toISOString().slice(0, 10);
 
@@ -161,80 +196,51 @@ export function DebtDetail({
         {debt.note && <p className="detail-note">{debt.note}</p>}
       </Card>
 
-      <div className="detail-grid">
-        <Card padded={false} className="detail-lots">
-          <div className="card-pad">
-            <CardHead
-              title="Repayments"
-              hint={debt.paid > 0 ? `${money(debt.paid)} back so far` : 'nothing back yet'}
-              action={
-                debt.settled ? undefined : (
-                  <Button size="sm" icon="plus" onClick={onRecordPayment}>Add</Button>
-                )
-              }
-            />
-          </div>
-          {debt.payments.length === 0 ? (
-            <div className="card-pad">
-              <Empty
-                icon="inbox"
-                title="Nothing recorded against it"
-                body="Record what comes back and this becomes the debt's own history."
-              />
-            </div>
+      {/* One list, not two. Everything the debt is made of, in the order it
+          happened, each row saying what it was — the money handed over, and
+          the money that came back against it. */}
+      <Card padded={false} className="detail-lots">
+        <div className="card-pad">
+          <CardHead
+            title="Entries"
+            hint={
+              entries === null
+                ? 'reading the ledger'
+                : `${rows.length} ${rows.length === 1 ? 'entry' : 'entries'} · ${money(debt.principal)} out, ${money(debt.paid)} back`
+            }
+            action={
+              debt.settled ? undefined : (
+                <Button size="sm" icon="plus" onClick={onRecordPayment}>Repayment</Button>
+              )
+            }
+          />
+        </div>
+        <div className="debt-entries is-listed">
+          {entries === null ? (
+            <p className="debt-entries-empty">Looking…</p>
+          ) : rows.length === 0 ? (
+            <p className="debt-entries-empty">
+              Nothing in the ledger is filed against this one.
+            </p>
           ) : (
-            <motion.ul className="debt-payments is-listed" variants={listVariants} initial="initial" animate="animate">
-              {debt.payments.map((payment) => (
-                <motion.li key={payment.id} variants={itemVariants} transition={spring}>
-                  <button onClick={() => onEditPayment(payment)}>
-                    <span className="debt-payment-date">{dayLabel(payment.occurredAt)}</span>
-                    <span className="debt-payment-note">
-                      {payment.note ?? payment.transactionLabel ?? 'Repayment'}
+            <ul>
+              {rows.map((row) => (
+                <li key={row.key}>
+                  <button onClick={row.open}>
+                    <span className="debt-entry-date">{dayLabel(row.day)}</span>
+                    <span className="debt-entry-what">
+                      {row.what}
+                      {row.detail && <em>{row.detail}</em>}
                     </span>
-                    <strong>{money(payment.amount)}</strong>
+                    <span className={`debt-entry-tag is-${row.tone}`}>{row.tag}</span>
+                    <span className="debt-entry-amount">{money(row.amount)}</span>
                   </button>
-                </motion.li>
+                </li>
               ))}
-            </motion.ul>
+            </ul>
           )}
-        </Card>
-
-        <Card padded={false} className="detail-lots">
-          <div className="card-pad">
-            <CardHead
-              title="In the ledger"
-              hint={`what it is made of${entries ? ` · ${entries.length}` : ''}`}
-            />
-          </div>
-          <div className="debt-entries is-listed">
-            {entries === null ? (
-              <p className="debt-entries-empty">Looking…</p>
-            ) : entries.length === 0 ? (
-              <p className="debt-entries-empty">
-                Nothing in the ledger is filed against this one.
-              </p>
-            ) : (
-              <ul>
-                {entries.map((tx) => (
-                  <li key={tx.id}>
-                    <button onClick={() => onOpenTransaction(tx)}>
-                      <span className="debt-entry-date">{dayLabel(tx.occurredAt)}</span>
-                      <span className="debt-entry-what">
-                        {tx.merchant || tx.categoryName || 'Entry'}
-                        {tx.note && <em>{tx.note}</em>}
-                      </span>
-                      <span className={`debt-entry-amount is-${tx.kind}`}>
-                        {tx.kind === 'income' ? '+' : tx.kind === 'expense' ? '−' : ''}
-                        {money(tx.amount)}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </Card>
-      </div>
+        </div>
+      </Card>
     </div>
   );
 }
