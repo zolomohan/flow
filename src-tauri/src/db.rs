@@ -1217,7 +1217,30 @@ pub fn save_transaction(conn: &Connection, input: TransactionInput) -> Result<Tr
     }
     if input.kind == "transfer" {
         match input.to_account_id.as_deref() {
-            None | Some("") => return Err("Pick an account to transfer into.".into()),
+            // Money that left your accounts and is owed back is a transfer
+            // with nowhere of yours to go: it is not spending, and the debt
+            // standing against it is the other side of the entry. Without a
+            // debt it is simply unaccounted for, so that is refused.
+            None | Some("") => {
+                let owed = match (input.shares.as_deref(), input.id.as_deref()) {
+                    (Some(shares), _) => !shares.is_empty(),
+                    (None, Some(id)) => conn
+                        .query_row(
+                            "SELECT COUNT(*) FROM debts
+                             WHERE from_split = 1 AND transaction_id = ?1",
+                            params![id],
+                            |r| r.get::<_, i64>(0),
+                        )
+                        .map_err(oops)?
+                        > 0,
+                    (None, None) => false,
+                };
+                if !owed {
+                    return Err(
+                        "Pick an account to transfer into, or say who owes it back.".into(),
+                    );
+                }
+            }
             Some(to) if to == input.account_id => {
                 return Err("A transfer needs two different accounts.".into())
             }
@@ -4916,6 +4939,49 @@ mod tests {
 
         assert_eq!(delete_transactions(&conn, &[bare.id, split.id]).unwrap(), 2);
         assert_eq!(list_transactions(&conn, TransactionQuery::default()).unwrap().len(), 2);
+    }
+
+    /// Lending is not spending. Money out of your accounts with nowhere of
+    /// yours to go is a transfer against a debt: the account falls, the debt
+    /// stands in its place, and net worth never moves.
+    #[test]
+    fn a_transfer_with_nowhere_to_go_is_money_someone_owes() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 5_000_000);
+        let before = net_worth(&conn);
+
+        let lend = |shares: Option<Vec<TransactionShareInput>>| {
+            save_transaction(
+                &conn,
+                TransactionInput {
+                    id: None,
+                    kind: "transfer".into(),
+                    amount: 500_000,
+                    account_id: bank.clone(),
+                    to_account_id: None,
+                    category_id: None,
+                    merchant: "Harish".into(),
+                    note: None,
+                    occurred_at: "2026-08-14T10:00".into(),
+                    splits: None,
+                    shares,
+                },
+            )
+        };
+
+        assert!(lend(None).is_err(), "money cannot simply leave the book");
+        let tx = lend(Some(vec![share("Harish", 500_000)])).unwrap();
+        assert_eq!(tx.shares.len(), 1);
+        assert_eq!(tx.shares[0].direction, "lent");
+
+        let account_now = list_accounts(&conn).unwrap()[0].balance;
+        assert_eq!(account_now, 5_000_000 - 500_000, "the money did leave");
+        assert_eq!(net_worth(&conn), before, "but it is still yours, as a debt");
+
+        // And it is not spending: the month's expenses never saw it.
+        let month = overview(&conn, "2026-08", 1).unwrap();
+        assert_eq!(month.expense, 0);
+        assert_eq!(month.lent_outstanding, 500_000);
     }
 
     #[test]

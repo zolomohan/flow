@@ -258,30 +258,38 @@ export function TransactionSheet({
     if (!paise) return setError('Enter an amount.');
     if (!accountId) return setError('Pick an account.');
     if (needsNote && !note.trim()) return setError('Add a note — this book asks for one.');
-    if (kind === 'transfer' && !toAccountId) return setError('Pick a destination account.');
     if (kind === 'transfer' && toAccountId === accountId)
       return setError('A transfer needs two different accounts.');
 
-    // A transfer moves money between your own accounts, so there is nothing to
-    // file under categories and nobody to owe a part of it.
+    // A transfer files under no category — it moves money rather than spending
+    // it — but it can still be owed back: money out of your accounts with
+    // nowhere of yours to go is lending, and the debt is the other side of it.
     const parts = kind === 'transfer' ? [] : linesToInput(lines, paise);
-    const owing = kind === 'transfer' ? [] : peopleToInput(people, paise, kind);
+    const owing = peopleToInput(people, paise, kind);
+    if (kind === 'transfer' && !toAccountId && !owing.length)
+      return setError('Pick an account to transfer into, or say who owes it back.');
     if (kind !== 'transfer' && split && rest < 0)
       return setError(`The parts run ${money(-rest)} over the ${money(paise)} bill.`);
     if (parts.length === 1) return setError('A split needs at least two parts.');
     if (owed > paise)
       return setError(`The shares come to ${money(owed)} — more than the bill.`);
 
+    // Lending is not spending. If none of a bill is yours — every paisa of it
+    // owed back — then it is money that left your accounts and is coming
+    // home, so it is saved as a transfer against the debt rather than as an
+    // expense that would sit in your spending until it was repaid.
+    const savedKind: TxKind = lentInFull ? 'transfer' : kind;
+
     const input: TransactionInput = {
       id: editing?.id ?? null,
-      kind,
+      kind: savedKind,
       amount: paise,
       accountId,
-      toAccountId: kind === 'transfer' ? toAccountId : null,
+      toAccountId: savedKind === 'transfer' ? toAccountId : null,
       // A split bill has no single category of its own, but the ledger row
       // still needs a colour and a glyph — so it takes the largest part's.
       categoryId:
-        kind === 'transfer'
+        savedKind === 'transfer'
           ? null
           : parts.length
             ? (parts.reduce((big, p) => (p.amount > big.amount ? p : big)).categoryId ??
@@ -325,6 +333,10 @@ export function TransactionSheet({
   // the two ways of splitting it. Only a transfer has none of that — it moves
   // between your own accounts — so only a transfer drops to one column.
   const twoPane = kind !== 'transfer';
+
+  // Nothing of it is yours: an expense entirely owed back is lending, and the
+  // sheet says so before it saves it that way.
+  const lentInFull = kind === 'expense' && paise > 0 && owed === paise;
 
   const accentVar =
     kind === 'income' ? 'var(--green)' : kind === 'transfer' ? 'var(--blue)' : 'var(--ink)';
@@ -402,12 +414,19 @@ export function TransactionSheet({
               transition={spring}
             >
               <IconButton icon="arrow-left-right" label="Swap accounts" onClick={swap} />
-              <Field label="Into account">
+              {/* Optional once somebody owes it: money out of your accounts
+                  with nowhere of yours to go is lending, and the debt is
+                  where it went. */}
+              <Field
+                label="Into account"
+                hint={owed > 0 ? 'optional — it is owed back' : undefined}
+              >
                 <Select
                   options={accountOptions.filter((o) => o.value !== accountId)}
                   value={toAccountId}
                   onChange={setToAccountId}
-                  placeholder="Choose an account"
+                  placeholder={owed > 0 ? 'Owed back to you' : 'Choose an account'}
+                  allowClear={owed > 0}
                 />
               </Field>
             </motion.div>
@@ -542,16 +561,21 @@ export function TransactionSheet({
             {/* Not while you are already inside one: the way out of a split is
                 back to the transaction, and the menu would only offer the way
                 in again. */}
-            {kind !== 'transfer' && !page && (
+            {!page && (
               <SplitMenu
                 ways={[
-                  {
-                    which: 'categories',
-                    icon: 'split',
-                    title: 'Split transaction',
-                    summary: partsSummary,
-                    on: split,
-                  },
+                  // A transfer has no category to divide it between.
+                  ...(kind === 'transfer'
+                    ? []
+                    : [
+                        {
+                          which: 'categories' as const,
+                          icon: 'split',
+                          title: 'Split transaction',
+                          summary: partsSummary,
+                          on: split,
+                        },
+                      ]),
                   {
                     which: 'people',
                     icon: 'users',
@@ -615,7 +639,18 @@ export function TransactionSheet({
                 {page === 'categories' ? (
                   <SplitLinesEditor amount={paise} kind={kind} lines={lines} onChange={editLines} />
                 ) : (
-                  <SplitPeopleEditor amount={paise} split={people} onChange={editPeople} />
+                  <>
+                    <SplitPeopleEditor amount={paise} split={people} onChange={editPeople} />
+                    {lentInFull && (
+                      <p className="page-note">
+                        <Icon name="arrow-left-right" size={13} />
+                        None of this is yours, so it is money lent rather than money
+                        spent — it will be saved as a transfer out of{' '}
+                        {live.find((a) => a.id === accountId)?.name ?? 'the account'} and
+                        stay out of your spending until it comes back.
+                      </p>
+                    )}
+                  </>
                 )}
               </div>
             </div>

@@ -486,6 +486,92 @@ export function Sheet({
   );
 }
 
+/* --------------------------------------------------------------- MoreMenu */
+
+export interface MenuItem {
+  icon: string;
+  label: string;
+  hint?: string;
+  onClick: () => void;
+}
+
+/**
+ * The quiet way to act on a row: one glyph that stays out of the way until
+ * the pointer is over it, and a short list behind it. Rows have room for a
+ * mark, not for a row of buttons — and a button that only appears on hover
+ * is a button nobody knows the name of.
+ */
+export function MoreMenu({ items, label = 'More' }: { items: MenuItem[]; label?: string }) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!root.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey, true);
+    };
+  }, [open]);
+
+  if (!items.length) return null;
+
+  return (
+    <div className={`more-menu ${open ? 'is-open' : ''}`} ref={root}>
+      <button
+        type="button"
+        className="more-trigger"
+        aria-label={label}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((was) => !was);
+        }}
+      >
+        <Icon name="more-horizontal" size={16} />
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            className="more-pop"
+            variants={popover}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+          >
+            {items.map((item) => (
+              <button
+                key={item.label}
+                type="button"
+                className="more-item"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpen(false);
+                  item.onClick();
+                }}
+              >
+                <Icon name={item.icon} size={15} strokeWidth={2.1} />
+                <span>
+                  {item.label}
+                  {item.hint && <em>{item.hint}</em>}
+                </span>
+              </button>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ Others */
 
 export function Chip({

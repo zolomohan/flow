@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from './Icon';
 import { Amount } from './Money';
+import { MoreMenu } from './ui';
 import { itemVariants, spring } from '../lib/motion';
 import { initials, money, timeLabel } from '../lib/format';
 import type { Transaction } from '../lib/types';
@@ -41,8 +42,9 @@ export function TransactionRow({
 
   // A split bill's own category is only one of several, so the parts name
   // themselves instead of it.
+  const owedTo = tx.shares.map((s) => s.counterparty).join(', ');
   const subtitle = isTransfer
-    ? `${tx.accountName} → ${tx.toAccountName ?? '—'}`
+    ? `${tx.accountName} → ${tx.toAccountName ?? (owedTo || 'owed back')}`
     : tx.splits.length
       ? [`${tx.splits.length} parts`, tx.accountName].filter(Boolean).join(' · ')
       : [tx.categoryName, tx.accountName].filter(Boolean).join(' · ');
@@ -98,29 +100,32 @@ export function TransactionRow({
         </span>
       </motion.button>
 
-      {/* A transfer moves money between your own accounts: there is nobody to
-          owe any of it and nothing to file it under twice. */}
-      {!isTransfer && (onSplit || onDebt) && (
-        <div className="tx-row-actions">
-          {onDebt && (
-            <button
-              type="button"
-              className="tx-split-action"
-              title="Make the whole of this a debt in someone's name"
-              onClick={onDebt}
-            >
-              <Icon name="user-round" size={14} strokeWidth={2.1} />
-              Debt
-            </button>
-          )}
-          {onSplit && (
-            <button type="button" className="tx-split-action" onClick={onSplit}>
-              <Icon name="split" size={14} strokeWidth={2.1} />
-              Split
-            </button>
-          )}
-        </div>
-      )}
+      {/* What can be done to the row without opening it, behind one glyph.
+          A transfer has no category to be divided between, but it can still
+          be money somebody owes back. */}
+      <div className="tx-row-actions">
+        <MoreMenu
+          label={`More for ${tx.merchant || 'this entry'}`}
+          items={[
+            ...(onSplit && !isTransfer
+              ? [{
+                  icon: 'split',
+                  label: 'Split transaction',
+                  hint: 'file it under more than one category',
+                  onClick: onSplit,
+                }]
+              : []),
+            ...(onDebt
+              ? [{
+                  icon: 'user-round',
+                  label: 'Owed by someone',
+                  hint: 'the whole of it becomes a debt',
+                  onClick: onDebt,
+                }]
+              : []),
+          ]}
+        />
+      </div>
 
       {split && (
         <>

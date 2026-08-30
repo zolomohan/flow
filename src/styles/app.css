@@ -1123,37 +1123,17 @@ kbd {
 }
 
 /* Sits over the chevron, which is decoration — the whole row is the target. */
-/* What can be done to a row without opening it, over the chevron, which is
-   decoration — the whole row is still the target. */
+/* What can be done to a row without opening it: one glyph where the chevron
+   is, which is decoration — the whole row is still the target. */
 .tx-row-actions {
   position: absolute;
-  top: 12px;
-  right: 16px;
-  display: flex;
-  gap: 6px;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateX(4px);
-  transition: opacity var(--fast) var(--ease), transform var(--fast) var(--ease);
+  top: 15px;
+  right: 14px;
 }
-.tx-bill:hover .tx-row-actions { opacity: 1; pointer-events: auto; transform: translateX(0); }
+.tx-row-actions .more-menu { opacity: 0; transition: opacity var(--fast) var(--ease); }
+.tx-bill:hover .tx-row-actions .more-menu,
+.tx-row-actions .more-menu.is-open { opacity: 1; }
 .tx-bill:hover .tx-chevron { opacity: 0; }
-
-.tx-split-action {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 5px 10px;
-  border-radius: var(--r-full);
-  background: var(--surface);
-  border: 1px solid var(--line-strong);
-  box-shadow: var(--shadow-sm);
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--ink-2);
-  transition: color var(--fast) var(--ease), border-color var(--fast) var(--ease);
-}
-.tx-split-action:hover { color: var(--blue); border-color: var(--blue); }
 
 .tx-bill-strip {
   display: flex;
@@ -2061,6 +2041,22 @@ kbd {
    beside it — a bill divided is the same bill. The editor takes the wider
    column, and the floor keeps the modal from collapsing between pages. */
 .tx-page { min-height: 300px; }
+/* What the sheet is about to do differently, said before it does it. */
+.page-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--blue) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--blue) 24%, transparent);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+.page-note svg { flex: none; margin-top: 2px; color: var(--blue); }
 
 /* Narrow enough that two columns would each be a squeeze — stack them. */
 /* Stacked before the columns get tight enough to clip a tab's label. */
@@ -3983,6 +3979,60 @@ kbd {
 
 /* Two ways in, side by side under the form — one column each where the form
    itself has two, stacked where it has one. */
+/* One glyph, and a short list behind it. */
+.more-menu { position: relative; }
+.more-trigger {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-md);
+  color: var(--ink-4);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  transition: color var(--fast) var(--ease), border-color var(--fast) var(--ease),
+    background var(--fast) var(--ease);
+}
+.more-trigger:hover { color: var(--ink); border-color: var(--line-strong); }
+.more-menu.is-open .more-trigger { color: var(--ink); border-color: var(--blue); }
+
+.more-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 268px;
+  padding: 5px;
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-lg);
+  transform-origin: top right;
+}
+.more-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 9px;
+  border-radius: var(--r-md);
+  text-align: left;
+  color: var(--ink-3);
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.more-item:hover { background: var(--surface-2); color: var(--ink); }
+.more-item > span { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.more-item > span { font-size: 13px; font-weight: 600; color: var(--ink); }
+.more-item em {
+  font-style: normal;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ink-4);
+}
+
 /* The two ways of dividing a bill, on a menu in the corner of the sheet's own
    footer. It opens upwards, since there is nothing below it but the desk. */
 .split-menu { position: relative; }

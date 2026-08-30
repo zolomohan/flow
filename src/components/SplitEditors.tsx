@@ -291,7 +291,8 @@ const METHODS: SegmentOption<Method>[] = [
 /**
  * Which way a share runs, which is never a choice: money you spent on other
  * people is money they owe you, and money that landed in your account on
- * their behalf is money you owe them.
+ * their behalf is money you owe them. Money moved out of your accounts with
+ * nowhere of yours to go is the first of those — it is lent, not spent.
  */
 export const directionFor = (kind: TxKind): DebtDirection =>
   kind === 'income' ? 'borrowed' : 'lent';
