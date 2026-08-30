@@ -44,7 +44,7 @@ const ROUTE_KEYS: Route[] = [
 ];
 
 function Shell() {
-  const { ready, fatal, accounts, seedDemo } = useStore();
+  const { ready, fatal, accounts } = useStore();
   const [route, setRoute] = useState<Route>('overview');
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [txOpen, setTxOpen] = useState(false);
@@ -261,14 +261,11 @@ function Shell() {
                   <Empty
                     icon="sparkles"
                     title="Welcome to Midas"
-                    body="Start with an account of your own, or load a sample book to look around first."
+                    body="Start with an account of your own, or bring a book you have already kept somewhere else."
                     action={
                       <div className="welcome-actions">
                         <Button tone="primary" icon="plus" onClick={newAccount}>
                           Create an account
-                        </Button>
-                        <Button icon="sparkles" onClick={() => seedDemo()}>
-                          Load sample data
                         </Button>
                       </div>
                     }

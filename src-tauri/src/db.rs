@@ -3317,6 +3317,90 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+/// Every table the book is made of, in an order that can be emptied and
+/// refilled with the foreign keys looking on.
+const TABLES: [&str; 12] = [
+    "settings",
+    "price_history",
+    "price_cache",
+    "debt_entries",
+    "debt_payments",
+    "debts",
+    "investment_lots",
+    "holdings",
+    "transaction_splits",
+    "transactions",
+    "categories",
+    "accounts",
+];
+
+/// Writes the whole book to a file of its own.
+///
+/// `VACUUM INTO` rather than a copy of the file: the book is kept in WAL
+/// mode, so what is on disk at any moment is missing whatever is still in the
+/// log — and a backup that is missing the last hour is worse than none.
+pub fn export_book(conn: &Connection, to: &Path) -> Result<()> {
+    // The dialog has already asked about overwriting; SQLite refuses to.
+    if to.exists() {
+        std::fs::remove_file(to).map_err(oops)?;
+    }
+    conn.execute("VACUUM INTO ?1", params![to.to_string_lossy()])
+        .map_err(oops)?;
+    Ok(())
+}
+
+/// Reads a book back over this one, keeping a copy of what was here.
+///
+/// The rows are copied in rather than the file swapped underneath: the app
+/// holds this connection open, and a file replaced beneath an open SQLite
+/// connection is a corrupted one. The incoming book is brought up to the
+/// current shape first, so a copy taken before a column existed still reads.
+pub fn import_book(conn: &Connection, from: &Path, backup: &Path) -> Result<()> {
+    if !from.exists() {
+        return Err("That file is not there any more.".into());
+    }
+    {
+        let incoming = Connection::open(from).map_err(oops)?;
+        let mut stmt = incoming
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .map_err(|_| "That file isn't a database.".to_string())?;
+        let names: Vec<String> = stmt
+            .query_map([], |r| r.get(0))
+            .map_err(oops)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(oops)?;
+        for wanted in ["accounts", "transactions", "categories"] {
+            if !names.iter().any(|n| n == wanted) {
+                return Err("That file is a database, but not a Midas book.".into());
+            }
+        }
+    }
+    // Brought up to date on its own connection, so the columns line up.
+    drop(open(from)?);
+
+    export_book(conn, backup)?;
+    conn.execute_batch("PRAGMA foreign_keys = OFF").map_err(oops)?;
+    let result = (|| -> Result<()> {
+        conn.execute("ATTACH DATABASE ?1 AS incoming", params![from.to_string_lossy()])
+            .map_err(oops)?;
+        let guard = conn.unchecked_transaction().map_err(oops)?;
+        for table in TABLES {
+            conn.execute(&format!("DELETE FROM main.{table}"), [])
+                .map_err(oops)?;
+            conn.execute(
+                &format!("INSERT INTO main.{table} SELECT * FROM incoming.{table}"),
+                [],
+            )
+            .map_err(oops)?;
+        }
+        guard.commit().map_err(oops)?;
+        Ok(())
+    })();
+    let _ = conn.execute("DETACH DATABASE incoming", []);
+    conn.execute_batch("PRAGMA foreign_keys = ON").map_err(oops)?;
+    result
+}
+
 pub fn reset(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         // Lots go before transactions so SQLite has no SET NULL sweep to run
@@ -5210,6 +5294,42 @@ mod tests {
             )
             .unwrap();
         assert_eq!(others, 1);
+    }
+
+    /// A copy of the book is the whole book, and reading one back is the
+    /// whole book again — with what was here kept beside it, because the
+    /// commonest thing to do with an import is to have picked the wrong file.
+    #[test]
+    fn a_book_can_be_written_out_and_read_back() {
+        let dir = std::env::temp_dir().join(format!("midas-test-{}", new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let copy = dir.join("copy.sqlite3");
+        let backup = dir.join("kept.sqlite3");
+
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 5_000_000);
+        let food = category(&conn, "Food", None);
+        bill(&conn, &bank, 100_000, Some(food.clone()));
+        export_book(&conn, &copy).unwrap();
+
+        // Everything after the copy is what reading it back has to undo.
+        bill(&conn, &bank, 250_000, Some(food));
+        assert_eq!(list_transactions(&conn, TransactionQuery::default()).unwrap().len(), 2);
+
+        import_book(&conn, &copy, &backup).unwrap();
+        let after = list_transactions(&conn, TransactionQuery::default()).unwrap();
+        assert_eq!(after.len(), 1, "the book is the one that was written out");
+        assert_eq!(after[0].amount, 100_000);
+        assert_eq!(list_accounts(&conn).unwrap().len(), 1, "and its accounts with it");
+        assert!(backup.exists(), "what was here is beside it");
+
+        // A file that is not a book of ours is refused rather than emptying it.
+        let junk = dir.join("junk.sqlite3");
+        std::fs::write(&junk, b"this is not a database").unwrap();
+        assert!(import_book(&conn, &junk, &dir.join("x.sqlite3")).is_err());
+        assert_eq!(list_transactions(&conn, TransactionQuery::default()).unwrap().len(), 1);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

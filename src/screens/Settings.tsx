@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from '../components/Icon';
 import { Button, Card, CardHead, Segmented, type SegmentOption } from '../components/ui';
+import { open, save } from '@tauri-apps/plugin-dialog';
+import { api } from '../lib/api';
 import { REQUIRE_NOTE, useStore } from '../lib/store';
 import { spring } from '../lib/motion';
 
@@ -107,8 +109,9 @@ function PreferencesPanel() {
 /* ------------------------------------------------------------------- Data */
 
 function DataPanel() {
-  const { seedDemo, resetAll } = useStore();
+  const { resetAll, toast } = useStore();
   const [confirmReset, setConfirmReset] = useState(false);
+  const [busy, setBusy] = useState<'export' | 'import' | null>(null);
 
   useEffect(() => {
     if (!confirmReset) return;
@@ -116,16 +119,74 @@ function DataPanel() {
     return () => window.clearTimeout(timer);
   }, [confirmReset]);
 
+  const today = new Date().toISOString().slice(0, 10);
+
+  const exportBook = async () => {
+    const to = await save({
+      title: 'Where should the copy go?',
+      defaultPath: `midas-${today}.sqlite3`,
+      filters: [{ name: 'Midas book', extensions: ['sqlite3'] }],
+    });
+    if (!to) return;
+    setBusy('export');
+    try {
+      await api.exportBook(to);
+      toast(`Copied to ${to.split('/').pop()}`);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const importBook = async () => {
+    const from = await open({
+      title: 'Which book should be read in?',
+      multiple: false,
+      directory: false,
+      filters: [{ name: 'Midas book', extensions: ['sqlite3', 'db', 'sqlite'] }],
+    });
+    if (typeof from !== 'string') return;
+    setBusy('import');
+    try {
+      const kept = await api.importBook(from);
+      toast(`Book replaced · the old one is beside it as ${kept.split('/').pop()}`);
+      // Everything on screen is from the book that has just been replaced.
+      window.location.reload();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <Card>
       <CardHead title="Your data" hint="Everything lives in a local SQLite file on this Mac" />
       <div className="data-actions">
         <div className="data-row">
           <div>
-            <strong>Load the sample book</strong>
-            <p>Replaces everything with eight months of realistic history.</p>
+            <strong>Save a copy</strong>
+            <p>
+              The whole book in one file — accounts, ledger, debts, holdings and
+              prices. Written whole rather than copied, so nothing is left in the log.
+            </p>
           </div>
-          <Button icon="sparkles" onClick={() => seedDemo()}>Load sample</Button>
+          <Button icon="download" onClick={exportBook} disabled={busy !== null}>
+            {busy === 'export' ? 'Saving…' : 'Save a copy'}
+          </Button>
+        </div>
+        <div className="data-row">
+          <div>
+            <strong>Read a book in</strong>
+            <p>
+              Replaces everything here with a copy saved earlier. What is here now is
+              kept beside the file you choose, in case it was the wrong one.
+            </p>
+          </div>
+          <Button icon="corner-up-left" onClick={importBook} disabled={busy !== null}>
+            {busy === 'import' ? 'Reading…' : 'Read one in'}
+          </Button>
         </div>
         <div className="data-row">
           <div>
@@ -135,6 +196,7 @@ function DataPanel() {
           <Button
             tone="danger"
             icon="trash-2"
+            disabled={busy !== null}
             onClick={() => {
               if (!confirmReset) return setConfirmReset(true);
               resetAll();
@@ -148,5 +210,3 @@ function DataPanel() {
     </Card>
   );
 }
-
-/* ---------------------------------------------------------- Category sheet */

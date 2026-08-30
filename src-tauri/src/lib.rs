@@ -248,12 +248,24 @@ fn set_setting(db: State<Db>, key: String, value: String) -> R<()> {
     with_db(&db, |c| db::set_setting(c, &key, &value))
 }
 
+/// Writes the whole book to a file of the user's choosing.
 #[tauri::command]
-fn seed_demo(db: State<Db>) -> R<()> {
-    with_db(&db, |c| {
-        db::reset(c)?;
-        demo::seed(c)
-    })
+fn export_book(db: State<Db>, to: String) -> R<String> {
+    let path = std::path::PathBuf::from(&to);
+    with_db(&db, |c| db::export_book(c, &path))?;
+    Ok(to)
+}
+
+/// Reads one back over this book, keeping a copy of what was here beside it.
+#[tauri::command]
+fn import_book(db: State<Db>, from: String) -> R<String> {
+    let source = std::path::PathBuf::from(&from);
+    let backup = source.with_file_name(format!(
+        "midas-replaced-{}.sqlite3",
+        chrono::Local::now().format("%Y%m%d-%H%M%S")
+    ));
+    with_db(&db, |c| db::import_book(c, &source, &backup))?;
+    Ok(backup.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
@@ -265,6 +277,8 @@ fn reset_all(db: State<Db>) -> R<()> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // Picking where a copy of the book goes, and which one to read back.
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
@@ -319,7 +333,8 @@ pub fn run() {
             get_setting,
             list_settings,
             set_setting,
-            seed_demo,
+            export_book,
+            import_book,
             reset_all,
         ])
         .run(tauri::generate_context!())

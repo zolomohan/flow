@@ -94,7 +94,6 @@ interface Store {
   deleteTransactions: (ids: string[]) => Promise<number>;
   listTransactions: (query?: TransactionQuery) => Promise<Transaction[]>;
   transactionSummary: (query?: TransactionQuery) => Promise<TransactionSummary>;
-  seedDemo: () => Promise<void>;
   resetAll: () => Promise<void>;
   /** Bumped after every write so screens can re-run their own queries. */
   revision: number;
@@ -321,7 +320,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       deleteTransactions: (ids) => mutate(() => api.deleteTransactions(ids)),
       listTransactions: (query) => api.listTransactions(query),
       transactionSummary: (query) => api.transactionSummary(query),
-      seedDemo: () => mutate(() => api.seedDemo(), 'Sample book loaded'),
       resetAll: () => mutate(() => api.resetAll(), 'Everything cleared'),
     }),
     [

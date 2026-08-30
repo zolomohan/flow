@@ -95,6 +95,9 @@ export const api = {
   listSettings: () => call<Record<string, string>>('list_settings'),
   setSetting: (key: string, value: string) => call<void>('set_setting', { key, value }),
 
-  seedDemo: () => call<void>('seed_demo'),
+  /** Writes the whole book to a file. Resolves with where it went. */
+  exportBook: (to: string) => call<string>('export_book', { to }),
+  /** Reads one back over this book. Resolves with where the old one was kept. */
+  importBook: (from: string) => call<string>('import_book', { from }),
   resetAll: () => call<void>('reset_all'),
 };
