@@ -2861,6 +2861,19 @@ kbd {
   min-width: 0;
   text-align: left;
 }
+/* The row leads to the ledger, so it says so the way every other row that
+   leads somewhere does. */
+.cat-row-go {
+  display: grid;
+  place-items: center;
+  margin-left: auto;
+  padding-right: 4px;
+  color: var(--ink-4);
+  opacity: 0;
+  transform: translateX(-4px);
+  transition: opacity var(--fast) var(--ease), transform var(--fast) var(--ease);
+}
+.cat-row:hover .cat-row-go { opacity: 1; transform: translateX(0); }
 .cat-row-glyph {
   display: grid;
   place-items: center;

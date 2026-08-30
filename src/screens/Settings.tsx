@@ -46,7 +46,10 @@ interface SheetRequest {
   mode: Mode;
 }
 
-export function Settings() {
+export function Settings({ onOpenCategory }: {
+  /** Takes the ledger to everything filed under a category, over all time. */
+  onOpenCategory: (categoryId: string) => void;
+}) {
   const [tab, setTab] = useState<Tab>('categories');
   // The request outlives its own dismissal so the sheet keeps its content
   // through the closing animation.
@@ -80,7 +83,9 @@ export function Settings() {
           exit={{ opacity: 0, y: -6 }}
           transition={{ duration: 0.16 }}
         >
-          {tab === 'categories' && <CategoriesPanel onOpen={open} />}
+          {tab === 'categories' && (
+            <CategoriesPanel onOpen={open} onOpenCategory={onOpenCategory} />
+          )}
           {tab === 'appearance' && <AppearancePanel />}
           {tab === 'data' && <DataPanel />}
         </motion.div>
@@ -101,7 +106,10 @@ export function Settings() {
 
 /* ------------------------------------------------------------- Categories */
 
-function CategoriesPanel({ onOpen }: { onOpen: (request: SheetRequest) => void }) {
+function CategoriesPanel({ onOpen, onOpenCategory }: {
+  onOpen: (request: SheetRequest) => void;
+  onOpenCategory: (categoryId: string) => void;
+}) {
   const { categories, categoryUsage } = useStore();
   const [kind, setKind] = useState<CategoryKind>('expense');
 
@@ -155,6 +163,7 @@ function CategoriesPanel({ onOpen }: { onOpen: (request: SheetRequest) => void }
                   subCount={children.length}
                   subTotal={children.reduce((sum, c) => sum + count(c.id), 0)}
                   onOpen={onOpen}
+                  onOpenCategory={onOpenCategory}
                 />
                 {children.length > 0 && (
                   <div className="cat-subrows">
@@ -165,6 +174,7 @@ function CategoriesPanel({ onOpen }: { onOpen: (request: SheetRequest) => void }
                         count={count(child.id)}
                         sub
                         onOpen={onOpen}
+                        onOpenCategory={onOpenCategory}
                       />
                     ))}
                   </div>
@@ -179,7 +189,7 @@ function CategoriesPanel({ onOpen }: { onOpen: (request: SheetRequest) => void }
 }
 
 function CategoryRow({
-  category, count, subCount = 0, subTotal = 0, sub = false, onOpen,
+  category, count, subCount = 0, subTotal = 0, sub = false, onOpen, onOpenCategory,
 }: {
   category: Category;
   count: number;
@@ -188,6 +198,7 @@ function CategoryRow({
   subTotal?: number;
   sub?: boolean;
   onOpen: (request: SheetRequest) => void;
+  onOpenCategory: (categoryId: string) => void;
 }) {
   const go = (mode: Mode) => () => onOpen({ category, kind: category.kind, mode });
   const meta = subCount
@@ -196,13 +207,22 @@ function CategoryRow({
 
   return (
     <div className={`cat-row ${sub ? 'is-sub' : ''}`} style={{ ['--cat' as any]: category.color }}>
-      <button className="cat-row-main" onClick={go('form')}>
+      {/* The row itself goes to what is filed under it — the pencil beside it
+          is the way to change the category, and always was. */}
+      <button
+        className="cat-row-main"
+        title={`Show everything filed under ${category.name}`}
+        onClick={() => onOpenCategory(category.id)}
+      >
         <span className="cat-row-glyph">
           <Icon name={category.icon} size={sub ? 14 : 17} strokeWidth={2.1} />
         </span>
         <span className="cat-row-text">
           <strong>{category.name}</strong>
           <span>{meta}</span>
+        </span>
+        <span className="cat-row-go">
+          <Icon name="chevron-right" size={15} />
         </span>
       </button>
       <div className="cat-row-actions">

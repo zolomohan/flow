@@ -280,7 +280,7 @@ function Shell() {
             ) : route === 'insights' ? (
               <Insights onOpenCategory={openCategoryTransactions} />
             ) : (
-              <Settings />
+              <Settings onOpenCategory={openCategoryTransactions} />
             )}
           </motion.div>
         </AnimatePresence>
