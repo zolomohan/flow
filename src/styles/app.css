@@ -2618,6 +2618,15 @@ kbd {
   color: var(--ink-3);
 }
 .archived-toggle:hover { color: var(--ink); }
+/* Sitting under a section's own heading rather than standing in for one. */
+.account-group .group-title + .archived-toggle {
+  margin-top: -6px;
+  font-size: 12.5px;
+  letter-spacing: normal;
+  text-transform: none;
+  font-weight: 500;
+  color: var(--ink-4);
+}
 .archived-toggle span { display: grid; place-items: center; }
 
 /* =================================================================

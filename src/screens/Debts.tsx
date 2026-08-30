@@ -18,7 +18,21 @@ export function Debts({
   const [showSettled, setShowSettled] = useState(false);
 
   const open = useMemo(() => debts.filter((d) => !d.settled), [debts]);
-  const settled = useMemo(() => debts.filter((d) => d.settled), [debts]);
+  // Newest first: what was squared up last week is worth more than what was
+  // squared up in 2021.
+  const settled = useMemo(
+    () =>
+      debts
+        .filter((d) => d.settled)
+        .sort((a, b) => (b.settledAt ?? b.openedOn).localeCompare(a.settledAt ?? a.openedOn)),
+    [debts],
+  );
+  const settledLent = settled
+    .filter((d) => d.direction === 'lent')
+    .reduce((sum, d) => sum + d.principal, 0);
+  const settledBorrowed = settled
+    .filter((d) => d.direction === 'borrowed')
+    .reduce((sum, d) => sum + d.principal, 0);
 
   const lent = open.filter((d) => d.direction === 'lent');
   const borrowed = open.filter((d) => d.direction === 'borrowed');
@@ -104,13 +118,25 @@ export function Debts({
         </>
       )}
 
+      {/* What is done with: repaid, or written off. It is history rather than
+          a position, so it says what it came to and then gets out of the way —
+          but it is a section of the screen, not a footnote to one. */}
       {settled.length > 0 && (
         <section className="account-group">
+          <h2 className="group-title">
+            Past debts
+            <span>{money(settledLent + settledBorrowed)}</span>
+            <em>
+              {settled.length} settled
+              {settledLent > 0 && ` · ${money(settledLent)} you had lent`}
+              {settledBorrowed > 0 && ` · ${money(settledBorrowed)} you had borrowed`}
+            </em>
+          </h2>
           <button className="archived-toggle" onClick={() => setShowSettled((s) => !s)}>
             <motion.span animate={{ rotate: showSettled ? 90 : 0 }} transition={spring}>
               <Icon name="chevron-right" size={15} />
             </motion.span>
-            Settled · {settled.length}
+            {showSettled ? 'Hide them' : `Show all ${settled.length}`}
           </button>
           <AnimatePresence initial={false}>
             {showSettled && (
@@ -120,6 +146,7 @@ export function Debts({
                 animate={{ opacity: 1, height: 'auto' }}
                 exit={{ opacity: 0, height: 0 }}
                 transition={spring}
+                style={{ overflow: 'hidden' }}
               >
                 {settled.map((debt) => (
                   <DebtCard
