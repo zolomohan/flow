@@ -3890,7 +3890,9 @@ kbd {
 .debt-entries.is-listed { margin-top: 0; padding: 0 18px 8px; }
 .debt-entries.is-listed .debt-entry-date { width: 96px; }
 .debt-payments.is-listed { padding: 0 18px 10px; }
-.debt-entries.is-listed li + li
+.debt-entries.is-listed li + li { border-top: 1px solid var(--line-soft); }
+.debt-payments.is-listed li:first-child { margin-top: 0; border-top: 0; }
+
 .debt-entries-head {
   padding: 8px 2px 6px;
   font-size: 11px;
