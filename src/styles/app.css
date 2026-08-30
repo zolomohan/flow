@@ -3884,8 +3884,13 @@ kbd {
 }
 .debt-repay:hover { border-color: var(--tint); color: var(--tint); }
 
-/* What the debt is made of, as the ledger has it. */
+/* What the debt is made of, as the ledger has it. On its own page the lists
+   run edge to edge like every other list on a detail screen. */
 .debt-entries { margin-top: 4px; }
+.debt-entries.is-listed { margin-top: 0; padding: 0 18px 8px; }
+.debt-entries.is-listed .debt-entry-date { width: 96px; }
+.debt-payments.is-listed { padding: 0 18px 10px; }
+.debt-entries.is-listed li + li
 .debt-entries-head {
   padding: 8px 2px 6px;
   font-size: 11px;

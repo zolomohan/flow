@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from '../components/Icon';
 import { Button, Card, Empty, Segmented, type SegmentOption } from '../components/ui';
 import { useStore } from '../lib/store';
+import { DebtDetail } from './DebtDetail';
 import { dayLabel, initials, money } from '../lib/format';
-import { itemVariants, listVariants, spring } from '../lib/motion';
+import { itemVariants, listVariants } from '../lib/motion';
 import type { Debt, DebtDirection, Transaction } from '../lib/types';
 
 /** Who owes whom, and what is done with. */
@@ -20,6 +21,9 @@ export function Debts({
   onOpenTransaction: (tx: Transaction) => void;
 }) {
   const { debts } = useStore();
+  // Held by id, not by object: the store hands back fresh debts after every
+  // write, and the open page should follow them.
+  const [openId, setOpenId] = useState<string | null>(null);
 
   const open = useMemo(() => debts.filter((d) => !d.settled), [debts]);
   // Newest first: what was squared up last week is worth more than what was
@@ -60,6 +64,19 @@ export function Debts({
     },
   ];
   const showing = tab === 'lent' ? lent : tab === 'borrowed' ? borrowed : settled;
+
+  const viewing = openId ? debts.find((d) => d.id === openId) ?? null : null;
+  if (viewing) {
+    return (
+      <DebtDetail
+        debt={viewing}
+        onBack={() => setOpenId(null)}
+        onEdit={() => onEditDebt(viewing)}
+        onRecordPayment={() => onRecordPayment(viewing)}
+        onOpenTransaction={onOpenTransaction}
+      />
+    );
+  }
 
   return (
     <div className="screen">
@@ -175,9 +192,8 @@ export function Debts({
                     <DebtCard
                       key={debt.id}
                       debt={debt}
-                      onEdit={() => onEditDebt(debt)}
+                      onOpen={() => setOpenId(debt.id)}
                       onRecordPayment={() => onRecordPayment(debt)}
-                      onOpenTransaction={onOpenTransaction}
                     />
                   ))}
                 </motion.div>
@@ -191,31 +207,8 @@ export function Debts({
 }
 
 function DebtCard({
-  debt, onEdit, onRecordPayment, onOpenTransaction,
-}: {
-  debt: Debt;
-  onEdit: () => void;
-  onRecordPayment: () => void;
-  onOpenTransaction: (tx: Transaction) => void;
-}) {
-  const { listTransactions } = useStore();
-  const [open, setOpen] = useState(false);
-  // The postings behind a debt. Only some debts hold a link to one — the rest
-  // are joined to the ledger by the only thing they share, which is the name
-  // on them, so that is what this asks the ledger for.
-  const [entries, setEntries] = useState<Transaction[] | null>(null);
-  const [showing, setShowing] = useState(false);
-
-  useEffect(() => {
-    if (!showing || entries) return;
-    let live = true;
-    listTransactions({ search: debt.counterparty, limit: 60 })
-      .then((rows) => live && setEntries(rows))
-      .catch(() => live && setEntries([]));
-    return () => {
-      live = false;
-    };
-  }, [showing, entries, debt.counterparty, listTransactions]);
+  debt, onOpen, onRecordPayment,
+}: { debt: Debt; onOpen: () => void; onRecordPayment: () => void }) {
   const progress = debt.principal ? debt.paid / debt.principal : 0;
   const lent = debt.direction === 'lent';
   const overdue =
@@ -227,7 +220,9 @@ function DebtCard({
       variants={itemVariants}
       style={{ ['--tint' as any]: lent ? 'var(--green)' : 'var(--amber)' }}
     >
-      <button className="debt-head" onClick={onEdit}>
+      {/* The card says where it stands; the page behind it says how it got
+          there — the repayments, and everything in the ledger naming them. */}
+      <button className="debt-head" onClick={onOpen}>
         <span className="debt-avatar">{initials(debt.counterparty)}</span>
         <span className="debt-who">
           <strong>{debt.counterparty}</strong>
@@ -257,6 +252,11 @@ function DebtCard({
           {debt.dueOn && !debt.settled && !overdue && (
             <span className="debt-tag">Due {dayLabel(debt.dueOn)}</span>
           )}
+          {debt.payments.length > 0 && (
+            <span className="debt-tag">
+              {debt.payments.length} {debt.payments.length === 1 ? 'repayment' : 'repayments'}
+            </span>
+          )}
           {debt.transactionId && (
             <span className="debt-tag is-link">
               <Icon name={debt.fromSplit ? 'split' : 'arrow-left-right'} size={11} />
@@ -265,20 +265,6 @@ function DebtCard({
                 : (debt.transactionLabel ?? 'Linked')}
             </span>
           )}
-          {debt.payments.length > 0 && (
-            <button className="debt-tag is-toggle" onClick={() => setOpen((o) => !o)}>
-              <motion.span animate={{ rotate: open ? 90 : 0 }} transition={spring}>
-                <Icon name="chevron-right" size={11} />
-              </motion.span>
-              {debt.payments.length} {debt.payments.length === 1 ? 'repayment' : 'repayments'}
-            </button>
-          )}
-          <button className="debt-tag is-toggle" onClick={() => setShowing((v) => !v)}>
-            <motion.span animate={{ rotate: showing ? 90 : 0 }} transition={spring}>
-              <Icon name="chevron-right" size={11} />
-            </motion.span>
-            Entries
-          </button>
         </span>
         {!debt.settled && (
           <button className="debt-repay" onClick={onRecordPayment}>
@@ -287,66 +273,6 @@ function DebtCard({
           </button>
         )}
       </div>
-
-      <AnimatePresence initial={false}>
-        {showing && (
-          <motion.div
-            className="debt-entries"
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={spring}
-            style={{ overflow: 'hidden' }}
-          >
-            <p className="debt-entries-head">
-              Everything in the ledger naming {debt.counterparty}
-              {entries && ` · ${entries.length}`}
-            </p>
-            {entries === null ? (
-              <p className="debt-entries-empty">Looking…</p>
-            ) : entries.length === 0 ? (
-              <p className="debt-entries-empty">Nothing in the ledger says that name.</p>
-            ) : (
-              <ul>
-                {entries.map((tx) => (
-                  <li key={tx.id}>
-                    <button onClick={() => onOpenTransaction(tx)}>
-                      <span className="debt-entry-date">{dayLabel(tx.occurredAt)}</span>
-                      <span className="debt-entry-what">
-                        {tx.merchant || tx.categoryName || 'Entry'}
-                        {tx.note && <em>{tx.note}</em>}
-                      </span>
-                      <span className={`debt-entry-amount is-${tx.kind}`}>
-                        {tx.kind === 'income' ? '+' : tx.kind === 'expense' ? '−' : ''}
-                        {money(tx.amount)}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </motion.div>
-        )}
-        {open && debt.payments.length > 0 && (
-          <motion.ul
-            className="debt-payments"
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={spring}
-          >
-            {debt.payments.map((payment) => (
-              <li key={payment.id}>
-                <span className="debt-payment-date">{dayLabel(payment.occurredAt)}</span>
-                <span className="debt-payment-note">
-                  {payment.note ?? payment.transactionLabel ?? 'Repayment'}
-                </span>
-                <strong>{money(payment.amount)}</strong>
-              </li>
-            ))}
-          </motion.ul>
-        )}
-      </AnimatePresence>
     </motion.article>
   );
 }
