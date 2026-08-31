@@ -2079,23 +2079,34 @@ kbd {
 
 /* The Transactions screen inside a modal. Sized to the ledger rows rather
    than the page it normally lives on — the toolbar wraps to suit. */
+/* The whole ledger lives in here — its search, its filters, its month nav,
+   its day headers and a bar over the selection. All of that is laid out for
+   the width the Transactions page gets, so the picker gives it exactly that
+   and no less: squeezed into a form-sized sheet the filters wrap, the search
+   box shrinks to a slot and the columns stop lining up. Generous, then, is
+   not indulgence — it is the width the thing was drawn at. */
 .record-picker {
-  max-width: 720px;
-  max-height: min(88vh, 840px);
+  position: relative;
+  max-width: min(1240px, calc(100vw - 48px));
+  max-height: min(92vh, 960px);
 }
+
+/* The ledger brings its selection bar with it. Inside a sheet that bar cannot
+   be fixed to the window: the sheet is animated, and a transformed ancestor
+   anchors a fixed child to itself rather than to the viewport. */
+.record-picker .bulk-bar { position: absolute; bottom: 18px; z-index: 60; }
 .record-picker .sheet-head { align-items: center; padding-bottom: 12px; }
 .record-picker-body { flex: 1; min-height: 0; overflow-y: auto; }
 
-/* The screen's page chrome — its top padding, its page width — belongs to the
-   page. Inside the modal it borrows the sheet's own 22px gutter so the entry
-   count lines up under the title. */
+/* The screen's page chrome — its top padding, its own max width — belongs to
+   the page. Inside the modal it borrows the sheet's gutter so the entry count
+   lines up under the title, and lets the width come from the sheet. */
 .record-picker-body .screen.is-picking {
-  padding: 0 22px 20px;
+  padding: 0 26px 22px;
   max-width: none;
-  gap: 12px;
+  gap: 14px;
 }
 .record-picker-body .screen-head { align-items: center; gap: 12px; }
-.record-picker-body .search-box { min-width: 180px; }
 
 .picking-count {
   margin: 0;
@@ -5792,12 +5803,6 @@ kbd {
 }
 
 /* ------------------------------------------------- linking payments to a plan */
-
-/* The link picker is the ledger, so it brings the bulk bar with it. Inside a
-   sheet that bar cannot be fixed to the window: the sheet is animated, and a
-   transformed ancestor anchors a fixed child to itself. */
-.record-picker { position: relative; }
-.record-picker .bulk-bar { position: absolute; bottom: 18px; z-index: 60; }
 
 /* Taking a payment back off a plan, from the row it sits on. Quiet until the
    pointer is there: it is a correction, not a thing to reach for. */
