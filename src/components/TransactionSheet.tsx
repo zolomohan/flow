@@ -8,7 +8,7 @@ import {
 } from './ui';
 import {
   SplitLinesEditor, SplitPeopleEditor, SplitMenu,
-  directionFor, emptyPeople, lineFromScratch, linesFor, linesToInput,
+  directionFor, emptyPeople, lineFromScratch, linesFor, linesOf, linesToInput,
   peopleFor, peopleToInput, restOf, shareAmounts,
   type SplitLine, type SplitPeople,
 } from './SplitEditors';
@@ -17,8 +17,13 @@ import {
   amountChars, money, paiseToRupeeString, rupeesToPaise, settleAmount, sumPreview,
   toLocalInput,
 } from '../lib/format';
-import { itemVariants, listVariants, pageVariants, spring } from '../lib/motion';
-import type { Category, Transaction, TransactionInput, TxKind } from '../lib/types';
+import { itemVariants, listVariants, pageVariants, popover, press, spring } from '../lib/motion';
+import { AskPicker } from './AskPicker';
+import { describeTemplate, fieldLabel } from '../lib/templates';
+import type {
+  Account, Category, TemplateField, Transaction, TransactionInput, TxKind, TxTemplate,
+  TxTemplateInput,
+} from '../lib/types';
 
 /**
  * Adding a sub-category from the sheet itself. Filing a bill is exactly when
@@ -188,6 +193,267 @@ function NewLabel({ onAdded }: { onAdded: (labelId: string) => void }) {
   );
 }
 
+/**
+ * Templates, on a menu of their own beside the sheet's other footer controls:
+ * the ones you have saved, and the way to save this one.
+ *
+ * Applying is offered only while writing something new. Reaching for a
+ * template halfway through correcting March's rent would overwrite what is
+ * being corrected, and there is no way back from that.
+ */
+function TemplateMenu({
+  templates, canApply, kind, suggested, defaultAsk, onApply, onSave,
+}: {
+  templates: TxTemplate[];
+  /** Whether picking one is on offer at all — a new transaction, in short. */
+  canApply: boolean;
+  /** Which fields there are to ask about, which depends on the kind. */
+  kind: TxKind;
+  /** What to call this one, if nothing better is typed. */
+  suggested: string;
+  /** What it would ask for, before anyone says otherwise: whatever is blank
+   *  on the form now, since a blank is not something to pre-bake. */
+  defaultAsk: TemplateField[];
+  onApply: (template: TxTemplate) => void;
+  /** Resolves true once it is written, so the menu knows to shut. */
+  onSave: (
+    name: string,
+    ask: TemplateField[],
+    replacing: TxTemplate | null,
+  ) => Promise<boolean>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [naming, setNaming] = useState(false);
+  const [name, setName] = useState('');
+  const [ask, setAsk] = useState<TemplateField[]>([]);
+  // Whether the chips have been touched, so that landing on an existing name
+  // can adopt what that template already asks for without overruling anyone.
+  const [tuned, setTuned] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const field = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!open) {
+      setNaming(false);
+      setName('');
+      setTuned(false);
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (naming) field.current?.focus();
+  }, [naming]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!root.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      // The sheet closes on Escape too, and the menu is the nearer thing.
+      e.stopPropagation();
+      setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey, true);
+    };
+  }, [open]);
+
+  // Saving under a name already taken replaces that template rather than
+  // refusing: it is how a template is corrected, since there is nowhere else
+  // to edit one from.
+  const typed = (name.trim() || suggested).trim();
+  const clash = templates.find((t) => t.name.toLowerCase() === typed.toLowerCase()) ?? null;
+
+  // Replacing a template is correcting it, so what it already asks for is
+  // where the chips start — until somebody moves them.
+  useEffect(() => {
+    if (naming && !tuned) setAsk(clash ? clash.ask : defaultAsk);
+  }, [naming, tuned, clash, defaultAsk]);
+
+  const save = async () => {
+    if (!typed || saving) return;
+    setSaving(true);
+    try {
+      if (await onSave(typed, ask, clash)) setOpen(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="split-menu" ref={root}>
+      <motion.button
+        type="button"
+        className={`split-menu-trigger ${open ? 'is-open' : ''}`}
+        onClick={() => setOpen((was) => !was)}
+        whileTap={press}
+        transition={spring}
+      >
+        <Icon name="shapes" size={14} strokeWidth={2.1} />
+        Templates
+        <motion.span animate={{ rotate: open ? 180 : 0 }} transition={spring}>
+          <Icon name="chevron-down" size={14} />
+        </motion.span>
+      </motion.button>
+
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            className="split-menu-pop tpl-pop"
+            variants={popover}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+          >
+            {canApply &&
+              templates.map((template) => (
+                <button
+                  key={template.id}
+                  type="button"
+                  className="split-link"
+                  onClick={() => {
+                    setOpen(false);
+                    onApply(template);
+                  }}
+                >
+                  <span
+                    className="split-section-glyph"
+                    style={{ ['--cat' as any]: template.categoryColor ?? undefined }}
+                  >
+                    <Icon
+                      name={template.categoryIcon ?? glyphFor(template.kind)}
+                      size={15}
+                      strokeWidth={2.1}
+                    />
+                  </span>
+                  <span className="split-section-title">
+                    {template.name}
+                    <em>{describeTemplate(template)}</em>
+                  </span>
+                  <Icon name="chevron-right" size={16} />
+                </button>
+              ))}
+            {canApply && templates.length === 0 && (
+              <p className="tpl-none">
+                Nothing saved yet. Fill this one in and keep it — the next one like
+                it is then a single click.
+              </p>
+            )}
+            {canApply && <span className="tpl-sep" />}
+
+            {naming ? (
+              <div className="tpl-naming">
+                <input
+                  ref={field}
+                  className="input"
+                  value={name}
+                  placeholder={suggested || 'Name it'}
+                  disabled={saving}
+                  onChange={(e) => setName(e.target.value)}
+                  onKeyDown={(e) => {
+                    // Enter is the sheet's own save; here it names the template.
+                    e.stopPropagation();
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      void save();
+                    }
+                    if (e.key === 'Escape') {
+                      e.preventDefault();
+                      setNaming(false);
+                    }
+                  }}
+                />
+                <IconButton
+                  icon="check"
+                  label={clash ? `Replace ${clash.name}` : 'Save it'}
+                  size={30}
+                  disabled={!typed || saving}
+                  onClick={() => void save()}
+                />
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="split-link"
+                onClick={() => {
+                  setName('');
+                  setNaming(true);
+                }}
+              >
+                <span className="split-section-glyph">
+                  <Icon name="plus" size={15} strokeWidth={2.4} />
+                </span>
+                <span className="split-section-title">
+                  Save as template
+                  <em>Everything but the date, kept under a name</em>
+                </span>
+              </button>
+            )}
+            {naming && (
+              <div className="tpl-asks">
+                <AskPicker
+                  kind={kind}
+                  value={ask}
+                  onChange={(next) => {
+                    setTuned(true);
+                    setAsk(next);
+                  }}
+                />
+              </div>
+            )}
+            {naming && (clash || !typed) && (
+              <p className="tpl-none">
+                {clash
+                  ? `Replaces the template already called “${clash.name}”.`
+                  : 'Give it a name you will recognise in a hurry.'}
+              </p>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+const glyphFor = (kind: TxKind) =>
+  kind === 'transfer' ? 'arrow-left-right' : kind === 'income' ? 'arrow-down-left' : 'circle-dashed';
+
+/**
+ * The form as a template says it should be. A template speaks for the shape
+ * of a posting and nothing else — the date above all is left alone, since the
+ * date is the one thing that is never the same twice.
+ */
+function shapeOf(template: TxTemplate, live: Account[], fallbackAccount: string | null) {
+  const held = (id: string | null) => (live.some((a) => a.id === id) ? id : null);
+  // What it asks for it does not answer: those fields arrive blank however
+  // they were left when the template was made, and the sheet will not save
+  // until they have been filled in.
+  const asks = (field: TemplateField) => template.ask.includes(field);
+  return {
+    kind: template.kind,
+    amount: asks('amount') || !template.amount ? '' : paiseToRupeeString(template.amount),
+    // An account archived or deleted since falls through to wherever the
+    // sheet would have opened, rather than to nothing. So does one it asks
+    // for: a blank account well would be a form with nowhere to post.
+    accountId: asks('account') ? null : (held(template.accountId) ?? fallbackAccount),
+    toAccountId:
+      template.kind !== 'transfer' || asks('toAccount') ? null : held(template.toAccountId),
+    categoryId: template.kind === 'transfer' || asks('category') ? null : template.categoryId,
+    merchant: asks('merchant') ? '' : template.merchant,
+    note: asks('note') ? '' : (template.note ?? ''),
+    // Parts stand against a figure the template had to know, so a template
+    // that asks the amount never carries any.
+    lines: asks('amount') ? [] : linesOf(template.splits),
+    labelIds: template.labels.map((l) => l.id),
+  };
+}
+
 /** The palette the Labels screen offers, so one made in passing matches. */
 const LABEL_SWATCHES = [
   '#F2724F', '#42C251', '#118AE4', '#A855F7', '#F0B429', '#5A87E6',
@@ -205,6 +471,8 @@ export interface TxDraft {
   kind?: TxKind;
   accountId?: string;
   categoryId?: string;
+  /** Opened from a saved template — the sheet fills itself in from it. */
+  template?: TxTemplate;
 }
 
 /**
@@ -233,7 +501,7 @@ export function TransactionSheet({
 }) {
   const {
     accounts, categories, labels, saveTransaction, deleteTransaction, toast, settings,
-    saveSetting,
+    saveSetting, templates, saveTemplate, markTemplateUsed,
   } = useStore();
   const live = useMemo(() => accounts.filter((a) => !a.archived), [accounts]);
   // A book can ask for a note on everything new. What is already in it stays
@@ -257,6 +525,10 @@ export function TransactionSheet({
   const [lines, setLines] = useState<SplitLine[]>([]);
   const [people, setPeople] = useState<SplitPeople>(emptyPeople);
   const [labelIds, setLabelIds] = useState<string[]>([]);
+  // Which template this one was filled in from: what it asks for is still
+  // owed, its name belongs in the heading, and the count against it goes up
+  // once the posting is actually written — not before.
+  const [fromTemplate, setFromTemplate] = useState<TxTemplate | null>(null);
   // Dividing a bill is a job of its own — a screenful of rows, each with a
   // category or a person on it — so it gets a page of the sheet rather than a
   // drawer under the form. Null is the transaction itself.
@@ -289,25 +561,33 @@ export function TransactionSheet({
       setPeople(peopleFor(editing));
       setLabelIds(editing.labels.map((l) => l.id));
       setSeeded(false);
+      setFromTemplate(null);
     } else {
-      setKind(draft?.kind ?? 'expense');
-      setAmount('');
       // Where it was asked for, then wherever the last one was written, then
       // whatever comes first — an account that has since gone or been
       // archived falls through rather than opening on nothing.
       const remembered = live.some((a) => a.id === lastAccount.current)
         ? lastAccount.current
         : null;
-      setAccountId(draft?.accountId ?? remembered ?? live[0]?.id ?? null);
-      setToAccountId(null);
-      setCategoryId(draft?.categoryId ?? null);
-      setMerchant('');
-      setNote('');
+      const fallback = draft?.accountId ?? remembered ?? live[0]?.id ?? null;
+      // Opened on a template — from the Templates screen, say — the form
+      // arrives filled in, on today's date.
+      const shape = draft?.template ? shapeOf(draft.template, live, fallback) : null;
+      // A blank in the shape is a question the template means to ask, so it
+      // is set as it stands rather than fallen back over.
+      setKind(shape ? shape.kind : (draft?.kind ?? 'expense'));
+      setAmount(shape ? shape.amount : '');
+      setAccountId(shape ? shape.accountId : fallback);
+      setToAccountId(shape ? shape.toAccountId : null);
+      setCategoryId(shape ? shape.categoryId : (draft?.categoryId ?? null));
+      setMerchant(shape ? shape.merchant : '');
+      setNote(shape ? shape.note : '');
       setOccurredAt(toLocalInput());
-      setLines([]);
+      setLines(shape ? shape.lines : []);
       setPeople(emptyPeople());
-      setLabelIds([]);
+      setLabelIds(shape ? shape.labelIds : []);
       setSeeded(false);
+      setFromTemplate(draft?.template ?? null);
     }
     // The sheet opens on a split page only when it was asked for by name —
     // the Split action on a row. Otherwise it opens on the transaction, with
@@ -371,6 +651,31 @@ export function TransactionSheet({
     .map((l) => palette.find((c) => c.id === l.categoryId)?.name)
     .filter(Boolean)
     .join(', ');
+
+  // What the template this was opened from still wants from you. Only while
+  // it is unanswered: a hint that stays put once a field is filled in is
+  // noise, and the same question asked twice reads as a complaint.
+  const asks = (field: TemplateField) => !!fromTemplate?.ask.includes(field);
+  const askHint = (field: TemplateField, filled: boolean) =>
+    asks(field) && !filled ? 'fill in' : undefined;
+  const filledIn: Record<TemplateField, boolean> = {
+    amount: paise > 0,
+    account: !!accountId,
+    toAccount: !!toAccountId,
+    category: !!categoryId,
+    merchant: !!merchant.trim(),
+    note: !!note.trim(),
+  };
+  const outstanding = (fromTemplate?.ask ?? []).filter((field) => !filledIn[field]);
+  // What a template made from this form would have nothing to say about.
+  // Memoised because the menu watches it, and a fresh array every render
+  // would reset the chips under the person setting them.
+  const blankNow = useMemo(
+    () =>
+      (Object.keys(filledIn) as TemplateField[]).filter((field) => !filledIn[field]),
+    [filledIn.amount, filledIn.account, filledIn.toAccount, filledIn.category,
+     filledIn.merchant, filledIn.note],
+  );
 
   const selected = palette.find((c) => c.id === categoryId) ?? null;
   // A group with something under it is a heading: tapping it opens what is
@@ -458,10 +763,94 @@ export function TransactionSheet({
     if (had && !has) leavePage();
   };
 
+  // Filling the form in from one that was saved. It touches everything a
+  // template speaks for and nothing else: the date stays where it is, and so
+  // does anyone already down for a share of the bill.
+  const applyTemplate = (template: TxTemplate) => {
+    const shape = shapeOf(template, live, accountId);
+    setKind(shape.kind);
+    setAmount(shape.amount);
+    setAccountId(shape.accountId);
+    setToAccountId(shape.toAccountId);
+    setCategoryId(shape.categoryId);
+    setMerchant(shape.merchant);
+    setNote(shape.note);
+    setLines(shape.lines);
+    setLabelIds(shape.labelIds);
+    setSeeded(false);
+    setBrowsing(null);
+    setFromTemplate(template);
+    setError(null);
+    // Straight into the first thing it wants, when that is the amount — the
+    // well the sheet opens on anyway, and the answer to most templates.
+    if (template.ask.includes('amount')) {
+      window.setTimeout(() => amountRef.current?.focus(), 60);
+    }
+    toast(
+      template.ask.length
+        ? `From “${template.name}” — ${template.ask
+            .map((f) => fieldLabel(f, template.kind))
+            .join(', ')} to fill in`
+        : `Filled in from “${template.name}”`,
+    );
+  };
+
+  /** Keeping this one under a name: what is on the form, less the date, and
+   *  less whatever it was told to ask for instead of answering. */
+  const keepAsTemplate = async (
+    name: string,
+    ask: TemplateField[],
+    replacing: TxTemplate | null,
+  ) => {
+    if (kind !== 'transfer' && split && rest < 0) {
+      setError(`The parts run ${money(-rest)} over the ${money(paise)} bill.`);
+      return false;
+    }
+    const input: TxTemplateInput = {
+      id: replacing?.id ?? null,
+      name,
+      kind,
+      amount: paise,
+      accountId,
+      toAccountId: kind === 'transfer' ? toAccountId : null,
+      categoryId: kind === 'transfer' ? null : categoryId,
+      merchant: merchant.trim(),
+      note: note.trim() || null,
+      // Parts are shares of a figure, so they only go in when there is one to
+      // divide — and not when the figure is the thing being asked for.
+      splits:
+        kind !== 'transfer' && paise > 0 && !ask.includes('amount')
+          ? linesToInput(lines, paise)
+          : [],
+      labelIds,
+      ask,
+    };
+    try {
+      const saved = await saveTemplate(input);
+      // What it was just saved as is what this form now stands for — asked
+      // fields included, since they are already filled in here.
+      setFromTemplate(saved);
+      return true;
+    } catch {
+      /* the store has already said what went wrong */
+      return false;
+    }
+  };
+
   const submit = async () => {
     if (!paise) return setError('Enter an amount.');
     if (!accountId) return setError('Pick an account.');
     if (needsNote && !note.trim()) return setError('Add a note — this book asks for one.');
+    // A template that asks for something means it: the field is left blank on
+    // purpose, and filling it in is the point of using the template at all.
+    if (asks('category') && !categoryId)
+      return setError(`Pick a category — “${fromTemplate?.name}” asks for one.`);
+    if (asks('merchant') && !merchant.trim())
+      return setError(
+        `Add a ${kind === 'transfer' ? 'description' : 'merchant'} — “${fromTemplate?.name}” asks for one.`,
+      );
+    if (asks('note') && !note.trim())
+      return setError(`Add a note — “${fromTemplate?.name}” asks for one.`);
     if (kind === 'transfer' && toAccountId === accountId)
       return setError('A transfer needs two different accounts.');
 
@@ -523,6 +912,9 @@ export function TransactionSheet({
       if (isNew && accountId !== lastAccount.current) {
         void saveSetting(LAST_ACCOUNT, accountId);
       }
+      // A template counts as used once something has actually been written
+      // from it — opening one and thinking better of it is not a use.
+      if (isNew && fromTemplate) void markTemplateUsed(fromTemplate.id);
       toast(
         owing.length
           ? `${editing ? 'Transaction updated' : 'Transaction added'} · ${owing.length} ${
@@ -623,7 +1015,10 @@ export function TransactionSheet({
       </AnimatePresence>
 
       <div className="tx-accounts">
-        <Field label={kind === 'income' ? 'Into account' : 'From account'}>
+        <Field
+          label={kind === 'income' ? 'Into account' : 'From account'}
+          hint={askHint('account', !!accountId)}
+        >
           <Select
             options={accountOptions}
             value={accountId}
@@ -645,7 +1040,7 @@ export function TransactionSheet({
               {/* Optional once somebody owes it: money out of your accounts
                   with nowhere of yours to go is lending, and the debt is
                   where it went. */}
-              <Field label="To account">
+              <Field label="To account" hint={askHint('toAccount', !!toAccountId)}>
                 <Select
                   options={accountOptions.filter((o) => o.value !== accountId)}
                   value={toAccountId}
@@ -659,7 +1054,10 @@ export function TransactionSheet({
         </AnimatePresence>
       </div>
 
-      <Field label={kind === 'transfer' ? 'Description' : 'Merchant or payee'}>
+      <Field
+        label={kind === 'transfer' ? 'Description' : 'Merchant or payee'}
+        hint={askHint('merchant', !!merchant.trim())}
+      >
         <TextInput
           value={merchant}
           placeholder={kind === 'income' ? 'Monthly salary' : 'Swiggy'}
@@ -684,10 +1082,15 @@ export function TransactionSheet({
         </div>
       </Field>
 
-      <Field label="Note" hint={needsNote ? 'required' : 'optional'}>
+      <Field
+        label="Note"
+        hint={askHint('note', !!note.trim()) ?? (needsNote ? 'required' : 'optional')}
+      >
         <TextArea
           value={note}
-          placeholder={needsNote ? 'What was this for?' : 'Anything worth remembering'}
+          placeholder={
+            needsNote || asks('note') ? 'What was this for?' : 'Anything worth remembering'
+          }
           onChange={(e) => {
             setNote(e.target.value);
             setError(null);
@@ -767,8 +1170,15 @@ export function TransactionSheet({
           }
         : {
             title: isNew ? 'New transaction' : 'Edit transaction',
-            subtitle:
-              kind === 'transfer'
+            // Opened from a template, the heading says which — and what is
+            // still owed to it, which is the whole reason it was left blank.
+            subtitle: fromTemplate
+              ? outstanding.length
+                ? `From “${fromTemplate.name}” · ${outstanding
+                    .map((f) => fieldLabel(f, kind))
+                    .join(', ')} to fill in`
+                : `From “${fromTemplate.name}”`
+              : kind === 'transfer'
                 ? 'Moving money between your own accounts'
                 : kind === 'income'
                   ? 'Money landing in an account'
@@ -822,6 +1232,22 @@ export function TransactionSheet({
               >
                 Delete
               </Button>
+            )}
+            {/* Templates are about a posting of your own. The importer's copy
+                of the sheet is editing a statement row, where filling the
+                form in from something else would throw the row away. */}
+            {!page && !onSubmit && (
+              <TemplateMenu
+                templates={templates}
+                canApply={isNew}
+                kind={kind}
+                suggested={merchant.trim() || selected?.name || ''}
+                // Whatever is blank now is what it will ask for: you fill in
+                // what the template should answer, and leave the rest.
+                defaultAsk={blankNow}
+                onApply={applyTemplate}
+                onSave={keepAsTemplate}
+              />
             )}
             {/* Not while you are already inside one: the way out of a split is
                 back to the transaction, and the menu would only offer the way
@@ -950,7 +1376,13 @@ export function TransactionSheet({
                   >
                     <span className="field-label">
                       Category
-                      {selected && <span className="field-hint">{selected.name}</span>}
+                      {selected ? (
+                        <span className="field-hint">{selected.name}</span>
+                      ) : (
+                        askHint('category', false) && (
+                          <span className="field-hint">fill in</span>
+                        )
+                      )}
                     </span>
                     <motion.div
                       className="cat-grid"

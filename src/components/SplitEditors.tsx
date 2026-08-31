@@ -63,15 +63,25 @@ export const lineFromScratch = (): SplitLine => ({
   note: '',
 });
 
-/** The rows a saved bill reopens with — its own parts, or a blank pair. */
-export function linesFor(tx: Transaction | null | undefined): SplitLine[] {
-  if (!tx?.splits.length) return [];
-  return tx.splits.map((s) => ({
+/**
+ * The rows a set of saved parts reopens with. A posting's parts and a
+ * template's are the same three things — an amount, a category, a note — so
+ * the editor takes either.
+ */
+export function linesOf(
+  splits: { amount: Paise; categoryId: string | null; note: string | null }[],
+): SplitLine[] {
+  return splits.map((s) => ({
     key: nextKey(),
     amount: paiseToRupeeString(s.amount),
     categoryId: s.categoryId,
     note: s.note ?? '',
   }));
+}
+
+/** The rows a saved bill reopens with — its own parts, or a blank pair. */
+export function linesFor(tx: Transaction | null | undefined): SplitLine[] {
+  return linesOf(tx?.splits ?? []);
 }
 
 /**
