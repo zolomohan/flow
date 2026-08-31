@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
-import { CATEGORY_ICONS, Icon } from '../components/Icon';
+import { CATEGORY_ICON_GROUPS, Icon } from '../components/Icon';
 import {
   Button, Card, CardHead, Empty, Field, IconButton, Segmented, Select, Sheet, TextInput,
   type SegmentOption, type SelectOption,
@@ -515,19 +515,26 @@ function CategorySheet({
 
           <div>
             <span className="field-label">Icon</span>
-            <div className="icon-row">
-              {CATEGORY_ICONS.map((option) => (
-                <motion.button
-                  key={option}
-                  type="button"
-                  whileTap={{ scale: 0.92 }}
-                  className={`icon-pick ${option === icon ? 'is-active' : ''}`}
-                  style={option === icon ? ({ ['--pick' as any]: color }) : undefined}
-                  onClick={() => setIcon(option)}
-                  aria-label={option}
-                >
-                  <Icon name={option} size={17} />
-                </motion.button>
+            <div className="icon-shelves">
+              {CATEGORY_ICON_GROUPS.map((shelf) => (
+                <div key={shelf.label} className="icon-shelf">
+                  <span className="icon-shelf-label">{shelf.label}</span>
+                  <div className="icon-row">
+                    {shelf.icons.map((option) => (
+                      <motion.button
+                        key={option}
+                        type="button"
+                        whileTap={{ scale: 0.92 }}
+                        className={`icon-pick ${option === icon ? 'is-active' : ''}`}
+                        style={option === icon ? ({ ['--pick' as any]: color }) : undefined}
+                        onClick={() => setIcon(option)}
+                        aria-label={option}
+                      >
+                        <Icon name={option} size={17} />
+                      </motion.button>
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
           </div>
