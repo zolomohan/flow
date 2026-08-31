@@ -31,10 +31,15 @@ function readTick(kind: SeriesKind, value: number, span: number) {
   })}`;
 }
 
+/** Two decimals is finer than a pixel, and it keeps the path a plain list of
+ *  numbers — an unrounded coordinate can come out as `1e-7`, which nothing
+ *  tweening one path into another knows how to read. */
+const round = (n: number) => Math.round(n * 100) / 100;
+
 /** Catmull-Rom through the points, emitted as cubic beziers. */
 function smoothPath(points: [number, number][]) {
   if (points.length < 2) return '';
-  let d = `M ${points[0][0]} ${points[0][1]}`;
+  let d = `M ${round(points[0][0])} ${round(points[0][1])}`;
   for (let i = 0; i < points.length - 1; i++) {
     const p0 = points[i - 1] ?? points[i];
     const p1 = points[i];
@@ -44,16 +49,53 @@ function smoothPath(points: [number, number][]) {
     const c1y = p1[1] + (p2[1] - p0[1]) / 6;
     const c2x = p2[0] - (p3[0] - p1[0]) / 6;
     const c2y = p2[1] - (p3[1] - p1[1]) / 6;
-    d += ` C ${c1x} ${c1y}, ${c2x} ${c2y}, ${p2[0]} ${p2[1]}`;
+    d += ` C ${round(c1x)} ${round(c1y)}, ${round(c2x)} ${round(c2y)}, ${round(p2[0])} ${round(p2[1])}`;
   }
   return d;
+}
+
+/**
+ * How many stations a morphing line is read at. One path can only be tweened
+ * into another when the two are made of the same run of commands, and a month
+ * has 31 readings where a year has 365 — so a line that morphs is sampled at
+ * a fixed count instead, whatever it was measured at. Sixty-four is more
+ * points than a sparkline this size can show apart.
+ */
+const MORPH_POINTS = 64;
+
+/** How one shape settles into the next. Shorter than the draw-in: nothing is
+ *  being revealed, only moved. */
+const MORPH = { duration: 0.55, ease: [0.4, 0, 0.2, 1] } as const;
+
+/** A series read at `count` evenly spaced stations, straight between the
+ *  readings it actually has. */
+function resample(values: number[], count: number) {
+  if (values.length < 2 || values.length === count) return values;
+  const last = values.length - 1;
+  return Array.from({ length: count }, (_, i) => {
+    const at = (i / (count - 1)) * last;
+    const low = Math.floor(at);
+    const high = Math.min(low + 1, last);
+    return values[low] + (values[high] - values[low]) * (at - low);
+  });
 }
 
 /* --------------------------------------------------------------- Sparkline */
 
 export function Sparkline({
-  values, height = 88, stroke = 'var(--blue)', fill = true,
-}: { values: number[]; height?: number; stroke?: string; fill?: boolean }) {
+  values, height = 88, stroke = 'var(--blue)', fill = true, morph = false,
+}: {
+  values: number[];
+  height?: number;
+  stroke?: string;
+  fill?: boolean;
+  /**
+   * Whether a new series bends the line it finds into shape rather than
+   * replacing it. Off by default: it costs the line its own readings, which
+   * is only worth paying where the series is swapped under a standing chart.
+   */
+  morph?: boolean;
+}) {
   const gradientId = useId();
   const host = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
@@ -71,25 +113,30 @@ export function Sparkline({
   }, []);
 
   const path = useMemo(() => {
-    if (values.length < 2 || width <= 0) return { line: '', flat: false, area: '' };
-    const min = Math.min(...values);
-    const max = Math.max(...values);
+    const read = morph ? resample(values, MORPH_POINTS) : values;
+    if (read.length < 2 || width <= 0) return { line: '', flat: false, area: '' };
+    const min = Math.min(...read);
+    const max = Math.max(...read);
     const pad = 6;
     // A month with no movement has nothing to plot against: sit the line in
     // the middle rather than pinning it to the floor, where it reads as a
     // stray rule under the card.
     const flat = max === min;
     const span = max - min || 1;
-    const points = values.map((v, i) => {
-      const x = (i / (values.length - 1)) * width;
+    const points = read.map((v, i) => {
+      const x = (i / (read.length - 1)) * width;
       const y = flat
         ? height / 2
         : height - pad - ((v - min) / span) * (height - pad * 2);
       return [x, y] as [number, number];
     });
     const line = smoothPath(points);
-    return { line, flat, area: `${line} L ${width} ${height} L 0 ${height} Z` };
-  }, [values, width, height]);
+    return {
+      line,
+      flat,
+      area: `${line} L ${round(width)} ${round(height)} L 0 ${round(height)} Z`,
+    };
+  }, [values, width, height, morph]);
 
   return (
     <div ref={host} className="sparkline-host" style={{ height }}>
@@ -106,10 +153,13 @@ export function Sparkline({
               d={path.area}
               fill={`url(#${gradientId})`}
               initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.5, delay: 0.25 }}
+              animate={morph ? { opacity: 1, d: path.area } : { opacity: 1 }}
+              transition={{ opacity: { duration: 0.5, delay: 0.25 }, d: MORPH }}
             />
           )}
+          {/* The line is drawn in once, on arrival. After that a new series
+              bends this one into its shape — starting the stroke over would
+              read as a different chart rather than the same one, moved. */}
           <motion.path
             d={path.line}
             fill="none"
@@ -119,8 +169,11 @@ export function Sparkline({
             strokeLinejoin="round"
             opacity={path.flat ? 0.28 : 1}
             initial={{ pathLength: 0 }}
-            animate={{ pathLength: 1 }}
-            transition={{ duration: 0.9, ease: [0.4, 0, 0.2, 1] }}
+            animate={morph ? { pathLength: 1, d: path.line } : { pathLength: 1 }}
+            transition={{
+              pathLength: { duration: 0.9, ease: [0.4, 0, 0.2, 1] },
+              d: MORPH,
+            }}
           />
         </svg>
       )}
