@@ -28,11 +28,16 @@ import type {
   Label,
   LabelInput,
   Overview,
+  Paise,
+  Plan,
+  PlanInput,
   Transaction,
   TransactionInput,
   TransactionPatch,
   TransactionQuery,
   TransactionSummary,
+  TxTemplate,
+  TxTemplateInput,
 } from './types';
 
 /**
@@ -49,6 +54,26 @@ export const REQUIRE_NOTE = 'require_note';
  * itself.
  */
 export const LAST_ACCOUNT = 'last_account';
+
+/** The looks Midas comes in: one light, and three darks of different colour. */
+export type Theme = 'light' | 'midnight' | 'graphite' | 'black';
+
+export const THEMES: { value: Theme; label: string; hint: string }[] = [
+  { value: 'light', label: 'Light', hint: 'Paper grey' },
+  { value: 'midnight', label: 'Midnight', hint: 'Deep navy' },
+  { value: 'graphite', label: 'Graphite', hint: 'Very dark grey' },
+  { value: 'black', label: 'Pitch black', hint: 'True black' },
+];
+
+/**
+ * The theme as it was left. `dark` is what the two-way switch used to write,
+ * and midnight is that same navy under its new name.
+ */
+function storedTheme(): Theme {
+  const saved = localStorage.getItem('midas.theme');
+  if (saved === 'dark') return 'midnight';
+  return THEMES.some((t) => t.value === saved) ? (saved as Theme) : 'light';
+}
 
 export interface Toast {
   id: number;
@@ -69,6 +94,10 @@ interface Store {
   holdings: Holding[];
   /** Every label in the book, with how many postings carry each. */
   labels: Label[];
+  /** Saved transaction templates, what you reach for most first. */
+  templates: TxTemplate[];
+  /** Every planned payment, soonest due first. */
+  plans: Plan[];
   overview: Overview | null;
   /** Last month of the period in view. */
   month: string;
@@ -76,7 +105,9 @@ interface Store {
   /** How many months that period covers — 1 for a month, 12 for a year. */
   span: number;
   setSpan: (n: number) => void;
-  theme: 'light' | 'dark';
+  theme: Theme;
+  setTheme: (theme: Theme) => void;
+  /** Light ↔ whichever dark theme was last in use, for the sidebar switch. */
   toggleTheme: () => void;
   /** The book's own preferences, as they are stored: strings, keyed. */
   settings: Record<string, string>;
@@ -114,6 +145,22 @@ interface Store {
   confirmTriage: (ids: string[]) => Promise<number>;
   saveLabel: (input: LabelInput) => Promise<Label>;
   deleteLabel: (id: string) => Promise<void>;
+  savePlan: (input: PlanInput) => Promise<Plan>;
+  deletePlan: (id: string) => Promise<void>;
+  setPlanArchived: (id: string, archived: boolean) => Promise<void>;
+  /** Lets the cycle now due go by unpaid. */
+  skipPlan: (id: string) => Promise<Plan>;
+  /** Writes the posting a cycle describes and points the plan at it. */
+  payPlan: (id: string, amount?: Paise | null, occurredAt?: string | null) => Promise<Transaction>;
+  /** Says these postings belong to this plan. Resolves with how many. */
+  linkPlanPostings: (planId: string, ids: string[]) => Promise<number>;
+  /** Takes one back off. The posting itself stays where it is. */
+  unlinkPlanPosting: (planId: string, transactionId: string) => Promise<void>;
+  saveTemplate: (input: TxTemplateInput) => Promise<TxTemplate>;
+  deleteTemplate: (id: string) => Promise<void>;
+  /** Counts one posting written from a template. Quiet: it changes nothing
+   *  of yours, only where the template sits in the list. */
+  markTemplateUsed: (id: string) => Promise<void>;
   resetAll: () => Promise<void>;
   /** Bumped after every write so screens can re-run their own queries. */
   revision: number;
@@ -136,6 +183,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [debts, setDebts] = useState<Debt[]>([]);
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [labels, setLabels] = useState<Label[]>([]);
+  const [templates, setTemplates] = useState<TxTemplate[]>([]);
+  const [plans, setPlans] = useState<Plan[]>([]);
   const [pricesRefreshing, setPricesRefreshing] = useState(false);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [settings, setSettings] = useState<Record<string, string>>({});
@@ -143,18 +192,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [span, setSpan] = useState(1);
   const [revision, setRevision] = useState(0);
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [theme, setTheme] = useState<'light' | 'dark'>(() =>
-    (localStorage.getItem('midas.theme') as 'light' | 'dark') ?? 'light',
-  );
+  const [theme, setTheme] = useState<Theme>(storedTheme);
+  // Which dark the switch returns to, so leaving black for light and coming
+  // back does not land you in midnight.
+  const lastDark = useRef<Theme>(theme === 'light' ? 'midnight' : theme);
   const toastSeq = useRef(0);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('midas.theme', theme);
+    if (theme !== 'light') lastDark.current = theme;
   }, [theme]);
 
   const toggleTheme = useCallback(
-    () => setTheme((t) => (t === 'light' ? 'dark' : 'light')),
+    () => setTheme((t) => (t === 'light' ? lastDark.current : 'light')),
     [],
   );
 
@@ -175,7 +226,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     async (forMonth: string, forSpan: number) => {
       const [
         nextAccounts, nextCategories, nextUsage, nextDebts, nextHoldings, nextOverview,
-        nextSettings, nextLabels,
+        nextSettings, nextLabels, nextTemplates, nextPlans,
       ] = await Promise.all([
         api.listAccounts(),
         api.listCategories(),
@@ -185,6 +236,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         api.overview(forMonth, forSpan),
         api.listSettings(),
         api.listLabels(),
+        api.listTemplates(),
+        api.listPlans(),
       ]);
       setAccounts(nextAccounts);
       setCategories(nextCategories);
@@ -194,6 +247,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setOverview(nextOverview);
       setSettings(nextSettings);
       setLabels(nextLabels);
+      setTemplates(nextTemplates);
+      setPlans(nextPlans);
     },
     [],
   );
@@ -270,12 +325,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       debts,
       holdings,
       labels,
+      templates,
+      plans,
       overview,
       month,
       setMonth,
       span,
       setSpan,
       theme,
+      setTheme,
       toggleTheme,
       settings,
       // Kept locally as well as written down, so a toggle answers at once
@@ -350,6 +408,40 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       saveLabel: (input) =>
         mutate(() => api.saveLabel(input), input.id ? 'Label updated' : 'Label added'),
       deleteLabel: (id) => mutate(() => api.deleteLabel(id), 'Label deleted'),
+      savePlan: (input) =>
+        mutate(() => api.savePlan(input), input.id ? 'Plan updated' : 'Plan added'),
+      deletePlan: (id) => mutate(() => api.deletePlan(id), 'Plan removed'),
+      setPlanArchived: (id, archived) =>
+        mutate(
+          () => api.setPlanArchived(id, archived),
+          archived ? 'Plan put away' : 'Plan brought back',
+        ),
+      skipPlan: (id) => mutate(() => api.skipPlan(id), 'Skipped this one'),
+      payPlan: (id, amount, occurredAt) =>
+        mutate(() => api.payPlan(id, amount ?? null, occurredAt ?? null), 'Marked as paid'),
+      linkPlanPostings: (planId, ids) =>
+        mutate(
+          () => api.linkPlanPostings(planId, ids),
+          ids.length === 1 ? 'Payment linked' : `${ids.length} payments linked`,
+        ),
+      unlinkPlanPosting: (planId, transactionId) =>
+        mutate(() => api.unlinkPlanPosting(planId, transactionId), 'Payment unlinked'),
+      saveTemplate: (input) =>
+        mutate(
+          () => api.saveTemplate(input),
+          input.id ? 'Template updated' : 'Template saved',
+        ),
+      deleteTemplate: (id) => mutate(() => api.deleteTemplate(id), 'Template deleted'),
+      // No toast and no error of its own: a count that failed to go up is
+      // nothing the person writing a transaction needs to hear about.
+      markTemplateUsed: async (id) => {
+        try {
+          await api.useTemplate(id);
+          setRevision((r) => r + 1);
+        } catch {
+          /* the posting is written, which is the part that mattered */
+        }
+      },
       resetAll: () => mutate(() => api.resetAll(), 'Everything cleared'),
     }),
     [
@@ -361,6 +453,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       debts,
       holdings,
       labels,
+      templates,
+      plans,
       overview,
       month,
       span,

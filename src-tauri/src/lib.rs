@@ -2,6 +2,7 @@ mod db;
 mod demo;
 mod import;
 mod models;
+mod plans;
 mod prices;
 
 use std::sync::Mutex;
@@ -164,11 +165,112 @@ fn delete_label(db: State<Db>, id: String) -> R<()> {
     with_db(&db, |c| db::delete_label(c, &id))
 }
 
+/// Every saved template, what you reach for most at the top.
+#[tauri::command]
+fn list_templates(db: State<Db>) -> R<Vec<TxTemplate>> {
+    with_db(&db, db::list_templates)
+}
+
+/// Writes a template whole — a name given to the shape of a posting.
+#[tauri::command]
+fn save_template(db: State<Db>, input: TxTemplateInput) -> R<TxTemplate> {
+    with_db(&db, |c| db::save_template(c, input))
+}
+
+/// The template goes; every posting written from it stays.
+#[tauri::command]
+fn delete_template(db: State<Db>, id: String) -> R<()> {
+    with_db(&db, |c| db::delete_template(c, &id))
+}
+
+/// Counts one posting written from a template. Called after the posting is
+/// saved, so a template opened and thought better of was never used.
+#[tauri::command]
+fn use_template(db: State<Db>, id: String) -> R<()> {
+    with_db(&db, |c| db::touch_template(c, &id))
+}
+
 /// "These are filed right": clears Triage and teaches the importer, so the
 /// next statement classifies these counterparties on its own.
 #[tauri::command]
 fn confirm_triage(db: State<Db>, ids: Vec<String>) -> R<i64> {
     with_db(&db, |c| db::confirm_triage(c, &ids))
+}
+
+/* ------------------------------------------------------- planned payments */
+
+/// Every plan, with what the ledger says about each: when it next falls due,
+/// what it has actually been costing, and whether anything has been missed.
+#[tauri::command]
+fn list_plans(db: State<Db>) -> R<Vec<Plan>> {
+    with_db(&db, plans::list_plans)
+}
+
+#[tauri::command]
+fn save_plan(db: State<Db>, input: PlanInput) -> R<Plan> {
+    with_db(&db, |c| plans::save_plan(c, input))
+}
+
+#[tauri::command]
+fn delete_plan(db: State<Db>, id: String) -> R<()> {
+    with_db(&db, |c| plans::delete_plan(c, &id))
+}
+
+#[tauri::command]
+fn set_plan_archived(db: State<Db>, id: String, archived: bool) -> R<()> {
+    with_db(&db, |c| plans::set_plan_archived(c, &id, archived))
+}
+
+/// Lets the cycle now due go by unpaid — a waived bill, a month off.
+#[tauri::command]
+fn skip_plan(db: State<Db>, id: String) -> R<Plan> {
+    with_db(&db, |c| plans::skip_plan(c, &id))
+}
+
+/// Writes the posting this cycle describes and points the plan at it.
+#[tauri::command]
+fn pay_plan(
+    db: State<Db>,
+    id: String,
+    amount: Option<i64>,
+    occurred_at: Option<String>,
+) -> R<Transaction> {
+    with_db(&db, |c| plans::pay_plan(c, &id, amount, occurred_at))
+}
+
+/// Every turn of every live plan between two dates, paid ones included.
+#[tauri::command]
+fn plan_calendar(db: State<Db>, from: String, to: String) -> R<Vec<PlanOccurrence>> {
+    with_db(&db, |c| plans::plan_calendar(c, &from, &to))
+}
+
+/// The whole life of one plan, oldest cycle first — paid, let go and missed
+/// alike. The holes are the interesting part, so they come back too.
+#[tauri::command]
+fn plan_timeline(db: State<Db>, id: String) -> R<Vec<PlanOccurrence>> {
+    with_db(&db, |c| plans::plan_timeline(c, &id))
+}
+
+/// Says these postings belong to this plan. Nothing counts for a plan until
+/// it does — a plan never claims a payment on its own.
+#[tauri::command]
+fn link_plan_postings(db: State<Db>, plan_id: String, ids: Vec<String>) -> R<i64> {
+    with_db(&db, |c| plans::link_postings(c, &plan_id, &ids))
+}
+
+/// Takes a posting back off a plan. The posting itself is untouched.
+#[tauri::command]
+fn unlink_plan_posting(db: State<Db>, plan_id: String, transaction_id: String) -> R<()> {
+    with_db(&db, |c| plans::unlink_posting(c, &plan_id, &transaction_id))
+}
+
+/// Which plan each of these postings already backs, keyed by posting id.
+#[tauri::command]
+fn plans_of_postings(
+    db: State<Db>,
+    ids: Vec<String>,
+) -> R<std::collections::HashMap<String, String>> {
+    with_db(&db, |c| plans::plans_of_postings(c, &ids))
 }
 
 #[tauri::command]
@@ -276,6 +378,12 @@ fn gold_value_series(
     with_db(&db, |c| db::gold_value_series(c, days, purity_e4))
 }
 
+/// What everything in the book has been worth, day by day, as one line.
+#[tauri::command]
+fn portfolio_value_series(db: State<Db>, days: Option<i64>) -> R<Vec<ValuePoint>> {
+    with_db(&db, |c| db::portfolio_value_series(c, days))
+}
+
 #[tauri::command]
 async fn search_schemes(query: String) -> R<Vec<Scheme>> {
     prices::search_schemes(&query).await
@@ -374,6 +482,21 @@ pub fn run() {
             save_label,
             delete_label,
             confirm_triage,
+            list_templates,
+            save_template,
+            delete_template,
+            use_template,
+            list_plans,
+            save_plan,
+            delete_plan,
+            set_plan_archived,
+            skip_plan,
+            pay_plan,
+            plan_calendar,
+            plan_timeline,
+            link_plan_postings,
+            unlink_plan_posting,
+            plans_of_postings,
             list_debts,
             save_debt,
             delete_debt,
@@ -389,6 +512,7 @@ pub fn run() {
             holding_series,
             holding_series_all,
             gold_value_series,
+            portfolio_value_series,
             search_schemes,
             get_setting,
             list_settings,

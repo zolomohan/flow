@@ -1017,8 +1017,45 @@ kbd {
   height: 36px;
   border-radius: var(--r-md);
   flex-shrink: 0;
+  overflow: hidden;
   color: var(--tint);
   background: color-mix(in srgb, var(--tint) 13%, transparent);
+}
+
+/* A brand mark brings its own colour, so it sits on a plain light chip
+   rather than the category's tint — two colours behind one another only
+   muddy both. Most logos are drawn for a light ground and a fair few have
+   a white square baked in, so the chip stays light in the dark theme too.
+
+   The logo fills the squircle edge to edge rather than sitting inside it
+   as a smaller square: nearly every one of these arrives already square
+   and already on its own ground, so any inset just draws a second, worse
+   border around the one the shape already has. The assets are squared
+   before they ship, which is what lets `cover` fill without cropping. */
+.tx-avatar { position: relative; }
+.tx-avatar.is-logo { background: #fff; }
+.tx-avatar.is-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  -webkit-user-drag: none;
+}
+
+/* The ring has to be drawn over the picture, not under it: an inset shadow
+   on the tile is painted below its own content, so a logo that fills the
+   tile hides it completely — and a white-backed logo on a light page then
+   has no edge at all, and the squircle stops reading as a shape.
+
+   Its colour is fixed rather than themed. The chip beneath is white in both
+   themes, so a hairline mixed from `--ink` would invert with the theme and
+   vanish against it in the dark. */
+.tx-avatar.is-logo::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px rgb(32 41 76 / 0.18);
+  pointer-events: none;
 }
 
 .tx-main { display: flex; flex-direction: column; min-width: 0; flex: 1; gap: 1px; }
@@ -1293,18 +1330,55 @@ kbd {
    Overview
    ================================================================= */
 
-.overview-grid {
+/* The page has two halves — what you are worth, and what you spent — and a
+   rule of its own names each. They answer different questions, and reading
+   them as one long run of cards is what made the old grid hard to scan. */
+.ov-band {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.ov-band h2 {
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: var(--wide);
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+.ov-band p { font-size: 12.5px; font-weight: 500; color: var(--ink-3); }
+
+/* Cards stack down a column rather than sitting in grid cells: a short card
+   is followed by the next one, not by the hole a taller neighbour left. */
+.ov-stack,
+.ov-col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* The two sides of the balance sheet beyond the cash. One of them alone
+   takes the whole width rather than leaving half the row empty. */
+.wealth-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(300px, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  gap: 16px;
+}
+.wealth-card { display: flex; flex-direction: column; }
+.wealth-figure { margin-bottom: 2px; }
+.wealth-figure .figure-value { font-size: 26px; }
+
+.spend-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(330px, 1fr);
   gap: 16px;
   align-items: start;
 }
-.hero { grid-column: 1 / -1; }
-.recent-card { grid-row: span 2; }
 
 @media (max-width: 1080px) {
-  .overview-grid { grid-template-columns: minmax(0, 1fr); }
-  .recent-card { grid-row: auto; }
+  .spend-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 .hero {
@@ -1319,11 +1393,25 @@ kbd {
     linear-gradient(158deg, #262f57 0%, #20294c 45%, #171e3b 100%);
   box-shadow: var(--shadow-md);
 }
-:root[data-theme='dark'] .hero {
+:root[data-theme='midnight'] .hero {
   background:
     radial-gradient(120% 140% at 88% -10%, rgba(147, 234, 98, 0.14) 0%, transparent 55%),
     radial-gradient(90% 120% at 8% 110%, rgba(59, 157, 251, 0.18) 0%, transparent 60%),
     linear-gradient(158deg, #1e2647 0%, #161c36 45%, #10152a 100%);
+  border: 1px solid var(--line);
+}
+:root[data-theme='graphite'] .hero {
+  background:
+    radial-gradient(120% 140% at 88% -10%, rgba(147, 234, 98, 0.12) 0%, transparent 55%),
+    radial-gradient(90% 120% at 8% 110%, rgba(59, 157, 251, 0.14) 0%, transparent 60%),
+    linear-gradient(158deg, #2a2a30 0%, #1f1f23 45%, #161618 100%);
+  border: 1px solid var(--line);
+}
+:root[data-theme='black'] .hero {
+  background:
+    radial-gradient(120% 140% at 88% -10%, rgba(147, 234, 98, 0.1) 0%, transparent 55%),
+    radial-gradient(90% 120% at 8% 110%, rgba(59, 157, 251, 0.12) 0%, transparent 60%),
+    linear-gradient(158deg, #161616 0%, #0c0c0c 45%, #000000 100%);
   border: 1px solid var(--line);
 }
 
@@ -1334,15 +1422,6 @@ kbd {
   gap: 20px;
   flex-wrap: wrap;
 }
-.hero .btn-primary {
-  background: rgba(255, 255, 255, 0.13);
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  backdrop-filter: blur(8px);
-  box-shadow: none;
-}
-.hero .btn-primary:hover { background: rgba(255, 255, 255, 0.2); filter: none; }
-
 .hero-label {
   display: block;
   font-size: 11.5px;
@@ -1368,6 +1447,30 @@ kbd {
 }
 .hero-chip.is-up { color: var(--green-bright); background: rgba(147, 234, 98, 0.11); border-color: rgba(147, 234, 98, 0.2); }
 .hero-chip.is-down { color: #ff9a94; background: rgba(255, 154, 148, 0.11); border-color: rgba(255, 154, 148, 0.2); }
+/* Every figure on the balance sheet leads to the screen it came off. */
+.hero-chip.is-link { cursor: pointer; transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease); }
+.hero-chip.is-link:hover { background: rgba(255, 255, 255, 0.16); border-color: rgba(255, 255, 255, 0.22); }
+
+/* The one number on this card that belongs to the period rather than to the
+   balance sheet, kept on a line of its own so the two never read alike. */
+.hero-split {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding-top: 13px;
+  border-top: 1px solid rgba(255, 255, 255, 0.09);
+}
+.hero-split-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: rgba(240, 241, 245, 0.6);
+}
 
 .dot { width: 7px; height: 7px; border-radius: 99px; flex-shrink: 0; }
 .dot-in { background: var(--green-bright); }
@@ -1375,40 +1478,48 @@ kbd {
 
 .hero-chart { margin: 6px -26px 0; opacity: 0.95; }
 
-.hero-accounts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-  margin-top: 14px;
+/* Where the money sits, on a card of its own. A tile a column wide rather
+   than a chip that wraps: the names run long, and a ragged row of pills read
+   as leftovers under the hero rather than as a list of your accounts. */
+.wallet-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 8px;
 }
 
-.hero-account {
+.wallet-tile {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 12px 7px 8px;
+  gap: 10px;
+  padding: 9px 12px 9px 9px;
   border-radius: var(--r-lg);
-  background: rgba(255, 255, 255, 0.07);
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
   text-align: left;
+  min-width: 0;
+  /* No lift on hover — these navigate rather than expand. */
   transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease);
 }
-/* No lift on hover — these navigate rather than expand. */
-.hero-account { cursor: pointer; }
-.hero-account:hover { background: rgba(255, 255, 255, 0.14); border-color: rgba(255, 255, 255, 0.2); }
-.hero-account-glyph {
+.wallet-tile:hover { background: var(--surface-3); border-color: var(--line); }
+.wallet-glyph {
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
   color: #fff;
   flex-shrink: 0;
 }
-.hero-account-text { display: flex; flex-direction: column; }
-.hero-account-text strong { font-size: 12.5px; font-weight: 600; color: #fff; }
-.hero-account-text span { font-size: 12px; font-weight: 500; color: rgba(240, 241, 245, 0.62); }
-.hero-account-text .is-owed { color: #ff9a94; }
+.wallet-text { display: flex; flex-direction: column; min-width: 0; }
+.wallet-text strong {
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wallet-text > span { font-size: 12.5px; font-weight: 500; color: var(--ink-3); }
+.wallet-text .is-owed { color: var(--red); }
 
 .flow-figures { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .figure-label {
@@ -1443,8 +1554,10 @@ kbd {
 .delta.is-bad { color: var(--red); }
 .delta-flat { font-weight: 500; color: var(--ink-4); }
 
-.flow-foot { margin-top: 18px; }
-.flow-foot > span {
+/* A small labelled chart at the foot of a card — the daily spend under the
+   flow figures, the portfolio's year under what it is worth. */
+.flow-foot, .wealth-chart { margin-top: 18px; }
+.flow-foot > span, .wealth-chart > span {
   display: block;
   margin-bottom: 8px;
   font-size: 11.5px;
@@ -1455,6 +1568,16 @@ kbd {
 }
 
 .donut-layout { display: grid; gap: 18px; justify-items: center; }
+/* In the wide column the ring and its list sit side by side; stacked, the
+   card would be a tall pillar of white next to a short one. */
+@media (min-width: 1081px) {
+  .spend-main .donut-layout {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    justify-items: stretch;
+    gap: 26px;
+  }
+}
 .cat-list { display: grid; gap: 4px; width: 100%; }
 .cat-row {
   display: grid;
@@ -1512,6 +1635,55 @@ kbd {
 .merchant-name small { font-size: 11.5px; color: var(--ink-4); }
 .merchant-total { font-size: 13px; font-weight: 600; }
 
+/* What the portfolio is made of, and who is still square with whom. Both
+   reuse the category row: same swatch, same amount, same bar. */
+.sleeve-list,
+.owing-list { display: grid; gap: 4px; margin-top: auto; padding-top: 16px; }
+.cat-count {
+  padding: 1px 6px;
+  border-radius: var(--r-full);
+  background: var(--surface-inset);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+
+.owing-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 3px 10px;
+  width: 100%;
+  padding: 6px 7px;
+  margin: 0 -7px;
+  text-align: left;
+  border-radius: var(--r-md);
+  transition: background var(--fast) var(--ease);
+}
+.owing-row:hover { background: var(--surface-2); }
+.owing-face {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  background: var(--surface-inset);
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.owing-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+}
+.owing-name > :first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.owing-name small { font-size: 11.5px; color: var(--ink-4); }
+.owing-amount { font-size: 13px; font-weight: 600; }
+.owing-row .meter { grid-column: 2 / -1; }
+
 /* =================================================================
    Month nav
    ================================================================= */
@@ -1533,7 +1705,6 @@ kbd {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 3px;
   min-width: 150px;
   padding: 0 8px;
   height: 30px;
@@ -1550,7 +1721,6 @@ kbd {
   white-space: nowrap;
   display: inline-flex;
 }
-.month-label svg { color: var(--ink-4); flex: none; }
 
 /* Jumping straight to a period, rather than stepping there one click at a
    time. What it offers follows the range in view: months, quarters or years. */
@@ -1592,6 +1762,19 @@ kbd {
 .period-pop-head button:hover:not(:disabled) { background: var(--surface-inset); color: var(--ink); }
 .period-pop-head button:disabled { opacity: 0.3; }
 
+/* The year between the chevrons is a control too: it opens the years, so a
+   month in 2019 is a jump rather than seven clicks on the chevron. */
+.period-pop-head .period-year {
+  position: relative;
+  width: auto;
+  min-width: 62px;
+  padding: 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.period-pop-head .period-year.is-on { background: var(--surface-inset); }
+
 /* Month · Quarter · Year · Range — what shape of window is being picked. */
 .period-modes {
   display: grid;
@@ -1625,6 +1808,27 @@ kbd {
   box-shadow: var(--shadow-xs);
 }
 
+/* Ranges asked for by name — the ones nobody wants to count out on a grid. */
+.period-presets {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.period-preset {
+  height: 29px;
+  border-radius: var(--r-sm);
+  background: var(--surface-inset);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.period-preset:hover { color: var(--ink); }
+.period-preset.is-on { background: var(--solid); color: var(--on-solid); }
+
 .period-hint {
   margin: 8px 2px 0;
   font-size: 11.5px;
@@ -1636,7 +1840,10 @@ kbd {
 .period-quarters { grid-template-columns: repeat(2, 1fr); }
 .period-years { grid-template-columns: repeat(3, 1fr); }
 
-.period-pop button:not(.period-pop-head button):not(.period-modes button) {
+.period-pop
+  button:not(.period-pop-head button):not(.period-modes button):not(.period-preset):not(
+    .period-today
+  ) {
   position: relative;
   height: 34px;
   border-radius: var(--r-sm);
@@ -1645,7 +1852,10 @@ kbd {
   color: var(--ink-2);
   transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
 }
-.period-pop button:not(.period-pop-head button):not(.period-modes button):hover:not(:disabled) {
+.period-pop
+  button:not(.period-pop-head button):not(.period-modes button):not(.period-preset):not(
+    .period-today
+  ):hover:not(:disabled) {
   background: var(--surface-inset);
   color: var(--ink);
 }
@@ -1668,18 +1878,31 @@ kbd {
   color: var(--ink);
 }
 .period-pop button:disabled { opacity: 0.28; cursor: default; }
-.month-today {
-  height: 30px;
-  margin-left: 3px;
-  padding: 0 10px;
-  border-radius: var(--r-sm);
+
+/* The way back to now, on a footer of its own under the grid. It used to sit
+   in the nav itself and appear the moment you stepped away, which shifted
+   every control beside it mid-click. */
+.period-foot {
+  display: flex;
+  justify-content: center;
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px solid var(--line-soft);
+}
+.period-today {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 14px;
+  border-radius: var(--r-full);
   background: var(--surface-inset);
   font-size: 12px;
   font-weight: 600;
   color: var(--ink-2);
   transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
 }
-.month-today:hover { background: var(--blue-soft); color: var(--blue); }
+.period-today:hover { background: var(--blue-soft); color: var(--blue); }
 
 /* -------------------------------------------------- one holding's own page */
 
@@ -1945,9 +2168,42 @@ kbd {
   border-radius: var(--r-sm);
   color: var(--ink-3);
 }
-.date-pop-head button:hover { background: var(--surface-inset); color: var(--ink); }
+.date-pop-head button:hover:not(:disabled) { background: var(--surface-inset); color: var(--ink); }
+.date-pop-head button:disabled { opacity: 0.3; }
+
+/* The month and the year are controls, not a caption: each opens the grid it
+   names, so a date years back is two clicks rather than a run on the chevron. */
+.date-pop-title { display: flex; align-items: center; gap: 2px; }
+.date-pop-title strong { font-size: 13px; font-weight: 600; }
+.date-pop-head .date-pop-jump {
+  width: auto;
+  height: 26px;
+  padding: 0 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.date-pop-head .date-pop-jump:hover { background: var(--surface-inset); }
+.date-pop-head .date-pop-jump.is-on { background: var(--surface-inset); }
 
 .date-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; }
+
+/* The months and years behind the header, in the calendar's own hand. */
+.date-months, .date-years { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.date-chip {
+  position: relative;
+  height: 42px;
+  border-radius: var(--r-sm);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.date-chip:hover:not(:disabled) { background: var(--surface-inset); color: var(--ink); }
+.date-chip.is-now { color: var(--blue); }
+.date-chip.is-picked { background: var(--solid); color: var(--on-solid); }
+.date-chip.is-picked.is-now { color: var(--on-solid); }
+.date-chip:disabled { opacity: 0.28; cursor: default; }
 
 .date-weekday {
   display: grid;
@@ -2376,6 +2632,25 @@ kbd {
 }
 
 .icon-row { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* The picker is long enough to need shelves; capping it keeps the sheet's
+   own footer reachable without scrolling past a hundred glyphs. */
+.icon-shelves {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 268px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.icon-shelf { display: flex; flex-direction: column; gap: 6px; }
+.icon-shelf-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
 .icon-pick {
   display: grid;
   place-items: center;
@@ -2865,6 +3140,7 @@ kbd {
 .settings-tabs { display: flex; }
 .settings-panel { display: flex; flex-direction: column; gap: 18px; }
 
+/* Four looks, two to a row. */
 .theme-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
 .theme-card {
@@ -2886,15 +3162,27 @@ kbd {
   border-radius: var(--r-md);
   border: 1px solid var(--line-soft);
 }
+/* Each card is painted in its own theme's colours, whichever is running. */
 .theme-light .theme-preview { background: #f0f1f5; }
-.theme-dark .theme-preview { background: #0d1122; }
+.theme-midnight .theme-preview { background: #0d1122; }
+.theme-graphite .theme-preview { background: #131315; }
+.theme-black .theme-preview { background: #000000; }
 .theme-preview i { height: 7px; border-radius: 99px; }
-.theme-light .theme-preview i:nth-child(1) { width: 70%; background: #20294c; }
-.theme-light .theme-preview i:nth-child(2) { width: 90%; background: #c7cbdb; }
-.theme-light .theme-preview i:nth-child(3) { width: 45%; background: #42c251; }
-.theme-dark .theme-preview i:nth-child(1) { width: 70%; background: #eef0f7; }
-.theme-dark .theme-preview i:nth-child(2) { width: 90%; background: #333c63; }
-.theme-dark .theme-preview i:nth-child(3) { width: 45%; background: #93ea62; }
+.theme-preview i:nth-child(1) { width: 70%; }
+.theme-preview i:nth-child(2) { width: 90%; }
+.theme-preview i:nth-child(3) { width: 45%; }
+.theme-light .theme-preview i:nth-child(1) { background: #20294c; }
+.theme-light .theme-preview i:nth-child(2) { background: #c7cbdb; }
+.theme-light .theme-preview i:nth-child(3) { background: #42c251; }
+.theme-midnight .theme-preview i:nth-child(1) { background: #eef0f7; }
+.theme-midnight .theme-preview i:nth-child(2) { background: #333c63; }
+.theme-midnight .theme-preview i:nth-child(3) { background: #93ea62; }
+.theme-graphite .theme-preview i:nth-child(1) { background: #f2f2f4; }
+.theme-graphite .theme-preview i:nth-child(2) { background: #3c3c43; }
+.theme-graphite .theme-preview i:nth-child(3) { background: #93ea62; }
+.theme-black .theme-preview i:nth-child(1) { background: #f5f5f5; }
+.theme-black .theme-preview i:nth-child(2) { background: #343434; }
+.theme-black .theme-preview i:nth-child(3) { background: #93ea62; }
 
 .theme-name {
   display: flex;
@@ -2904,6 +3192,12 @@ kbd {
   font-weight: 600;
 }
 .theme-name span { display: grid; place-items: center; color: var(--green); }
+.theme-hint {
+  margin-top: -4px;
+  font-size: 11.5px;
+  color: var(--ink-3);
+  text-align: left;
+}
 
 .data-actions { display: grid; gap: 4px; }
 .data-row {
@@ -4842,3 +5136,684 @@ kbd {
   cursor: pointer;
 }
 .chip.is-new:hover { color: var(--ink); border-color: var(--line-strong); }
+
+/* --------------------------------------------------------------- templates */
+
+/* The menu at the foot of the sheet, on the split menu's own frame. A list of
+   names can run long, so this one scrolls where that one never needs to. */
+.tpl-pop {
+  width: 340px;
+  max-height: 380px;
+  overflow-y: auto;
+}
+/* Each template wears its category's colour, the way its postings will. */
+.tpl-pop .split-section-glyph {
+  background: color-mix(in srgb, var(--cat, var(--ink-3)) 14%, transparent);
+  color: var(--cat, var(--ink-3));
+}
+.tpl-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--line-soft);
+}
+.tpl-none {
+  padding: 4px 11px 8px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-4);
+}
+.tpl-naming {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+}
+.tpl-naming .input { flex: 1; height: 30px; font-size: 12.5px; }
+
+/* The screen. One row a template, wide enough to say what is inside it
+   without opening anything. */
+.tpl-list { display: flex; flex-direction: column; }
+.tpl-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+}
+.tpl-row + .tpl-row { border-top: 1px solid var(--line-soft); }
+.tpl-glyph {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--tint) 14%, transparent);
+  color: var(--tint);
+}
+.tpl-name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.tpl-name em {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-style: normal;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+.tpl-name:hover { color: var(--blue); }
+/* How much use it has actually had — what the list is ordered by, so it is
+   worth saying out loud. */
+.tpl-used {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex-shrink: 0;
+  text-align: right;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ink-4);
+}
+.tpl-used em { font-style: normal; font-size: 11px; color: var(--ink-4); opacity: 0.75; }
+.tpl-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+/* =================================================== planned payments ==== */
+
+.plan-list { display: grid; gap: 8px; }
+
+/* A row rather than a card: a plan is a line in a bill calendar, and a wall
+   of cards makes twelve subscriptions look like twelve decisions.
+ *
+ * Every track but the name is a fixed width, and the inner button borrows
+ * the same tracks through `subgrid`. That is the whole trick: `auto` columns
+ * size to their own row's contents, so a list of them lines up nowhere. The
+ * declaration above each `subgrid` repeats the widths verbatim as a fallback,
+ * which lands in exactly the same place. */
+.plan-row {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) 96px 118px 166px;
+  grid-template-rows: auto auto;
+  align-items: center;
+  column-gap: 14px;
+  row-gap: 6px;
+  padding: 12px 16px;
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  box-shadow: var(--shadow-xs);
+  transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+}
+.plan-row:hover { box-shadow: var(--shadow-sm); border-color: var(--line); }
+
+.plan-row-main {
+  grid-row: 1;
+  grid-column: 1 / 5;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) 96px 118px;
+  grid-template-columns: subgrid;
+  align-items: center;
+  column-gap: 14px;
+  text-align: left;
+  min-width: 0;
+}
+.plan-row-who { display: grid; gap: 1px; min-width: 0; }
+.plan-row-who strong {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plan-row-who span {
+  font-size: 12px;
+  color: var(--ink-3);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-row-when { display: grid; gap: 1px; text-align: right; }
+.plan-row-when strong { font-size: 13px; font-weight: 600; }
+.plan-row-when span { font-size: 11.5px; color: var(--ink-4); font-weight: 500; }
+
+.plan-row-amount { display: grid; gap: 1px; text-align: right; }
+.plan-row-amount strong {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: var(--tight);
+  font-variant-numeric: tabular-nums;
+}
+.plan-row-amount span { font-size: 11.5px; color: var(--ink-3); font-weight: 500; }
+
+/* Under the name, in the name's own column — so the tags start where the
+   words above them start rather than at a number somebody guessed. */
+.plan-row-tags {
+  grid-row: 2;
+  grid-column: 2 / 5;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.plan-row-tags:empty { display: none; }
+
+.plan-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: var(--r-xs);
+  background: var(--surface-inset);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+.plan-tag.is-warn { background: var(--amber-soft); color: var(--amber); }
+
+.plan-row-actions {
+  grid-row: 1 / 3;
+  grid-column: 5;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+/* The last few payments as bars. A price rise reads as a step here and as
+   nothing at all in a column of numbers. */
+.plan-spark {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 2px;
+  flex-shrink: 0;
+  width: 42px;
+  height: 24px;
+  opacity: 0.5;
+  transition: opacity var(--fast) var(--ease);
+}
+.plan-spark:hover { opacity: 0.9; }
+.plan-spark:disabled { cursor: default; }
+.plan-spark.is-empty { opacity: 0; pointer-events: none; }
+.plan-spark i { width: 4px; border-radius: 2px; background: var(--ink-3); }
+
+.plan-flags { display: grid; gap: 8px; }
+
+/* What a payee currently finds in the ledger, said as it is typed — a plan
+   is held on by its payee, and a rename that quietly lets go is the one
+   mistake this form can make. */
+.plan-matches {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 7px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+.plan-matches.is-empty { color: var(--amber); }
+
+/* The one nudge this screen makes: subscriptions that quietly stopped. */
+.plan-nudge {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border-color: color-mix(in srgb, var(--amber) 40%, var(--line-soft));
+}
+.plan-nudge p { margin-top: 2px; font-size: 12.5px; color: var(--ink-3); font-weight: 500; }
+.plan-nudge > div { flex: 1; min-width: 0; }
+.plan-nudge .btn { flex-shrink: 0; }
+.plan-nudge-glyph {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: var(--r-md);
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+/* ------------------------------------------------------------ calendar -- */
+
+.plan-cal-card { overflow: hidden; }
+.plan-cal { display: flex; flex-direction: column; }
+
+.plan-cal-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.plan-cal-nav { display: flex; align-items: center; gap: 4px; }
+.plan-cal-nav strong {
+  min-width: 148px;
+  text-align: center;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: var(--tight);
+}
+.plan-cal-totals { display: flex; gap: 22px; margin-left: auto; }
+.plan-cal-totals span { display: grid; gap: 1px; text-align: right; }
+.plan-cal-totals em {
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: var(--wide);
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.plan-cal-totals strong { font-size: 15px; font-weight: 600; letter-spacing: var(--tight); }
+.plan-cal-totals .is-paid { color: var(--ink-3); }
+
+.plan-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+}
+.plan-cal-weekday {
+  padding: 8px 10px;
+  background: var(--surface);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: var(--wide);
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.plan-cal-pad { background: var(--surface-2); }
+
+.plan-cal-day {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-height: 104px;
+  padding: 8px 8px 10px;
+  background: var(--surface);
+  text-align: left;
+  transition: background var(--fast) var(--ease);
+}
+.plan-cal-day:hover { background: var(--surface-3); }
+.plan-cal-day.is-past { background: var(--surface-2); }
+.plan-cal-day.is-past:hover { background: var(--surface-3); }
+.plan-cal-day.is-picked { background: var(--blue-soft); }
+
+.plan-cal-date {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+.plan-cal-date em {
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+/* Today wears the number itself rather than a dot beside it — one glance
+   should land on it without hunting for a marker. */
+.plan-cal-day.is-today {
+  box-shadow: inset 0 2px 0 var(--blue);
+}
+.plan-cal-day.is-today .plan-cal-date { color: var(--blue); }
+.plan-cal-day.is-late .plan-cal-date em { color: var(--red); }
+
+.plan-cal-items { display: grid; gap: 3px; min-width: 0; }
+.plan-cal-chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 6px;
+  border-radius: var(--r-xs);
+  background: color-mix(in srgb, var(--tint) 11%, transparent);
+  font-size: 11px;
+  font-weight: 550;
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plan-cal-chip i {
+  width: 5px;
+  height: 5px;
+  flex-shrink: 0;
+  border-radius: 99px;
+  background: var(--tint);
+}
+/* Paid is drawn quieter, not brighter: what is done with should recede so
+   the days still owed are what the month reads as. */
+.plan-cal-chip.is-paid { background: transparent; color: var(--ink-4); text-decoration: line-through; }
+.plan-cal-chip.is-paid i { background: var(--ink-4); }
+.plan-cal-chip.is-skipped { background: transparent; color: var(--ink-4); opacity: 0.6; }
+.plan-cal-more { font-size: 10.5px; font-weight: 500; color: var(--ink-4); padding-left: 6px; }
+
+.plan-cal-day-panel { overflow: hidden; }
+.plan-cal-day-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px 6px;
+}
+.plan-cal-day-head h4 { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+.plan-cal-day-panel ul { padding: 0 12px 12px; display: grid; gap: 2px; }
+.plan-cal-quiet { padding: 0 20px 18px; font-size: 13px; color: var(--ink-3); font-weight: 500; }
+
+.plan-cal-row {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 8px;
+  border-radius: var(--r-md);
+  text-align: left;
+  transition: background var(--fast) var(--ease);
+}
+.plan-cal-row:hover { background: var(--surface-inset); }
+.plan-cal-row-main { display: grid; gap: 1px; min-width: 0; }
+.plan-cal-row-main strong { font-size: 13.5px; font-weight: 600; }
+.plan-cal-row-main span { font-size: 11.5px; color: var(--ink-3); font-weight: 500; }
+.plan-cal-row-amount { display: flex; align-items: center; gap: 6px; color: var(--ink-3); }
+.plan-cal-row-amount strong { font-size: 14px; font-weight: 600; letter-spacing: var(--tight); }
+
+/* ------------------------------------------------- the overview's card -- */
+
+.planned-preview { display: grid; gap: 2px; margin-top: 6px; }
+.planned-preview-row {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 7px 8px;
+  border-radius: var(--r-md);
+  text-align: left;
+  transition: background var(--fast) var(--ease);
+}
+.planned-preview-row:hover { background: var(--surface-inset); }
+.planned-preview-main { display: grid; gap: 0; min-width: 0; }
+.planned-preview-main strong {
+  font-size: 13.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.planned-preview-main span { font-size: 11.5px; color: var(--ink-4); font-weight: 500; }
+.planned-preview-when { display: grid; gap: 0; text-align: right; }
+.planned-preview-when em {
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+.planned-preview-when strong { font-size: 13.5px; font-weight: 600; letter-spacing: var(--tight); }
+.planned-foot {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+
+.plan-inline-note { font-style: normal; font-size: 11.5px; color: var(--ink-4); font-weight: 500; }
+.breakdown-row.is-quiet { opacity: 0.62; }
+.breakdown-top strong em { font-style: normal; font-size: 11px; color: var(--ink-4); font-weight: 500; }
+
+@media (max-width: 1180px) {
+  .plan-cal-day { min-height: 88px; }
+  .plan-cal-chip { font-size: 10.5px; }
+}
+
+@media (max-width: 1080px) {
+  /* The due date is the first thing that can go: the row above it already
+     says how near it is in words. */
+  .plan-row { grid-template-columns: 38px minmax(0, 1fr) 118px 166px; }
+  .plan-row-main {
+    grid-column: 1 / 4;
+    grid-template-columns: 38px minmax(0, 1fr) 118px;
+    grid-template-columns: subgrid;
+  }
+  .plan-row-tags { grid-column: 2 / 4; }
+  .plan-row-actions { grid-column: 4; }
+  .plan-row-when { display: none; }
+  .plan-found { grid-template-columns: 20px 38px minmax(0, 1fr) 118px 96px 30px; }
+  .plan-found .plan-spark { display: none; }
+}
+
+@media (max-width: 860px) {
+  .plan-row { grid-template-columns: 38px minmax(0, 1fr) 132px; }
+  .plan-row-main {
+    grid-column: 1 / 3;
+    grid-template-columns: 38px minmax(0, 1fr);
+    grid-template-columns: subgrid;
+  }
+  .plan-row-amount { display: none; }
+  .plan-row-tags { grid-column: 2 / 3; }
+  .plan-row-actions { grid-column: 3; }
+  .plan-found { grid-template-columns: 20px 38px minmax(0, 1fr) 118px 30px; }
+  .plan-found-side { display: none; }
+  .plan-cal-totals { width: 100%; margin-left: 0; justify-content: space-between; }
+}
+
+/* What a template asks for rather than answers. Chips, because it is a set
+   of things picked out of a fixed list — the same gesture as pinning a label. */
+.ask-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* A ticked field is a question the form will hold you to, which is the
+     same blue everything else that waits on you wears. Set here rather than
+     per chip, so no dot comes with it. */
+  --chip-accent: var(--blue);
+}
+.tpl-asks { padding: 2px 8px 6px; }
+.tpl-asks .field-label { font-size: 11px; }
+
+/* The template editor: a name, what it leaves for you, and what it holds
+   against everything else. */
+.tpl-edit { display: flex; flex-direction: column; gap: 18px; }
+.tpl-holds { display: flex; flex-direction: column; gap: 2px; }
+.tpl-holds .field-label { margin-bottom: 6px; }
+.tpl-hold {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 12px;
+  border-radius: var(--r-md);
+  background: var(--surface-inset);
+  font-size: 12.5px;
+}
+.tpl-hold-name { font-weight: 600; color: var(--ink-2); flex-shrink: 0; }
+.tpl-hold-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-width: 0;
+  font-weight: 600;
+  color: var(--ink);
+  text-align: right;
+}
+.tpl-hold-value em {
+  font-style: normal;
+  font-weight: 500;
+  color: var(--ink-4);
+}
+/* A field it asks for is a question, so it reads as one rather than as a
+   value that happens to be missing. */
+.tpl-hold.is-asked { background: var(--blue-soft); }
+.tpl-hold.is-asked .tpl-hold-value { color: var(--blue); }
+
+/* ---------------------------------------------------- one plan's own page */
+
+.plan-detail-tags { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+
+.plan-change {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: var(--r-full);
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--surface-inset);
+  color: var(--ink-2);
+}
+.plan-change.is-up { background: var(--amber-soft); color: var(--amber); }
+.plan-change.is-down { background: var(--green-soft); color: var(--green); }
+
+/* A bar per cycle. The unpaid ones are drawn as empty slots rather than left
+   out — three gaps in a row is how you find out something stopped billing
+   you a year ago, and a chart that skips them cannot show it. */
+.cycle-bars { display: flex; flex-direction: column; gap: 12px; }
+.cycle-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 168px;
+  padding-top: 8px;
+}
+.cycle-slot {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  border-radius: var(--r-xs);
+  transition: background var(--fast) var(--ease);
+}
+.cycle-slot:hover { background: var(--surface-inset); }
+.cycle-bar {
+  width: 100%;
+  border-radius: 3px;
+  background: var(--ink-4);
+}
+/* Missed reads as an outline: the cycle happened, the money did not. */
+.cycle-slot.is-missed .cycle-bar {
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--red-soft) 0 3px,
+    transparent 3px 6px
+  );
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--red) 45%, transparent);
+}
+.cycle-slot.is-skipped .cycle-bar { background: var(--surface-inset); box-shadow: inset 0 0 0 1px var(--line); }
+.cycle-slot.is-due .cycle-bar { background: var(--surface-inset); box-shadow: inset 0 0 0 1px var(--line-strong); }
+
+.cycle-tip { bottom: auto; top: -6px; }
+
+.cycle-legend { display: flex; gap: 16px; }
+.cycle-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+.cycle-legend i { width: 9px; height: 9px; border-radius: 2px; background: var(--ink-4); }
+.cycle-legend i.is-missed {
+  background: var(--red-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--red) 45%, transparent);
+}
+.cycle-legend i.is-due { background: var(--surface-inset); box-shadow: inset 0 0 0 1px var(--line-strong); }
+
+.plan-history-card { overflow: hidden; }
+.plan-history-loading { height: 168px; }
+.plan-history { list-style: none; margin: 0; padding: 0 10px 10px; max-height: 420px; overflow-y: auto; }
+
+/* The same fixed tracks down every row, so the dates, the words and the
+   figures each read as a column rather than as thirteen separate rows. */
+.plan-history-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 104px 96px 14px;
+  align-items: center;
+  column-gap: 12px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--r-md);
+  text-align: left;
+  color: var(--ink-3);
+  transition: background var(--fast) var(--ease);
+}
+.plan-history-row:not(:disabled):hover { background: var(--surface-inset); }
+.plan-history-row:disabled { cursor: default; }
+
+.plan-history-mark {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-full);
+  background: var(--surface-inset);
+  color: var(--ink-3);
+}
+.plan-history-row.is-paid .plan-history-mark { background: var(--green-soft); color: var(--green); }
+.plan-history-row.is-missed .plan-history-mark { background: var(--red-soft); color: var(--red); }
+
+.plan-history-when { display: grid; gap: 0; min-width: 0; }
+.plan-history-when strong { font-size: 13.5px; font-weight: 600; color: var(--ink); }
+.plan-history-when span { font-size: 11.5px; color: var(--ink-4); font-weight: 500; }
+.plan-history-what { font-size: 12.5px; font-weight: 500; }
+.plan-history-row.is-missed .plan-history-what { color: var(--red); }
+.plan-history-amount {
+  text-align: right;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: var(--tight);
+  font-variant-numeric: tabular-nums;
+}
+.plan-history-row.is-paid .plan-history-amount { color: var(--ink); }
+.plan-history-row:not(.is-paid) .plan-history-amount { color: var(--ink-4); }
+
+@media (max-width: 720px) {
+  .plan-history-row { grid-template-columns: 22px minmax(0, 1fr) 96px 14px; }
+  .plan-history-what { display: none; }
+}
+
+/* ------------------------------------------------- linking payments to a plan */
+
+/* The link picker is the ledger, so it brings the bulk bar with it. Inside a
+   sheet that bar cannot be fixed to the window: the sheet is animated, and a
+   transformed ancestor anchors a fixed child to itself. */
+.record-picker { position: relative; }
+.record-picker .bulk-bar { position: absolute; bottom: 18px; z-index: 60; }
+
+/* Taking a payment back off a plan, from the row it sits on. Quiet until the
+   pointer is there: it is a correction, not a thing to reach for. */
+.plan-history li { display: grid; grid-template-columns: minmax(0, 1fr) 26px; align-items: center; }
+.plan-history-unlink {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-xs);
+  color: var(--ink-4);
+  opacity: 0;
+  transition: opacity var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.plan-history li:hover .plan-history-unlink { opacity: 1; }
+.plan-history-unlink:hover { color: var(--red); background: var(--red-soft); }

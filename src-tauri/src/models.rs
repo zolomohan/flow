@@ -213,6 +213,94 @@ pub struct LabelInput {
     pub color: String,
 }
 
+/* -------------------------------------------------------------- templates */
+
+/// A transaction worth writing more than once, kept by name: the rent, the
+/// Friday groceries, the standing transfer into savings. It holds the shape
+/// of a posting rather than a posting — no date, because the date is the one
+/// thing that is never the same twice.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TxTemplate {
+    pub id: String,
+    pub name: String,
+    /// income | expense | transfer
+    pub kind: String,
+    /// Zero means the template carries no amount, and the sheet opens on an
+    /// empty well: plenty of bills are the same every month except the figure.
+    pub amount: Paise,
+    /// Nullable where a posting's is not: an account can be deleted out from
+    /// under a template, and the template is still worth keeping.
+    pub account_id: Option<String>,
+    pub to_account_id: Option<String>,
+    pub category_id: Option<String>,
+    pub merchant: String,
+    pub note: Option<String>,
+    /// How many postings have been written from it, and when the last was —
+    /// what the list is ordered by, so what you use stays near the top.
+    pub used_count: i64,
+    pub last_used_at: Option<String>,
+    pub created_at: String,
+    // Denormalised for the list, exactly as a posting's are.
+    pub account_name: Option<String>,
+    pub account_color: Option<String>,
+    pub to_account_name: Option<String>,
+    pub category_name: Option<String>,
+    pub category_icon: Option<String>,
+    pub category_color: Option<String>,
+    /// The parts a templated bill is filed under. They add up to `amount`,
+    /// as a posting's do.
+    pub splits: Vec<TemplateSplit>,
+    /// Labels every posting written from it should wear.
+    pub labels: Vec<TxLabel>,
+    /// What the template asks for rather than answers: the fields it leaves
+    /// blank for you to fill in each time it is used. Everything not named
+    /// here is pre-baked and arrives filled in.
+    pub ask: Vec<String>,
+}
+
+/// One line of a templated split bill.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TemplateSplit {
+    pub id: String,
+    pub template_id: String,
+    pub amount: Paise,
+    pub category_id: Option<String>,
+    pub note: Option<String>,
+    pub sort_order: i64,
+    pub category_name: Option<String>,
+    pub category_icon: Option<String>,
+    pub category_color: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TxTemplateInput {
+    pub id: Option<String>,
+    pub name: String,
+    pub kind: String,
+    /// Zero to leave the amount out of the template.
+    pub amount: Paise,
+    pub account_id: Option<String>,
+    pub to_account_id: Option<String>,
+    pub category_id: Option<String>,
+    pub merchant: String,
+    pub note: Option<String>,
+    /// The parts to file it under. `None` and an empty list mean the same
+    /// thing here as they do nowhere else: a template is written whole every
+    /// time, so there is nothing half-saved to leave alone.
+    #[serde(default)]
+    pub splits: Option<Vec<TransactionSplitInput>>,
+    #[serde(default)]
+    pub label_ids: Option<Vec<String>>,
+    /// The fields to leave blank and ask for each time. Anything not named
+    /// here is pre-baked. Unknown names are ignored rather than refused: a
+    /// template is not worth losing over a field that no longer exists.
+    #[serde(default)]
+    pub ask: Option<Vec<String>>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransactionQuery {
@@ -666,4 +754,133 @@ pub struct TransactionPatch {
 pub struct BulkResult {
     pub changed: i64,
     pub skipped: i64,
+}
+
+/* ------------------------------------------------------- planned payments */
+
+/// One posting a plan has actually collected, for the little history a card
+/// shows. Light on purpose: the ledger already holds the whole of it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanPosting {
+    pub id: String,
+    pub occurred_at: String,
+    pub amount: Paise,
+}
+
+/// A payment that comes round again: a subscription, a rent, an EMI, a salary.
+///
+/// The stored half is what you told it; everything below `created_at` is read
+/// off the ledger each time it is asked for, so a plan can never disagree
+/// with the postings that answer to it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Plan {
+    pub id: String,
+    pub name: String,
+    /// income | expense | transfer
+    pub kind: String,
+    /// What it is expected to come to. For a variable plan this is the
+    /// figure to budget against, not a promise.
+    pub amount: Paise,
+    pub account_id: Option<String>,
+    pub account_name: Option<String>,
+    pub account_color: Option<String>,
+    pub to_account_id: Option<String>,
+    pub to_account_name: Option<String>,
+    pub category_id: Option<String>,
+    pub category_name: Option<String>,
+    pub category_icon: Option<String>,
+    pub category_color: Option<String>,
+    pub merchant: String,
+    pub note: Option<String>,
+    /// weekly | fortnightly | monthly | quarterly | half_yearly | yearly
+    pub cadence: String,
+    /// Every *n* of those. 1 for the ordinary case.
+    pub every: i64,
+    /// A date the cycle lands on — not necessarily the first. Every other
+    /// due date is counted from it, in both directions, so a plan adopted at
+    /// the far end of a run still carries the history behind it.
+    pub anchor_on: String,
+    pub ends_on: Option<String>,
+    /// Money that leaves on its own — a mandate or a standing instruction —
+    /// as against a bill somebody has to go and pay.
+    pub automatic: bool,
+    /// The amount moves every cycle: a power bill, a card statement. Drift
+    /// on one of these is weather, not news.
+    pub variable: bool,
+    pub archived: bool,
+    /// The counterparty key imports recognise this by, when it came from one.
+    pub match_key: Option<String>,
+    pub created_at: String,
+
+    /* ------------------------------------- read off the ledger, not stored */
+    /// The next cycle nobody has paid. None once the plan has run out.
+    pub next_due: Option<String>,
+    /// Days from today to `next_due`; negative when it is already past.
+    pub days_until: Option<i64>,
+    /// overdue | due | upcoming | ended | archived
+    pub status: String,
+    /// Cycles gone by with nothing paid against them.
+    pub missed: i64,
+    pub last_paid_on: Option<String>,
+    pub last_amount: Paise,
+    /// The mean of what it has lately actually cost.
+    pub average_amount: Paise,
+    pub paid_count: i64,
+    /// Everything this plan has taken since it started.
+    pub observed_total: Paise,
+    /// What it comes to a month, and a year, whatever its cadence.
+    pub monthly_amount: Paise,
+    pub yearly_amount: Paise,
+    /// The last payment against the expected amount. Positive is a rise.
+    pub drift: Paise,
+    /// The last few payments, oldest first.
+    pub recent: Vec<PlanPosting>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanInput {
+    pub id: Option<String>,
+    pub name: String,
+    pub kind: String,
+    pub amount: Paise,
+    pub account_id: Option<String>,
+    pub to_account_id: Option<String>,
+    pub category_id: Option<String>,
+    pub merchant: String,
+    pub note: Option<String>,
+    pub cadence: String,
+    pub every: Option<i64>,
+    pub anchor_on: String,
+    pub ends_on: Option<String>,
+    pub automatic: Option<bool>,
+    pub variable: Option<bool>,
+    pub match_key: Option<String>,
+    pub archived: Option<bool>,
+}
+
+/// One turn of one plan, on the day it falls. What a calendar is made of.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanOccurrence {
+    pub plan_id: String,
+    pub name: String,
+    pub kind: String,
+    pub due_on: String,
+    /// What was expected of this cycle.
+    pub amount: Paise,
+    pub merchant: String,
+    pub category_icon: Option<String>,
+    pub category_color: Option<String>,
+    pub account_name: Option<String>,
+    pub automatic: bool,
+    /// Whether a posting in the book answers for this cycle.
+    pub paid: bool,
+    pub transaction_id: Option<String>,
+    /// What it actually came to, when it is paid.
+    pub actual_amount: Paise,
+    /// Deliberately let go rather than paid.
+    pub skipped: bool,
 }

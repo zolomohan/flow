@@ -12,15 +12,15 @@ pub struct Db(pub Mutex<Connection>);
 
 pub type Result<T> = std::result::Result<T, String>;
 
-fn oops<E: std::fmt::Display>(e: E) -> String {
+pub(crate) fn oops<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
 
-fn now() -> String {
+pub(crate) fn now() -> String {
     Utc::now().to_rfc3339()
 }
 
-fn new_id() -> String {
+pub(crate) fn new_id() -> String {
     Uuid::new_v4().to_string()
 }
 
@@ -258,6 +258,48 @@ fn migrate(conn: &Connection) -> Result<()> {
         -- import of them was filed, keyed on the stable part of the bank's
         -- narration. Confirmed means a person said so; unconfirmed rules were
         -- seeded or inferred, and their suggestions still land in triage.
+        -- A transaction worth writing more than once, kept by name. It holds
+        -- the shape of a posting and not a posting: no date, because the date
+        -- is the one thing that is never the same twice. The three references
+        -- are nullable where a posting's are not — an account can be deleted
+        -- out from under a template, and the template is still worth keeping.
+        CREATE TABLE IF NOT EXISTS transaction_templates (
+            id            TEXT PRIMARY KEY,
+            name          TEXT NOT NULL UNIQUE,
+            kind          TEXT NOT NULL CHECK (kind IN ('income','expense','transfer')),
+            -- Zero means it carries no amount: plenty of bills are the same
+            -- every month except the figure.
+            amount        INTEGER NOT NULL DEFAULT 0 CHECK (amount >= 0),
+            account_id    TEXT REFERENCES accounts(id) ON DELETE SET NULL,
+            to_account_id TEXT REFERENCES accounts(id) ON DELETE SET NULL,
+            category_id   TEXT REFERENCES categories(id) ON DELETE SET NULL,
+            merchant      TEXT NOT NULL DEFAULT '',
+            note          TEXT,
+            used_count    INTEGER NOT NULL DEFAULT 0,
+            last_used_at  TEXT,
+            -- The fields it asks for rather than answers, comma separated.
+            -- Everything not named here is pre-baked.
+            ask_fields    TEXT NOT NULL DEFAULT '',
+            created_at    TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS template_splits (
+            id          TEXT PRIMARY KEY,
+            template_id TEXT NOT NULL REFERENCES transaction_templates(id) ON DELETE CASCADE,
+            amount      INTEGER NOT NULL CHECK (amount > 0),
+            category_id TEXT REFERENCES categories(id) ON DELETE SET NULL,
+            note        TEXT,
+            sort_order  INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_template_splits ON template_splits(template_id);
+
+        CREATE TABLE IF NOT EXISTS template_labels (
+            template_id TEXT NOT NULL REFERENCES transaction_templates(id) ON DELETE CASCADE,
+            label_id    TEXT NOT NULL REFERENCES labels(id) ON DELETE CASCADE,
+            PRIMARY KEY (template_id, label_id)
+        ) WITHOUT ROWID;
+
         CREATE TABLE IF NOT EXISTS import_rules (
             id              TEXT PRIMARY KEY,
             match_key       TEXT NOT NULL UNIQUE,
@@ -269,6 +311,57 @@ fn migrate(conn: &Connection) -> Result<()> {
             confirmed       INTEGER NOT NULL DEFAULT 0,
             updated_at      TEXT NOT NULL
         );
+
+        -- A payment that comes round again: rent, an EMI, a subscription,
+        -- a salary. What is kept here is the promise — when it falls due and
+        -- what it ought to come to. Whether any given cycle was actually paid
+        -- is never stored, because the ledger already knows: a plan that kept
+        -- its own tally would sooner or later disagree with the book, and the
+        -- book is the one that has the money in it.
+        CREATE TABLE IF NOT EXISTS plans (
+            id              TEXT PRIMARY KEY,
+            name            TEXT NOT NULL,
+            kind            TEXT NOT NULL CHECK (kind IN ('income','expense','transfer')),
+            amount          INTEGER NOT NULL DEFAULT 0 CHECK (amount >= 0),
+            account_id      TEXT REFERENCES accounts(id) ON DELETE SET NULL,
+            to_account_id   TEXT REFERENCES accounts(id) ON DELETE SET NULL,
+            category_id     TEXT REFERENCES categories(id) ON DELETE SET NULL,
+            merchant        TEXT NOT NULL DEFAULT '',
+            note            TEXT,
+            cadence         TEXT NOT NULL CHECK (cadence IN
+                                ('weekly','fortnightly','monthly','quarterly',
+                                 'half_yearly','yearly')),
+            every           INTEGER NOT NULL DEFAULT 1 CHECK (every > 0),
+            -- A date the cycle lands on. Every other due date is counted
+            -- from it rather than from the one before, so a monthly plan
+            -- anchored on the 31st still falls on the last day of a short
+            -- month rather than sliding to the 1st. It is not necessarily
+            -- the first: a bill whose day has moved is best counted from
+            -- where it falls now, and its history is found by walking the
+            -- same cycle backwards.
+            anchor_on       TEXT NOT NULL,
+            ends_on         TEXT,
+            automatic       INTEGER NOT NULL DEFAULT 1,
+            variable        INTEGER NOT NULL DEFAULT 0,
+            -- Cycles deliberately let go: nothing is owed up to this date.
+            skipped_through TEXT,
+            -- The counterparty key an import would recognise this by, so a
+            -- statement's own spelling of the payee still finds its plan.
+            match_key       TEXT,
+            archived        INTEGER NOT NULL DEFAULT 0,
+            created_at      TEXT NOT NULL
+        );
+
+        -- The postings a plan has claimed by hand. Most of what answers to a
+        -- plan is found by its payee, but a bill paid from another account,
+        -- or under a name the statement mangled, has to be pointed at.
+        CREATE TABLE IF NOT EXISTS plan_entries (
+            plan_id        TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+            transaction_id TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+            PRIMARY KEY (plan_id, transaction_id)
+        ) WITHOUT ROWID;
+
+        CREATE INDEX IF NOT EXISTS idx_plan_entries_tx ON plan_entries(transaction_id);
         ",
     )
     .map_err(oops)?;
@@ -308,6 +401,14 @@ fn migrate(conn: &Connection) -> Result<()> {
         "owns_transaction",
         "owns_transaction INTEGER NOT NULL DEFAULT 0",
     )?;
+    // Books whose templates predate asking have templates that answer for
+    // everything, which is exactly what the empty default says.
+    add_column_if_missing(
+        conn,
+        "transaction_templates",
+        "ask_fields",
+        "ask_fields TEXT NOT NULL DEFAULT ''",
+    )?;
     migrate_gold_to_grams(conn)?;
     conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_cat_parent ON categories(parent_id);")
         .map_err(oops)?;
@@ -321,6 +422,9 @@ fn migrate(conn: &Connection) -> Result<()> {
     )
     .map_err(oops)?;
     seed_categories(conn)?;
+    // Books written before the icon set grew have whole groups wearing one
+    // glyph. Give them the icons a new book is seeded with, once.
+    refresh_category_icons(conn)?;
     // A group is a heading rather than a place to file things. Books written
     // before that was true still have postings sitting on one, and so does a
     // book where a category grew its first sub-category yesterday.
@@ -476,6 +580,171 @@ fn seed_categories(conn: &Connection) -> Result<()> {
     }
     Ok(())
 }
+
+
+/// Every category name this book has grown, and the glyph that actually says
+/// what it is. Keyed on the group as well as the name, because "Gifts" under
+/// Work is not the same errand as "Gifts" under Relationship, and "Shopping"
+/// under Home is furniture where under Tech it is a laptop.
+///
+/// `("", name)` matches a top-level group; anything not named here keeps
+/// whatever icon it already has.
+const CATEGORY_GLYPHS: &[(&str, &str, &str)] = &[
+    // -------------------------------------------------------- expense
+    ("", "Education", "graduation-cap"),
+    ("", "Family", "users-round"),
+    ("Family", "Support", "hand-heart"),
+    ("Family", "Hangouts", "party-popper"),
+    ("Family", "Gifts", "gift"),
+    ("Family", "Life", "heart"),
+    ("", "Financial", "landmark"),
+    ("Financial", "Loans, interests", "handshake"),
+    ("Financial", "Unknown", "circle-help"),
+    ("Financial", "Taxes", "percent"),
+    ("Financial", "Charges, Fees", "receipt"),
+    ("Financial", "Gold", "gem"),
+    ("", "Food & Drink", "utensils"),
+    ("Food & Drink", "Restaurant", "utensils-crossed"),
+    ("Food & Drink", "Snacks", "cookie"),
+    ("Food & Drink", "Groceries", "shopping-basket"),
+    ("Food & Drink", "Coffee", "coffee"),
+    ("Food & Drink", "Drinks", "beer"),
+    ("Food & Drink", "Others", "hand-platter"),
+    ("Food & Drink", "Subscription", "repeat"),
+    ("", "Friends", "users"),
+    ("Friends", "Gifts", "gift"),
+    ("Friends", "Hangouts", "party-popper"),
+    ("", "Health", "heart-pulse"),
+    ("Health", "Drugstore", "pill"),
+    ("Health", "Medical", "stethoscope"),
+    ("Health", "Health and beauty", "sparkles"),
+    ("Health", "Fitness", "dumbbell"),
+    ("Health", "Others", "hospital"),
+    ("Health", "Relaxation", "flower-2"),
+    ("Health", "Grooming", "scissors"),
+    ("", "Hobbies", "palette"),
+    ("Hobbies", "Movies", "clapperboard"),
+    ("Hobbies", "Games", "gamepad-2"),
+    ("Hobbies", "Software, apps, games", "app-window"),
+    ("Hobbies", "Fun", "sparkles"),
+    ("Hobbies", "Events", "ticket"),
+    ("Hobbies", "Diving", "waves"),
+    ("Hobbies", "Books", "book-open"),
+    ("Hobbies", "Track", "flag"),
+    ("Hobbies", "Cubing", "box"),
+    ("Hobbies", "Misc", "shapes"),
+    ("", "Home", "house"),
+    ("Home", "Rent", "key-round"),
+    ("Home", "Shopping", "sofa"),
+    ("Home", "Energy, utilities", "zap"),
+    ("Home", "Fees", "receipt"),
+    ("Home", "Maintenance", "wrench"),
+    ("Home", "Services", "hammer"),
+    ("", "Others", "circle-dashed"),
+    ("Others", "Unknown", "circle-help"),
+    ("Others", "Charity", "heart-handshake"),
+    ("", "Relationship", "heart"),
+    ("Relationship", "Date", "wine"),
+    ("Relationship", "Taxi", "car-taxi-front"),
+    ("Relationship", "Gifts", "gift"),
+    ("Relationship", "Misc", "heart"),
+    ("Relationship", "Takeaway", "soup"),
+    ("", "Shopping", "shopping-bag"),
+    ("Shopping", "Clothes", "shirt"),
+    ("Shopping", "Electronics", "smartphone"),
+    ("Shopping", "Accessories", "watch"),
+    ("Shopping", "Stationery", "pencil-ruler"),
+    ("Shopping", "Others", "shopping-cart"),
+    ("", "Tech", "cpu"),
+    ("Tech", "Broadband", "wifi"),
+    ("Tech", "Phone", "smartphone"),
+    ("Tech", "Repairs", "wrench"),
+    ("Tech", "Subscriptions", "repeat"),
+    ("Tech", "Shopping", "laptop"),
+    ("", "Transport", "car-front"),
+    ("Transport", "Taxi", "car-taxi-front"),
+    ("Transport", "Public", "bus"),
+    ("Transport", "Long Distance", "train-front"),
+    ("Transport", "Rentals", "key-round"),
+    ("", "Travel", "plane"),
+    ("Travel", "Vacation", "palmtree"),
+    ("Travel", "Business trips", "briefcase"),
+    ("Travel", "Others", "luggage"),
+    ("", "Vehicle", "car"),
+    ("Vehicle", "Fuel", "fuel"),
+    ("Vehicle", "Parking", "square-parking"),
+    ("Vehicle", "Insurance", "shield-check"),
+    ("Vehicle", "Services", "wrench"),
+    ("Vehicle", "Maintanence", "cog"),
+    ("Vehicle", "Maintenance", "cog"),
+    ("Vehicle", "Govt", "scroll-text"),
+    ("", "Work", "briefcase"),
+    ("Work", "Gifts", "gift"),
+    ("Work", "Misc", "briefcase"),
+    // Names the default book seeds that this one happens not to have.
+    ("", "Bills & Utilities", "zap"),
+    ("", "Groceries", "shopping-basket"),
+    ("", "Rent & Home", "house"),
+    ("", "Entertainment", "clapperboard"),
+    ("", "Subscriptions", "repeat"),
+    ("", "Fees & Charges", "receipt"),
+    ("", "Family & Gifts", "gift"),
+    // --------------------------------------------------------- income
+    ("", "Adjustments", "sliders-horizontal"),
+    ("Adjustments", "Adjustment", "sliders-horizontal"),
+    ("", "Gifts", "gift"),
+    ("", "Interest & Sales", "trending-up"),
+    ("Interest & Sales", "Interests", "piggy-bank"),
+    ("Interest & Sales", "Sale", "tag"),
+    ("", "Lending & Renting", "handshake"),
+    ("Lending & Renting", "Lending, renting", "handshake"),
+    ("", "Other Income", "circle-dashed"),
+    ("Other Income", "Others", "circle-dashed"),
+    ("Other Income", "Other", "circle-dashed"),
+    ("Other Income", "Loans, interests", "handshake"),
+    ("Other Income", "Financial expenses", "receipt"),
+    ("Other Income", "Restaurant", "utensils-crossed"),
+    ("", "Refunds & Rewards", "undo-2"),
+    ("Refunds & Rewards", "Refunds", "undo-2"),
+    ("Refunds & Rewards", "Rewards", "award"),
+    ("", "Salary & Wages", "briefcase"),
+    ("Salary & Wages", "Wage, invoices", "banknote"),
+    ("Salary & Wages", "Income", "wallet"),
+    ("", "Salary", "briefcase"),
+    ("", "Business", "store"),
+    ("", "Interest", "piggy-bank"),
+    ("", "Investments", "trending-up"),
+    ("", "Refunds", "undo-2"),
+    ("", "Other Income", "circle-dashed"),
+];
+
+/// A book written before the icon set was any good has whole groups wearing
+/// one glyph — every sub-category of Health a heartbeat, every child of
+/// Family a present. This walks the names above over what is there once, so
+/// an existing book gets the same icons a new one is seeded with. It runs a
+/// single time: after it, the icon on a category is whatever its owner last
+/// chose, and nothing here overrules that.
+fn refresh_category_icons(conn: &Connection) -> Result<()> {
+    if setting(conn, ICON_REFRESH_KEY)?.is_some() {
+        return Ok(());
+    }
+    let mut stmt = conn
+        .prepare(
+            "UPDATE categories SET icon = ?3
+             WHERE name = ?2
+               AND COALESCE((SELECT p.name FROM categories p WHERE p.id = categories.parent_id), '') = ?1
+               AND icon <> ?3",
+        )
+        .map_err(oops)?;
+    for (parent, name, icon) in CATEGORY_GLYPHS {
+        stmt.execute(params![parent, name, icon]).map_err(oops)?;
+    }
+    drop(stmt);
+    set_setting(conn, ICON_REFRESH_KEY, "1")
+}
+
+/// Marks the one-time icon pass above as done.
+const ICON_REFRESH_KEY: &str = "category_icons_refreshed";
 
 // ---------------------------------------------------------------- accounts
 
@@ -1786,6 +2055,373 @@ pub fn delete_transactions(conn: &Connection, ids: &[String]) -> Result<i64> {
 pub fn delete_transaction(conn: &Connection, id: &str) -> Result<()> {
     conn.execute("DELETE FROM transactions WHERE id = ?1", params![id])
         .map_err(oops)?;
+    Ok(())
+}
+
+// ------------------------------------------------------------------ templates
+
+/// One template with the names its three references stand for, so a list of
+/// them reads without a second round-trip — exactly as a posting's does.
+const TEMPLATE_SELECT: &str = "
+SELECT t.id, t.name, t.kind, t.amount, t.account_id, t.to_account_id, t.category_id,
+       t.merchant, t.note, t.used_count, t.last_used_at, t.created_at,
+       a.name, a.color, ta.name, c.name, c.icon, c.color, t.ask_fields
+FROM transaction_templates t
+LEFT JOIN accounts a ON a.id = t.account_id
+LEFT JOIN accounts ta ON ta.id = t.to_account_id
+LEFT JOIN categories c ON c.id = t.category_id
+";
+
+fn template_row(r: &Row) -> rusqlite::Result<TxTemplate> {
+    Ok(TxTemplate {
+        id: r.get(0)?,
+        name: r.get(1)?,
+        kind: r.get(2)?,
+        amount: r.get(3)?,
+        account_id: r.get(4)?,
+        to_account_id: r.get(5)?,
+        category_id: r.get(6)?,
+        merchant: r.get(7)?,
+        note: r.get(8)?,
+        used_count: r.get(9)?,
+        last_used_at: r.get(10)?,
+        created_at: r.get(11)?,
+        account_name: r.get(12)?,
+        account_color: r.get(13)?,
+        to_account_name: r.get(14)?,
+        category_name: r.get(15)?,
+        category_icon: r.get(16)?,
+        category_color: r.get(17)?,
+        splits: Vec::new(),
+        labels: Vec::new(),
+        ask: r
+            .get::<_, String>(18)?
+            .split(',')
+            .filter(|f| !f.is_empty())
+            .map(str::to_string)
+            .collect(),
+    })
+}
+
+/// The fields a template may ask for rather than answer. Anything else sent
+/// is dropped: a template is not worth losing over a field that has gone.
+const ASKABLE: [&str; 6] = [
+    "amount",
+    "account",
+    "toAccount",
+    "category",
+    "merchant",
+    "note",
+];
+
+/// What a template will ask for, in a settled order and with the fields that
+/// mean nothing for its kind taken out — a transfer has no category to ask
+/// about, and only a transfer has an account to arrive in.
+fn asked_fields(kind: &str, ask: &[String]) -> Vec<String> {
+    ASKABLE
+        .iter()
+        .filter(|field| ask.iter().any(|a| a == *field))
+        .filter(|field| match **field {
+            "category" => kind != "transfer",
+            "toAccount" => kind == "transfer",
+            _ => true,
+        })
+        .map(|f| (*f).to_string())
+        .collect()
+}
+
+/// Fills in the parts and the pins for a set of templates already read.
+fn hydrate_templates(conn: &Connection, rows: &mut [TxTemplate]) -> Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let index: HashMap<String, usize> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (t.id.clone(), i))
+        .collect();
+    // Owned rather than borrowed: the parts are pushed back into `rows` below,
+    // and a borrow of it could not still be open when that happens.
+    let ids: Vec<String> = rows.iter().map(|t| t.id.clone()).collect();
+    let ph = placeholders(ids.len());
+
+    let sql = format!(
+        "SELECT s.id, s.template_id, s.amount, s.category_id, s.note, s.sort_order,
+                c.name, c.icon, c.color
+         FROM template_splits s
+         LEFT JOIN categories c ON c.id = s.category_id
+         WHERE s.template_id IN ({ph})
+         ORDER BY s.sort_order, s.id"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(oops)?;
+    let splits = stmt
+        .query_map(params_from_iter(ids.iter()), |r| {
+            Ok(TemplateSplit {
+                id: r.get(0)?,
+                template_id: r.get(1)?,
+                amount: r.get(2)?,
+                category_id: r.get(3)?,
+                note: r.get(4)?,
+                sort_order: r.get(5)?,
+                category_name: r.get(6)?,
+                category_icon: r.get(7)?,
+                category_color: r.get(8)?,
+            })
+        })
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?;
+    for split in splits {
+        if let Some(&i) = index.get(&split.template_id) {
+            rows[i].splits.push(split);
+        }
+    }
+
+    let sql = format!(
+        "SELECT tl.template_id, l.id, l.name, l.color
+         FROM template_labels tl
+         JOIN labels l ON l.id = tl.label_id
+         WHERE tl.template_id IN ({ph})
+         ORDER BY l.name"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(oops)?;
+    let labels = stmt
+        .query_map(params_from_iter(ids.iter()), |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                TxLabel {
+                    id: r.get(1)?,
+                    name: r.get(2)?,
+                    color: r.get(3)?,
+                },
+            ))
+        })
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?;
+    for (template_id, label) in labels {
+        if let Some(&i) = index.get(&template_id) {
+            rows[i].labels.push(label);
+        }
+    }
+    Ok(())
+}
+
+/// Every template, what you reach for most at the top. A template made and
+/// never used yet sorts by the day it was made, so it is where you left it.
+pub fn list_templates(conn: &Connection) -> Result<Vec<TxTemplate>> {
+    let sql = format!("{TEMPLATE_SELECT} ORDER BY COALESCE(t.last_used_at, t.created_at) DESC, t.name");
+    let mut stmt = conn.prepare(&sql).map_err(oops)?;
+    let mut rows = stmt
+        .query_map([], |r| template_row(r))
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?;
+    drop(stmt);
+    hydrate_templates(conn, &mut rows)?;
+    Ok(rows)
+}
+
+pub fn get_template(conn: &Connection, id: &str) -> Result<TxTemplate> {
+    let sql = format!("{TEMPLATE_SELECT} WHERE t.id = ?1");
+    let mut rows = vec![conn
+        .query_row(&sql, params![id], |r| template_row(r))
+        .map_err(|_| "That template is not there any more.".to_string())?];
+    hydrate_templates(conn, &mut rows)?;
+    Ok(rows.remove(0))
+}
+
+/// Writes a template whole: what it says, the parts it is filed under, and the
+/// labels it pins. There is nothing half-saved to leave alone, so unlike a
+/// posting every save replaces the lot.
+pub fn save_template(conn: &Connection, input: TxTemplateInput) -> Result<TxTemplate> {
+    let name = input.name.trim().to_string();
+    if name.is_empty() {
+        return Err("A template needs a name.".into());
+    }
+    if !matches!(input.kind.as_str(), "income" | "expense" | "transfer") {
+        return Err("A template has to be an income, an expense or a transfer.".into());
+    }
+    if input.amount < 0 {
+        return Err("An amount cannot be negative.".into());
+    }
+    let transfer = input.kind == "transfer";
+    let category_id = if transfer {
+        None
+    } else {
+        input.category_id.filter(|c| !c.is_empty())
+    };
+    refuse_a_group(conn, category_id.as_deref())?;
+    let account_id = input.account_id.filter(|a| !a.is_empty());
+    let to_account_id = if transfer {
+        input.to_account_id.filter(|a| !a.is_empty())
+    } else {
+        None
+    };
+    if transfer && to_account_id.is_some() && to_account_id == account_id {
+        return Err("A transfer needs two different accounts.".into());
+    }
+
+    let splits = input.splits.unwrap_or_default();
+    if !splits.is_empty() {
+        if transfer {
+            return Err(
+                "Transfers move money between your own accounts, so there is nothing to split."
+                    .into(),
+            );
+        }
+        if splits.len() < 2 {
+            return Err("A split needs at least two parts.".into());
+        }
+        if splits.iter().any(|s| s.amount <= 0) {
+            return Err("Every part of a split needs an amount greater than zero.".into());
+        }
+        // The parts are what make up the amount, so a template that divides a
+        // bill has to say what the bill comes to. Change the figure when you
+        // use it and the last part takes the difference, as it does anywhere.
+        let total: Paise = splits.iter().map(|s| s.amount).sum();
+        if total != input.amount {
+            return Err(format!(
+                "The parts come to ₹{} but the template is ₹{}.",
+                total / 100,
+                input.amount / 100
+            ));
+        }
+        for part in &splits {
+            refuse_a_group(conn, part.category_id.as_deref())?;
+        }
+    }
+
+    let ask = asked_fields(&input.kind, &input.ask.unwrap_or_default());
+    // A template that divides a bill is dividing a known figure. Asking for
+    // the amount would leave the parts standing against nothing.
+    if ask.iter().any(|f| f == "amount") && !splits.is_empty() {
+        return Err(
+            "A template that splits a bill has to say what the bill comes to.".into(),
+        );
+    }
+    let ask_fields = ask.join(",");
+
+    let taken = |e: rusqlite::Error| {
+        if e.to_string().contains("UNIQUE") {
+            format!("There is already a template called \"{name}\".")
+        } else {
+            e.to_string()
+        }
+    };
+
+    let guard = conn.unchecked_transaction().map_err(oops)?;
+    let id = match input.id.filter(|i| !i.is_empty()) {
+        Some(id) => {
+            let changed = conn
+                .execute(
+                    "UPDATE transaction_templates
+                        SET name = ?2, kind = ?3, amount = ?4, account_id = ?5,
+                            to_account_id = ?6, category_id = ?7, merchant = ?8, note = ?9,
+                            ask_fields = ?10
+                      WHERE id = ?1",
+                    params![
+                        id,
+                        name,
+                        input.kind,
+                        input.amount,
+                        account_id,
+                        to_account_id,
+                        category_id,
+                        input.merchant.trim(),
+                        input.note.as_deref().map(str::trim).filter(|n| !n.is_empty()),
+                        ask_fields,
+                    ],
+                )
+                .map_err(taken)?;
+            if changed == 0 {
+                return Err("That template is not there any more.".into());
+            }
+            id
+        }
+        None => {
+            let id = new_id();
+            conn.execute(
+                "INSERT INTO transaction_templates
+                    (id, name, kind, amount, account_id, to_account_id, category_id,
+                     merchant, note, ask_fields, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    id,
+                    name,
+                    input.kind,
+                    input.amount,
+                    account_id,
+                    to_account_id,
+                    category_id,
+                    input.merchant.trim(),
+                    input.note.as_deref().map(str::trim).filter(|n| !n.is_empty()),
+                    ask_fields,
+                    now()
+                ],
+            )
+            .map_err(taken)?;
+            id
+        }
+    };
+
+    conn.execute(
+        "DELETE FROM template_splits WHERE template_id = ?1",
+        params![id],
+    )
+    .map_err(oops)?;
+    for (i, split) in splits.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO template_splits (id, template_id, amount, category_id, note, sort_order)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                new_id(),
+                id,
+                split.amount,
+                split.category_id.as_deref().filter(|c| !c.is_empty()),
+                split.note.as_deref().map(str::trim).filter(|n| !n.is_empty()),
+                i as i64
+            ],
+        )
+        .map_err(oops)?;
+    }
+
+    conn.execute(
+        "DELETE FROM template_labels WHERE template_id = ?1",
+        params![id],
+    )
+    .map_err(oops)?;
+    for label in input.label_ids.unwrap_or_default() {
+        conn.execute(
+            "INSERT OR IGNORE INTO template_labels (template_id, label_id) VALUES (?1, ?2)",
+            params![id, label],
+        )
+        .map_err(oops)?;
+    }
+    guard.commit().map_err(oops)?;
+    get_template(conn, &id)
+}
+
+/// The template goes. Every posting written from it stays: what a template
+/// left behind is an entry in the ledger, and it belongs to the ledger.
+pub fn delete_template(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute("DELETE FROM transaction_templates WHERE id = ?1", params![id])
+        .map_err(oops)?;
+    Ok(())
+}
+
+/// Counts one posting written from a template, so the list keeps what you
+/// actually reach for near the top. Called once the posting is saved rather
+/// than when the form is filled: a template you opened and thought better of
+/// was never used.
+pub fn touch_template(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE transaction_templates
+            SET used_count = used_count + 1, last_used_at = ?2
+          WHERE id = ?1",
+        params![id, now()],
+    )
+    .map_err(oops)?;
     Ok(())
 }
 
@@ -3920,6 +4556,228 @@ pub fn gold_value_series(
         .collect())
 }
 
+/// A fund's units as they arrived and left: signed changes, oldest first, each
+/// on the day it was allotted rather than the day the money moved.
+fn lot_quantities(conn: &Connection, holding_id: &str) -> Result<Vec<(NaiveDate, Scaled)>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT COALESCE(l.allotted_at, l.occurred_at), l.kind, l.quantity_e4
+             FROM investment_lots l WHERE l.holding_id = ?1",
+        )
+        .map_err(oops)?;
+    let rows = stmt
+        .query_map(params![holding_id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Scaled>(2)?,
+            ))
+        })
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?;
+    let mut out: Vec<(NaiveDate, Scaled)> = rows
+        .into_iter()
+        .filter_map(|(day, kind, quantity_e4)| {
+            let day = NaiveDate::parse_from_str(day.get(..10)?, "%Y-%m-%d").ok()?;
+            Some((day, if kind == "sell" { -quantity_e4 } else { quantity_e4 }))
+        })
+        .collect();
+    out.sort_by_key(|(day, _)| *day);
+    Ok(out)
+}
+
+/// What everything you hold has come to, day by day — one line for the whole
+/// portfolio rather than one per holding.
+///
+/// The three kinds are valued three different ways and none of them keep the
+/// same calendar: a NAV is published on business days, a gold rate on the days
+/// the fix runs, and a deposit has no market at all, only an accrual. So the
+/// days are taken from whichever markets published one, each price is carried
+/// across the days its own market was shut, and the deposits are worked out on
+/// those same days. Nothing counts before the day it was yours, and the line
+/// starts where the portfolio does rather than at a run of zeros.
+pub fn portfolio_value_series(conn: &Connection, days: Option<i64>) -> Result<Vec<ValuePoint>> {
+    let since = since_date(days);
+    let today = Utc::now().date_naive();
+
+    // What is closed is not part of what you hold, and counting it would walk
+    // the line off a cliff on the day it went.
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, kind, scheme_code, purity_e4, grams_e4, acquired_on, rate_e4, matures_on
+             FROM holdings WHERE closed_at IS NULL",
+        )
+        .map_err(oops)?;
+    let held = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<Scaled>>(3)?,
+                r.get::<_, Scaled>(4)?,
+                r.get::<_, Option<String>>(5)?,
+                r.get::<_, Option<Scaled>>(6)?,
+                r.get::<_, Option<String>>(7)?,
+            ))
+        })
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?;
+    if held.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Every gold holding rides the same line, rescaled per piece: a dozen
+    // bangles of different karats share one market, and the market is the
+    // expensive read.
+    let pure = if held.iter().any(|h| h.1 == "gold") {
+        gold_series(conn, 10_000, since.as_deref())?
+    } else {
+        Vec::new()
+    };
+
+    // A weight held from a day; units that come and go with the lots; and an
+    // accrual with no market behind it at all.
+    let mut weighed: Vec<(Vec<PricePoint>, Scaled, Option<NaiveDate>)> = Vec::new();
+    let mut traded: Vec<(Vec<PricePoint>, Vec<(NaiveDate, Scaled)>)> = Vec::new();
+    let mut earning: Vec<(Option<Scaled>, Option<String>, Vec<(NaiveDate, Paise)>)> = Vec::new();
+
+    for (id, kind, scheme_code, purity_e4, grams_e4, acquired_on, rate_e4, matures_on) in held {
+        if is_deposit(&kind) {
+            let mut paid = deposit_instalments(conn, &id)?;
+            paid.sort_by_key(|(day, _)| *day);
+            if !paid.is_empty() {
+                earning.push((rate_e4, matures_on, paid));
+            }
+        } else if kind == "gold" {
+            if grams_e4 <= 0 || pure.is_empty() {
+                continue;
+            }
+            let purity = purity_e4.unwrap_or(10_000);
+            let line = pure
+                .iter()
+                .map(|p| PricePoint {
+                    as_of: p.as_of.clone(),
+                    price_e4: div_round(p.price_e4 as i128 * purity as i128, 10_000) as Scaled,
+                })
+                .collect();
+            weighed.push((
+                line,
+                grams_e4,
+                acquired_on
+                    .as_deref()
+                    .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok()),
+            ));
+        } else {
+            let line = match scheme_code {
+                Some(code) if !code.is_empty() => fund_series(conn, &code, since.as_deref())?,
+                _ => Vec::new(),
+            };
+            if line.is_empty() {
+                continue;
+            }
+            traded.push((line, lot_quantities(conn, &id)?));
+        }
+    }
+
+    // The days to plot on: every day some market published, plus today, so the
+    // line ends on the same figure the cards quote.
+    let mut axis: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for (line, _, _) in &weighed {
+        axis.extend(line.iter().map(|p| p.as_of.clone()));
+    }
+    for (line, _) in &traded {
+        axis.extend(line.iter().map(|p| p.as_of.clone()));
+    }
+    // A book holding only deposits has no market days of its own. An accrual
+    // is a smooth curve, so a point a week draws it as well as a point a day.
+    if axis.is_empty() {
+        let opened = earning
+            .iter()
+            .filter_map(|(_, _, paid)| paid.first().map(|(day, _)| *day))
+            .min();
+        let floor = since
+            .as_deref()
+            .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
+        if let Some(opened) = opened {
+            let mut day = floor.filter(|f| *f > opened).unwrap_or(opened);
+            while day < today {
+                axis.insert(day.format("%Y-%m-%d").to_string());
+                day += Duration::days(7);
+            }
+        }
+    }
+    axis.insert(today.format("%Y-%m-%d").to_string());
+
+    // Both the axis and everything read against it are in date order, so each
+    // holding keeps a cursor and the whole line is one pass rather than a
+    // search per day.
+    let mut rate_at = vec![0usize; weighed.len()];
+    let mut nav_at = vec![0usize; traded.len()];
+    let mut lot_at = vec![0usize; traded.len()];
+    let mut units = vec![0 as Scaled; traded.len()];
+    let mut paid_at = vec![0usize; earning.len()];
+
+    let mut out: Vec<ValuePoint> = Vec::with_capacity(axis.len());
+    for as_of in &axis {
+        let Ok(day) = NaiveDate::parse_from_str(as_of, "%Y-%m-%d") else {
+            continue;
+        };
+        let mut total: Paise = 0;
+
+        for (i, (line, grams_e4, from)) in weighed.iter().enumerate() {
+            while rate_at[i] + 1 < line.len() && line[rate_at[i] + 1].as_of <= *as_of {
+                rate_at[i] += 1;
+            }
+            let point = &line[rate_at[i]];
+            // A piece counts from the day it came into your hands. One with no
+            // date on it counts throughout: an unknown day is not a claim that
+            // you did not own it.
+            if point.as_of > *as_of || from.is_some_and(|owned| day < owned) {
+                continue;
+            }
+            total += market_value_paise(*grams_e4, point.price_e4);
+        }
+
+        for (i, (line, lots)) in traded.iter().enumerate() {
+            while lot_at[i] < lots.len() && lots[lot_at[i]].0 <= day {
+                units[i] += lots[lot_at[i]].1;
+                lot_at[i] += 1;
+            }
+            while nav_at[i] + 1 < line.len() && line[nav_at[i] + 1].as_of <= *as_of {
+                nav_at[i] += 1;
+            }
+            let point = &line[nav_at[i]];
+            if point.as_of > *as_of || units[i] <= 0 {
+                continue;
+            }
+            total += market_value_paise(units[i], point.price_e4);
+        }
+
+        for (i, (rate_e4, matures_on, paid)) in earning.iter().enumerate() {
+            while paid_at[i] < paid.len() && paid[paid_at[i]].0 <= day {
+                paid_at[i] += 1;
+            }
+            if paid_at[i] == 0 {
+                continue;
+            }
+            total += deposit_value(*rate_e4, matures_on.as_deref(), day, &paid[..paid_at[i]]);
+        }
+
+        out.push(ValuePoint {
+            as_of: as_of.clone(),
+            value: total,
+        });
+    }
+
+    // Days before you held anything drop out rather than plotting a run of
+    // zeros: the line starts where the portfolio does.
+    let start = out.iter().position(|p| p.value != 0).unwrap_or(out.len());
+    Ok(out.split_off(start))
+}
+
 /// What a gram has gone for, day by day, at whatever purity is asked for —
 /// the rate behind every gold holding, which is a fact about the market rather
 /// than about any one piece. `None` reads it as 24K.
@@ -4395,10 +5253,13 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
 
 /// Every table the book is made of, in an order that can be emptied and
 /// refilled with the foreign keys looking on.
-const TABLES: [&str; 12] = [
+const TABLES: [&str; 15] = [
     "settings",
     "price_history",
     "price_cache",
+    "template_labels",
+    "template_splits",
+    "transaction_templates",
     "debt_entries",
     "debt_payments",
     "debts",
@@ -4482,8 +5343,11 @@ pub fn reset(conn: &Connection) -> Result<()> {
         // Lots go before transactions so SQLite has no SET NULL sweep to run
         // over them. `price_cache` stays: it is fetched data, not your book,
         // and keeping it means an offline relaunch can still value holdings.
-        "DELETE FROM investment_lots; DELETE FROM holdings;
+        "DELETE FROM plan_entries; DELETE FROM plans;
+         DELETE FROM investment_lots; DELETE FROM holdings;
          DELETE FROM debt_payments; DELETE FROM debts;
+         DELETE FROM template_splits; DELETE FROM template_labels;
+         DELETE FROM transaction_templates;
          DELETE FROM transaction_splits; DELETE FROM transactions;
          DELETE FROM accounts; DELETE FROM categories; DELETE FROM settings;",
     )
@@ -6089,6 +6953,84 @@ mod tests {
         );
     }
 
+    /// The whole book on one line, ending on the figure the cards quote:
+    /// gold at the day's rate, a fund at its NAV and a deposit at what it has
+    /// earned, all three read on the same days.
+    #[test]
+    fn the_portfolio_line_ends_on_what_everything_is_worth_today() {
+        let conn = book();
+        // Nothing here posts a transfer: the line is about what is held, and
+        // where the money came from is another card's business.
+        // The fund first — its helper reads back whichever holding is there.
+        let units = fund(&conn, None);
+        buy(&conn, &units, 10, 100_000, None);
+        price_at(&conn, 100);
+        store_history(
+            &conn,
+            "mf:999",
+            &[
+                ("2026-08-27".into(), 50 * 10_000),
+                ("2026-08-28".into(), 100 * 10_000),
+            ],
+        )
+        .unwrap();
+
+        gold(&conn, 10 * 10_000, None); // 10 g of 24K
+        gold_price_at(&conn, 100);
+        let landed = gold_landed_e4(&conn).unwrap();
+        let ounce = |rupees_a_gram: i64| rupees_a_gram * 311_035 * 10_000 / landed;
+        store_history(
+            &conn,
+            KEY_GOLD,
+            &[
+                ("2026-08-27".into(), ounce(50)),
+                ("2026-08-28".into(), ounce(100)),
+            ],
+        )
+        .unwrap();
+
+        let fd = deposit(&conn, "fd", None, 8.0, "2026-01-01", "2027-01-01");
+        save_investment_lot(
+            &conn,
+            InvestmentLotInput {
+                id: None,
+                holding_id: fd,
+                kind: "buy".into(),
+                quantity_e4: 1,
+                amount: 500_000,
+                occurred_at: "2026-01-01".into(),
+                allotted_at: None,
+                note: None,
+                cash_account_id: None,
+                transaction_id: None,
+            },
+        )
+        .unwrap();
+
+        let today: Paise = list_holdings(&conn)
+            .unwrap()
+            .iter()
+            .filter(|h| !h.closed)
+            .map(|h| h.market_value)
+            .sum();
+        let line = portfolio_value_series(&conn, None).unwrap();
+
+        assert!(line.len() >= 3, "a point per market day, and one for today");
+        assert_eq!(
+            line.last().unwrap().value,
+            today,
+            "the line ends where the card's total is"
+        );
+        // Both markets halved the day before, so the first point is lower —
+        // but not by half, because the deposit was earning either way.
+        let last = line.last().unwrap().value;
+        assert!(line[0].value < last && line[0].value > last / 2);
+        assert!(
+            line.iter().all(|p| p.value > 0),
+            "the line starts where the portfolio does, not at a run of zeros"
+        );
+    }
+
     /// A piece counts from the day it was acquired, so the line steps up when
     /// it arrives rather than pretending you held it all along.
     #[test]
@@ -6908,6 +7850,307 @@ mod tests {
     /// A row the balance has already seen leaves every balance where it
     /// stood — the openings absorb it — while the rest move balances as
     /// usual, whatever their dates.
+    fn template(conn: &Connection, name: &str, amount: Paise, account: &str) -> TxTemplate {
+        save_template(
+            conn,
+            TxTemplateInput {
+                id: None,
+                name: name.into(),
+                kind: "expense".into(),
+                amount,
+                account_id: Some(account.into()),
+                to_account_id: None,
+                category_id: None,
+                merchant: "Landlord".into(),
+                note: Some("  the rent  ".into()),
+                splits: None,
+                label_ids: None,
+                ask: None,
+            },
+        )
+        .unwrap()
+    }
+
+    /// A template keeps the shape of a posting and gives it back whole —
+    /// including the parts it was divided into and the labels it pins.
+    #[test]
+    fn a_template_keeps_the_shape_of_a_posting() {
+        let conn = book();
+        let hdfc = account(&conn, "HDFC", "bank", 0);
+        let food = category(&conn, "Food", None);
+        let home = category(&conn, "Home", None);
+        let label = ensure_label(&conn, "Monthly", "#F0B429").unwrap();
+
+        let saved = save_template(
+            &conn,
+            TxTemplateInput {
+                id: None,
+                name: "  Friday shop  ".into(),
+                kind: "expense".into(),
+                amount: 300_000,
+                account_id: Some(hdfc.clone()),
+                to_account_id: None,
+                category_id: Some(food.clone()),
+                merchant: "  Big Basket  ".into(),
+                note: None,
+                splits: Some(vec![
+                    TransactionSplitInput {
+                        id: None,
+                        amount: 200_000,
+                        category_id: Some(food.clone()),
+                        note: None,
+                    },
+                    TransactionSplitInput {
+                        id: None,
+                        amount: 100_000,
+                        category_id: Some(home),
+                        note: Some("soap".into()),
+                    },
+                ]),
+                label_ids: Some(vec![label.clone()]),
+                ask: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(saved.name, "Friday shop", "the name is trimmed");
+        assert_eq!(saved.merchant, "Big Basket");
+        assert_eq!(saved.account_name.as_deref(), Some("HDFC"));
+        assert_eq!(saved.splits.len(), 2);
+        assert_eq!(saved.splits.iter().map(|s| s.amount).sum::<Paise>(), 300_000);
+        assert_eq!(saved.labels.len(), 1);
+        assert_eq!(saved.used_count, 0);
+
+        // And it reads back the same way out of the list.
+        let listed = list_templates(&conn).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].splits.len(), 2);
+        assert_eq!(listed[0].labels[0].name, "Monthly");
+    }
+
+    /// The parts of a template have to come to what the template says, for
+    /// the same reason a posting's do: anything else is a figure that
+    /// disagrees with itself.
+    #[test]
+    fn a_templates_parts_have_to_add_up() {
+        let conn = book();
+        let hdfc = account(&conn, "HDFC", "bank", 0);
+        let food = category(&conn, "Food", None);
+        let err = save_template(
+            &conn,
+            TxTemplateInput {
+                id: None,
+                name: "Wrong".into(),
+                kind: "expense".into(),
+                amount: 300_000,
+                account_id: Some(hdfc),
+                to_account_id: None,
+                category_id: None,
+                merchant: String::new(),
+                note: None,
+                splits: Some(vec![
+                    TransactionSplitInput { id: None, amount: 100_000, category_id: Some(food.clone()), note: None },
+                    TransactionSplitInput { id: None, amount: 100_000, category_id: Some(food), note: None },
+                ]),
+                label_ids: None,
+                ask: None,
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("parts come to"), "{err}");
+    }
+
+    /// Two templates cannot share a name — the name is how one is reached for
+    /// — and saving over an existing one replaces it whole.
+    #[test]
+    fn a_template_is_replaced_by_name_rather_than_doubled() {
+        let conn = book();
+        let hdfc = account(&conn, "HDFC", "bank", 0);
+        let kept = template(&conn, "Rent", 2_500_000, &hdfc);
+        assert_eq!(kept.note.as_deref(), Some("the rent"), "the note is trimmed");
+
+        let clash = save_template(
+            &conn,
+            TxTemplateInput {
+                id: None,
+                name: "Rent".into(),
+                kind: "expense".into(),
+                amount: 1,
+                account_id: Some(hdfc.clone()),
+                to_account_id: None,
+                category_id: None,
+                merchant: String::new(),
+                note: None,
+                splits: None,
+                label_ids: None,
+                ask: None,
+            },
+        )
+        .unwrap_err();
+        assert!(clash.contains("already a template called"), "{clash}");
+
+        // The same name against the id it belongs to is a correction, not a clash.
+        let changed = save_template(
+            &conn,
+            TxTemplateInput {
+                id: Some(kept.id.clone()),
+                name: "Rent".into(),
+                kind: "expense".into(),
+                amount: 2_600_000,
+                account_id: Some(hdfc),
+                to_account_id: None,
+                category_id: None,
+                merchant: "Landlord".into(),
+                note: None,
+                splits: None,
+                label_ids: None,
+                ask: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(changed.id, kept.id);
+        assert_eq!(changed.amount, 2_600_000);
+        assert_eq!(list_templates(&conn).unwrap().len(), 1);
+    }
+
+    /// What a template asks for is kept as a set the sheet can act on: the
+    /// fields that mean nothing for its kind are dropped, and so is anything
+    /// that is not a field at all.
+    #[test]
+    fn a_template_only_asks_for_fields_it_has() {
+        let conn = book();
+        let hdfc = account(&conn, "HDFC", "bank", 0);
+        let icici = account(&conn, "ICICI", "bank", 0);
+        let food = category(&conn, "Food", None);
+
+        // An expense has a category to ask about and no account to arrive in.
+        let bill = save_template(
+            &conn,
+            TxTemplateInput {
+                id: None,
+                name: "Friday shop".into(),
+                kind: "expense".into(),
+                amount: 0,
+                account_id: Some(hdfc.clone()),
+                to_account_id: None,
+                category_id: Some(food.clone()),
+                merchant: "Big Basket".into(),
+                note: None,
+                splits: None,
+                label_ids: None,
+                ask: Some(vec![
+                    "note".into(),
+                    "amount".into(),
+                    "toAccount".into(),
+                    "colour".into(),
+                ]),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            bill.ask,
+            vec!["amount".to_string(), "note".to_string()],
+            "no destination to ask for, and no such field as colour"
+        );
+
+        // A transfer is the other way round.
+        let move_it = save_template(
+            &conn,
+            TxTemplateInput {
+                id: None,
+                name: "Into savings".into(),
+                kind: "transfer".into(),
+                amount: 0,
+                account_id: Some(hdfc),
+                to_account_id: Some(icici),
+                category_id: None,
+                merchant: String::new(),
+                note: None,
+                splits: None,
+                label_ids: None,
+                ask: Some(vec!["category".into(), "toAccount".into(), "amount".into()]),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            move_it.ask,
+            vec!["amount".to_string(), "toAccount".to_string()],
+            "a transfer has nowhere to file a category"
+        );
+
+        // And it survives the round trip out of the list.
+        let listed = list_templates(&conn).unwrap();
+        let reread = listed.iter().find(|t| t.name == "Friday shop").unwrap();
+        assert_eq!(reread.ask, vec!["amount".to_string(), "note".to_string()]);
+    }
+
+    /// Parts are shares of a figure. A template that divides a bill and then
+    /// asks what the bill came to is describing nothing.
+    #[test]
+    fn a_split_template_cannot_ask_for_the_amount() {
+        let conn = book();
+        let hdfc = account(&conn, "HDFC", "bank", 0);
+        let food = category(&conn, "Food", None);
+        let home = category(&conn, "Home", None);
+        let err = save_template(
+            &conn,
+            TxTemplateInput {
+                id: None,
+                name: "Friday shop".into(),
+                kind: "expense".into(),
+                amount: 300_000,
+                account_id: Some(hdfc),
+                to_account_id: None,
+                category_id: None,
+                merchant: String::new(),
+                note: None,
+                splits: Some(vec![
+                    TransactionSplitInput { id: None, amount: 200_000, category_id: Some(food), note: None },
+                    TransactionSplitInput { id: None, amount: 100_000, category_id: Some(home), note: None },
+                ]),
+                label_ids: None,
+                ask: Some(vec!["amount".into()]),
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("what the bill comes to"), "{err}");
+    }
+
+    /// An account deleted out from under a template leaves the template
+    /// standing: what it says about the money is still worth keeping, and the
+    /// sheet fills the account in from wherever it would have opened.
+    #[test]
+    fn a_template_outlives_the_account_it_named() {
+        let conn = book();
+        let hdfc = account(&conn, "HDFC", "bank", 0);
+        let kept = template(&conn, "Rent", 2_500_000, &hdfc);
+        touch_template(&conn, &kept.id).unwrap();
+        delete_account(&conn, &hdfc).unwrap();
+
+        let listed = list_templates(&conn).unwrap();
+        assert_eq!(listed.len(), 1, "the template stays");
+        assert_eq!(listed[0].account_id, None, "the account it named does not");
+        assert_eq!(listed[0].used_count, 1);
+        assert!(listed[0].last_used_at.is_some());
+    }
+
+    /// Deleting a template touches nothing in the ledger: what it left behind
+    /// are postings, and postings belong to the book.
+    #[test]
+    fn deleting_a_template_leaves_its_postings_alone() {
+        let conn = book();
+        let hdfc = account(&conn, "HDFC", "bank", 0);
+        let kept = template(&conn, "Rent", 2_500_000, &hdfc);
+        bill(&conn, &hdfc, 2_500_000, None);
+        delete_template(&conn, &kept.id).unwrap();
+
+        assert!(list_templates(&conn).unwrap().is_empty());
+        assert_eq!(
+            list_transactions(&conn, TransactionQuery::default()).unwrap().len(),
+            1
+        );
+    }
+
     #[test]
     fn rows_marked_already_counted_leave_balances_alone() {
         let conn = book();

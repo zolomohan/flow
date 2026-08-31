@@ -16,7 +16,11 @@ import type {
 } from '../lib/types';
 
 type KindFilter = 'all' | TxKind;
-type Range = 'month' | 'quarter' | 'year' | 'all';
+/** The windows the strip names outright. */
+type NamedRange = 'month' | 'quarter' | 'year' | 'all';
+/** …plus the one it grows when a breakdown arrives on a period none of them
+ *  name — the dashboard can be set to any number of months. */
+type Range = NamedRange | 'window';
 type Side = 'either' | 'from' | 'to';
 
 /** Which end of a posting the chosen accounts sit on. Only transfers have two. */
@@ -40,8 +44,16 @@ const RANGES: SegmentOption<Range>[] = [
   { value: 'all', label: 'All time' },
 ];
 
-/** How many months each range covers. Zero means unbounded. */
-const RANGE_SPAN: Record<Range, number> = { month: 1, quarter: 3, year: 12, all: 0 };
+/** How many months each named range covers. Zero means unbounded. */
+const RANGE_SPAN: Record<NamedRange, number> = { month: 1, quarter: 3, year: 12, all: 0 };
+
+/** Which range a window of `span` months goes by, when one of them names it.
+ *  No span at all is a question about the whole book. */
+function rangeFor(span: number | undefined): Range {
+  if (!span) return 'all';
+  const named = (Object.keys(RANGE_SPAN) as NamedRange[]).find((r) => RANGE_SPAN[r] === span);
+  return named ?? 'window';
+}
 
 /**
  * Rows loaded at a time. Each one animates in on a stagger, so a whole six-year
@@ -58,9 +70,11 @@ const PAGE = 300;
 const STAGGER_UP_TO = 120;
 const PLAIN_LIST = { initial: {}, animate: { transition: { staggerChildren: 0 } } };
 
-function rangeBounds(range: Range, month: string) {
-  if (range === 'all') return { from: null, to: null };
-  const back = RANGE_SPAN[range] - 1;
+/** The first and last day a window of `span` months ending at `month` covers.
+ *  A span of nothing is all of time, which has no bounds to give. */
+function rangeBounds(span: number, month: string) {
+  if (span <= 0) return { from: null, to: null };
+  const back = span - 1;
   const [y, m] = shiftMonth(month, -back).split('-').map(Number);
   const [ey, em] = month.split('-').map(Number);
   const end = new Date(ey, em, 0);
@@ -73,7 +87,7 @@ function rangeBounds(range: Range, month: string) {
 export function Transactions({
   onOpenTransaction, onSplitTransaction, onOweTransaction, onAddTransaction,
   accountFocus, categoryFocus, labelFocus,
-  picking,
+  picking, pickMany, initialSearch,
 }: {
   onOpenTransaction: (tx: Transaction) => void;
   /** Opens a row straight into its split editor. Absent while picking. */
@@ -83,8 +97,9 @@ export function Transactions({
   onAddTransaction?: () => void;
   /** Set when arriving from an account elsewhere in the app. */
   accountFocus?: { ids: string[]; token: number };
-  /** Set when arriving from a category on a breakdown. */
-  categoryFocus?: { ids: string[]; token: number };
+  /** Set when arriving from a category on a breakdown. `span` is how many
+   *  months that breakdown was about, when it was about a period at all. */
+  categoryFocus?: { ids: string[]; token: number; span?: number };
   /** Set when arriving from a label on the Labels screen. */
   labelFocus?: { ids: string[]; token: number };
   /**
@@ -94,15 +109,29 @@ export function Transactions({
    * the filters and the date ranges, works exactly as it does on the page.
    */
   picking?: boolean;
+  /**
+   * Picking several at once rather than one — attaching a run of payments to
+   * a planned payment, say. The ledger's own selection does the work, so
+   * shift-ranges, the day headers and the filters all behave as they do on
+   * the page; only what sits in the bar at the bottom changes. The selection
+   * outlives a change of search, so a run can be gathered a few at a time.
+   */
+  pickMany?: { label: string; onConfirm: (ids: string[]) => void };
+  /** What the search box starts with, for a picker opened about something. */
+  initialSearch?: string;
 }) {
   const {
     accounts, categories, labels, month, setMonth, listTransactions, transactionSummary,
     revision, updateTransactions, deleteTransactions, confirmTriage, toast,
   } = useStore();
-  const [search, setSearch] = useState('');
-  const [debounced, setDebounced] = useState('');
+  const [search, setSearch] = useState(initialSearch ?? '');
+  const [debounced, setDebounced] = useState(initialSearch ?? '');
   const [kind, setKind] = useState<KindFilter>('all');
-  const [range, setRange] = useState<Range>('month');
+  // Picking a run of past payments is nearly always about more than the
+  // month in view, so that picker opens on the whole book.
+  const [range, setRange] = useState<Range>(pickMany ? 'all' : 'month');
+  // How many months the unnamed window covers, when the strip is on it.
+  const [windowSpan, setWindowSpan] = useState(1);
   const [accountIds, setAccountIds] = useState<string[]>([]);
   const [side, setSide] = useState<Side>('either');
   const [categoryIds, setCategoryIds] = useState<string[]>([]);
@@ -133,13 +162,15 @@ export function Transactions({
     setAccountIds(accountFocus.ids);
   }, [accountFocus?.token]);
 
-  // Arriving from a breakdown: show that category over all time rather than
-  // the month the breakdown happened to be about — the question being asked
-  // is "what is in here", not "what was in here in August".
+  // Arriving from a breakdown. One that was about a period — the dashboard's
+  // — is asking "what was in here in August", so the ledger opens on that same
+  // window; one that stands for the whole book sends no period, and every
+  // entry filed under the category is the answer.
   useEffect(() => {
     if (!categoryFocus?.token) return;
     setCategoryIds(categoryFocus.ids);
-    setRange('all');
+    if (categoryFocus.span) setWindowSpan(categoryFocus.span);
+    setRange(rangeFor(categoryFocus.span));
     // Whatever the ledger was last narrowed by is not part of the question
     // being asked, and would quietly leave entries out of the answer.
     setKind('all');
@@ -171,12 +202,25 @@ export function Transactions({
     return [...out];
   }, [categoryIds, categories]);
 
-  useEffect(() => {
-    setShown(PAGE);
-  }, [debounced, kind, range, accountIds, side, expandedCategoryIds, labelIds, month]);
+  // How many months the ledger is looking at. Zero is all of time.
+  const months = range === 'window' ? windowSpan : RANGE_SPAN[range];
+
+  // The strip only offers the window it arrived on while it is on it: a
+  // "6 months" button that nothing on the page put there would be a mystery.
+  const ranges = useMemo<SegmentOption<Range>[]>(
+    () =>
+      range === 'window'
+        ? [...RANGES.slice(0, 3), { value: 'window', label: `${windowSpan} months` }, RANGES[3]]
+        : RANGES,
+    [range, windowSpan],
+  );
 
   useEffect(() => {
-    const bounds = rangeBounds(range, month);
+    setShown(PAGE);
+  }, [debounced, kind, months, accountIds, side, expandedCategoryIds, labelIds, month]);
+
+  useEffect(() => {
+    const bounds = rangeBounds(months, month);
     setLoading(true);
     const query = {
       search: debounced || null,
@@ -204,7 +248,7 @@ export function Transactions({
       })
       .finally(() => setLoading(false));
   }, [
-    debounced, kind, range, accountIds, side, expandedCategoryIds, labelIds, month, shown,
+    debounced, kind, months, accountIds, side, expandedCategoryIds, labelIds, month, shown,
     listTransactions, transactionSummary, revision,
   ]);
 
@@ -446,25 +490,19 @@ export function Transactions({
         {picking ? (
           <p className="picking-count">
             {total} {total === 1 ? 'entry' : 'entries'}
-            {range === 'all'
-              ? ' · all time'
-              : ` · ${periodLabel(month, RANGE_SPAN[range])}`}
+            {months ? ` · ${periodLabel(month, months)}` : ' · all time'}
           </p>
         ) : (
           <div>
             <h1>Transactions</h1>
             <p>
               {total} {total === 1 ? 'entry' : 'entries'}
-              {range === 'all'
-                ? ' · all time'
-                : ` · ${periodLabel(month, RANGE_SPAN[range])}`}
+              {months ? ` · ${periodLabel(month, months)}` : ' · all time'}
             </p>
           </div>
         )}
         <div className="head-actions">
-          {range !== 'all' && (
-            <MonthNav month={month} onChange={setMonth} span={RANGE_SPAN[range]} />
-          )}
+          {months > 0 && <MonthNav month={month} onChange={setMonth} span={months} />}
           {!picking && (
             <>
               <Button icon="file-up" onClick={() => setImportOpen(true)}>
@@ -493,7 +531,7 @@ export function Transactions({
           )}
         </div>
         <Segmented options={KIND_FILTERS} value={kind} onChange={setKind} name="tx-filter" size="sm" />
-        <Segmented options={RANGES} value={range} onChange={setRange} name="tx-range" size="sm" />
+        <Segmented options={ranges} value={range} onChange={setRange} name="tx-range" size="sm" />
         <div className="filter-anchor" ref={filterAnchor}>
           <Button
             tone={showFilters || activeFilters ? 'primary' : 'secondary'}
@@ -771,13 +809,13 @@ export function Transactions({
               icon="search"
               title="Nothing matches"
               body={
-                range === 'all'
-                  ? 'Nothing here fits those filters.'
-                  : `No entries in ${periodLabel(month, RANGE_SPAN[range])} that fit these filters — there may be some further back.`
+                months
+                  ? `No entries in ${periodLabel(month, months)} that fit these filters — there may be some further back.`
+                  : 'Nothing here fits those filters.'
               }
               action={
                 <div className="welcome-actions">
-                  {range !== 'all' && (
+                  {months > 0 && (
                     <Button tone="primary" onClick={() => setRange('all')}>
                       Search all time
                     </Button>
@@ -813,7 +851,9 @@ export function Transactions({
                     <TransactionRow
                       key={tx.id}
                       tx={tx}
-                      onClick={() => onOpenTransaction(tx)}
+                      onClick={
+                        pickMany ? () => pick(tx, false) : () => onOpenTransaction(tx)
+                      }
                       onSplit={
                         picking || !onSplitTransaction
                           ? undefined
@@ -832,7 +872,9 @@ export function Transactions({
                           ? 0
                           : (orderOf.get(tx.id) ?? 0) * 0.028
                       }
-                      onSelect={picking ? undefined : (range) => pick(tx, range)}
+                      onSelect={
+                        picking && !pickMany ? undefined : (range) => pick(tx, range)
+                      }
                     />
                   ))}
                 </motion.div>
@@ -887,6 +929,26 @@ export function Transactions({
               selected
             </span>
 
+            {pickMany ? (
+              <div className="bulk-actions">
+                <Button size="sm" tone="ghost" onClick={() => setPicked([])}>
+                  Clear
+                </Button>
+                <Button
+                  size="sm"
+                  tone="primary"
+                  icon="link"
+                  // The whole selection, not the visible part of it: picking
+                  // across two searches is the ordinary way a run of
+                  // payments gets gathered, and `chosen` only ever holds the
+                  // rows still on screen.
+                  onClick={() => pickMany.onConfirm([...pickedSet])}
+                >
+                  {pickMany.label} {pickedSet.size}
+                </Button>
+              </div>
+            ) : (
+              <>
             <div className="bulk-fields">
               <Select
                 options={bulkCategories}
@@ -959,6 +1021,8 @@ export function Transactions({
                 Cancel
               </Button>
             </div>
+              </>
+            )}
           </motion.div>
         )}
       </AnimatePresence>

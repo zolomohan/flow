@@ -7,24 +7,28 @@ import { press, spring } from '../lib/motion';
 export type Route =
   | 'overview'
   | 'transactions'
+  | 'planned'
   | 'debts'
   | 'investments'
   | 'insights'
   | 'accounts'
   | 'categories'
   | 'labels'
+  | 'templates'
   | 'settings';
 
 /** The day's work first, then the two lists the rest of it is filed against. */
 const NAV: { id: Route; label: string; icon: string }[] = [
   { id: 'overview', label: 'Overview', icon: 'layout-dashboard' },
   { id: 'transactions', label: 'Transactions', icon: 'list-filter' },
+  { id: 'planned', label: 'Planned', icon: 'repeat' },
   { id: 'debts', label: 'Debts', icon: 'arrow-left-right' },
   { id: 'investments', label: 'Investments', icon: 'coins' },
   { id: 'insights', label: 'Insights', icon: 'sparkles' },
   { id: 'accounts', label: 'Accounts', icon: 'wallet-cards' },
   { id: 'categories', label: 'Categories', icon: 'tags' },
   { id: 'labels', label: 'Labels', icon: 'bookmark' },
+  { id: 'templates', label: 'Templates', icon: 'shapes' },
 ];
 
 export function Sidebar({

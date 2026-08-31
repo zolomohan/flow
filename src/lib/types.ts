@@ -182,6 +182,92 @@ export interface TransactionInput {
   labelIds?: string[] | null;
 }
 
+/* -------------------------------------------------------------- templates */
+
+/**
+ * A transaction worth writing more than once, kept by name: the rent, the
+ * Friday groceries, the standing transfer into savings. It holds the shape of
+ * a posting rather than a posting — no date, because the date is the one
+ * thing that is never the same twice.
+ */
+export interface TxTemplate {
+  id: string;
+  name: string;
+  kind: TxKind;
+  /** Zero means it carries no amount, and the sheet opens on an empty well. */
+  amount: Paise;
+  /** Nullable where a posting's is not: an account can be deleted out from
+   *  under a template, and the template is still worth keeping. */
+  accountId: string | null;
+  toAccountId: string | null;
+  categoryId: string | null;
+  merchant: string;
+  note: string | null;
+  /** How many postings have been written from it, and when the last was. */
+  usedCount: number;
+  lastUsedAt: string | null;
+  createdAt: string;
+  accountName: string | null;
+  accountColor: string | null;
+  toAccountName: string | null;
+  categoryName: string | null;
+  categoryIcon: string | null;
+  categoryColor: string | null;
+  /** The parts a templated bill is filed under; they add up to `amount`. */
+  splits: TemplateSplit[];
+  /** Labels every posting written from it should wear. */
+  labels: TxLabel[];
+  /** What it asks for rather than answers. Everything not named here is
+   *  pre-baked and arrives filled in. */
+  ask: TemplateField[];
+}
+
+/**
+ * A field a template can either answer for or ask about. What it asks for is
+ * left blank when the template is used, and has to be filled in before the
+ * transaction can be saved.
+ */
+export type TemplateField =
+  | 'amount'
+  | 'account'
+  | 'toAccount'
+  | 'category'
+  | 'merchant'
+  | 'note';
+
+/** One line of a templated split bill. */
+export interface TemplateSplit {
+  id: string;
+  templateId: string;
+  amount: Paise;
+  categoryId: string | null;
+  note: string | null;
+  sortOrder: number;
+  categoryName: string | null;
+  categoryIcon: string | null;
+  categoryColor: string | null;
+}
+
+export interface TxTemplateInput {
+  id?: string | null;
+  name: string;
+  kind: TxKind;
+  /** Zero leaves the amount out of the template. */
+  amount: Paise;
+  accountId: string | null;
+  toAccountId: string | null;
+  categoryId: string | null;
+  merchant: string;
+  note: string | null;
+  /** A template is written whole every time, so unlike a posting there is
+   *  nothing half-saved to leave alone: what is sent is what it becomes. */
+  splits?: TransactionSplitInput[] | null;
+  labelIds?: string[] | null;
+  /** The fields to leave blank and ask for each time. Fields that mean
+   *  nothing for the kind are dropped rather than refused. */
+  ask?: TemplateField[] | null;
+}
+
 export interface LabelInput {
   id?: string | null;
   name: string;
@@ -552,4 +638,137 @@ export interface ImportResult {
   /** What the account's opening balance absorbed so the current balance
    *  stayed put while that history went in. */
   openingAdjustment: Paise;
+}
+
+/* -------------------------------------------------------- planned payments */
+
+/** The rhythms a plan can keep. */
+export type PlanCadence =
+  | 'weekly'
+  | 'fortnightly'
+  | 'monthly'
+  | 'quarterly'
+  | 'half_yearly'
+  | 'yearly';
+
+/** Where a plan stands right now. */
+export type PlanStatus =
+  | 'upcoming'
+  | 'due'
+  | 'overdue'
+  /** Was being paid, then stopped: three cycles with nothing against it. */
+  | 'lapsed'
+  | 'ended'
+  | 'archived';
+
+/** One posting a plan has collected, for the little history a card shows. */
+export interface PlanPosting {
+  id: string;
+  occurredAt: string;
+  amount: Paise;
+}
+
+/**
+ * A payment that comes round again: rent, an EMI, a subscription, a salary.
+ *
+ * Everything from `nextDue` down is read off the ledger rather than stored,
+ * so a plan can never disagree with the postings that answer to it.
+ */
+export interface Plan {
+  id: string;
+  name: string;
+  kind: TxKind;
+  /** What it is expected to come to — a figure to budget against. */
+  amount: Paise;
+  accountId: string | null;
+  accountName: string | null;
+  accountColor: string | null;
+  toAccountId: string | null;
+  toAccountName: string | null;
+  categoryId: string | null;
+  categoryName: string | null;
+  categoryIcon: string | null;
+  categoryColor: string | null;
+  merchant: string;
+  note: string | null;
+  cadence: PlanCadence;
+  /** Every *n* of those. 1 for the ordinary case. */
+  every: number;
+  /**
+   * A date the cycle lands on. Every other due date is counted from it, in
+   * both directions — which is how a plan adopted today arrives carrying the
+   * payments already behind it.
+   */
+  anchorOn: string;
+  endsOn: string | null;
+  /** Money that leaves on its own, as against a bill you go and pay. */
+  automatic: boolean;
+  /** The amount moves every cycle — a power bill, a card statement. */
+  variable: boolean;
+  archived: boolean;
+  /** The key an import filed this payee under, used to suggest postings
+   *  worth linking. It never claims one. */
+  matchKey: string | null;
+  createdAt: string;
+
+  /** The next cycle nobody has paid. Null once the plan has run out. */
+  nextDue: string | null;
+  /** Days from today; negative when it is already past. */
+  daysUntil: number | null;
+  status: PlanStatus;
+  /** Cycles gone by with nothing paid against them. */
+  missed: number;
+  lastPaidOn: string | null;
+  lastAmount: Paise;
+  /** The mean of what it has lately actually cost. */
+  averageAmount: Paise;
+  paidCount: number;
+  observedTotal: Paise;
+  /** What it comes to a month, and a year, whatever its cadence. */
+  monthlyAmount: Paise;
+  yearlyAmount: Paise;
+  /** The last payment against the expected amount; positive is a rise. */
+  drift: Paise;
+  /** The last few payments, oldest first. */
+  recent: PlanPosting[];
+}
+
+export interface PlanInput {
+  id?: string | null;
+  name: string;
+  kind: TxKind;
+  amount: Paise;
+  accountId: string | null;
+  toAccountId: string | null;
+  categoryId: string | null;
+  merchant: string;
+  note: string | null;
+  cadence: PlanCadence;
+  every?: number | null;
+  anchorOn: string;
+  endsOn: string | null;
+  automatic?: boolean | null;
+  variable?: boolean | null;
+  matchKey?: string | null;
+  archived?: boolean | null;
+}
+
+/** One turn of one plan, on the day it falls. What a calendar is made of. */
+export interface PlanOccurrence {
+  planId: string;
+  name: string;
+  kind: TxKind;
+  dueOn: string;
+  amount: Paise;
+  merchant: string;
+  categoryIcon: string | null;
+  categoryColor: string | null;
+  accountName: string | null;
+  automatic: boolean;
+  /** Whether a posting in the book answers for this cycle. */
+  paid: boolean;
+  transactionId: string | null;
+  actualAmount: Paise;
+  /** Deliberately let go rather than paid. */
+  skipped: boolean;
 }

@@ -9,16 +9,20 @@ import {
 import { AccountSheet } from './components/AccountSheet';
 import { DebtSheet, DebtPaymentSheet } from './components/DebtSheet';
 import { HoldingSheet, LotSheet } from './components/HoldingSheet';
+import { PlanSheet, type PlanDraft } from './components/PlanSheet';
+import { PlanLinkSheet } from './components/PlanLinkSheet';
 import { Toasts } from './components/Toasts';
 import { Button, Empty } from './components/ui';
 import { Overview } from './screens/Overview';
 import { Transactions } from './screens/Transactions';
+import { Planned } from './screens/Planned';
 import { Accounts } from './screens/Accounts';
 import { Debts } from './screens/Debts';
 import { Investments } from './screens/Investments';
 import { Insights } from './screens/Insights';
 import { Categories } from './screens/Categories';
 import { Labels } from './screens/Labels';
+import { Templates } from './screens/Templates';
 import { Settings } from './screens/Settings';
 import { StoreProvider, useStore } from './lib/store';
 import { screenVariants } from './lib/motion';
@@ -31,13 +35,16 @@ import type {
   HoldingKind,
   InvestmentTab,
   InvestmentLot,
+  Plan,
   Transaction,
   TxKind,
+  TxTemplate,
 } from './lib/types';
 
 const ROUTE_KEYS: Route[] = [
   'overview',
   'transactions',
+  'planned',
   'accounts',
   'debts',
   'investments',
@@ -61,6 +68,13 @@ function Shell() {
   // The repayment sheet's subject: whose debt, and which repayment when one
   // is being changed rather than added.
   const [paying, setPaying] = useState<{ debt: Debt; payment: DebtPayment | null } | null>(null);
+  // The plan sheet's subject: the one being changed, or nothing when a new
+  // one is being written.
+  const [planOpen, setPlanOpen] = useState(false);
+  const [editingPlan, setEditingPlan] = useState<Plan | null>(null);
+  const [planDraft, setPlanDraft] = useState<PlanDraft | undefined>();
+  // The plan whose payments are being picked out of the ledger.
+  const [linkingPlan, setLinkingPlan] = useState<Plan | null>(null);
   const [holdingOpen, setHoldingOpen] = useState(false);
   const [editingHolding, setEditingHolding] = useState<Holding | null>(null);
   const [holdingKind, setHoldingKind] = useState<HoldingKind>('fund');
@@ -80,13 +94,15 @@ function Shell() {
     ids: [],
     token: 0,
   });
-  // The same trick for a category picked off a breakdown: the ledger opens
-  // filtered to it, over all time rather than the month you happened to be
-  // looking at, because "show me these" means all of them.
-  const [categoryFocus, setCategoryFocus] = useState<{ ids: string[]; token: number }>({
-    ids: [],
-    token: 0,
-  });
+  // The same trick for a category picked off a breakdown. `span` is how many
+  // months the breakdown was about: a dashboard asking "where did August go"
+  // should answer in August, while a list that stands for the whole book
+  // leaves it unset and the ledger opens over all time.
+  const [categoryFocus, setCategoryFocus] = useState<{
+    ids: string[];
+    token: number;
+    span?: number;
+  }>({ ids: [], token: 0 });
   // And the same again for a label picked off the Labels screen.
   const [labelFocus, setLabelFocus] = useState<{ ids: string[]; token: number }>({
     ids: [],
@@ -141,6 +157,15 @@ function Shell() {
     setTxOpen(true);
   }, []);
 
+  // A template is a new transaction with the form already filled in — the
+  // same sheet, opened on a shape somebody kept.
+  const useTemplate = useCallback(
+    (template: TxTemplate) => {
+      newTransaction({ template });
+    },
+    [newTransaction],
+  );
+
   const newAccount = useCallback(() => {
     setEditingAccount(null);
     setAccountOpen(true);
@@ -151,8 +176,8 @@ function Shell() {
     setRoute('transactions');
   }, []);
 
-  const openCategoryTransactions = useCallback((categoryId: string) => {
-    setCategoryFocus((f) => ({ ids: [categoryId], token: f.token + 1 }));
+  const openCategoryTransactions = useCallback((categoryId: string, span?: number) => {
+    setCategoryFocus((f) => ({ ids: [categoryId], token: f.token + 1, span }));
     setRoute('transactions');
   }, []);
 
@@ -175,6 +200,18 @@ function Shell() {
   const editDebt = useCallback((debt: Debt) => {
     setEditingDebt(debt);
     setDebtOpen(true);
+  }, []);
+
+  const newPlan = useCallback((next?: PlanDraft) => {
+    setEditingPlan(null);
+    setPlanDraft(next);
+    setPlanOpen(true);
+  }, []);
+
+  const editPlan = useCallback((plan: Plan) => {
+    setPlanDraft(undefined);
+    setEditingPlan(plan);
+    setPlanOpen(true);
   }, []);
 
   const newHolding = useCallback((kind: HoldingKind) => {
@@ -207,7 +244,7 @@ function Shell() {
         setPaletteOpen((open) => !open);
         return;
       }
-      if ((e.metaKey || e.ctrlKey) && /^[1-7]$/.test(e.key)) {
+      if ((e.metaKey || e.ctrlKey) && /^[1-8]$/.test(e.key)) {
         e.preventDefault();
         setRoute(ROUTE_KEYS[Number(e.key) - 1]);
         return;
@@ -292,6 +329,9 @@ function Shell() {
                 onOpenAccount={openAccountTransactions}
                 onOpenCategory={openCategoryTransactions}
                 onGoInvestments={openInvestments}
+                onGoDebts={() => setRoute('debts')}
+                onGoAccounts={() => setRoute('accounts')}
+                onGoPlanned={() => setRoute('planned')}
               />
             ) : route === 'transactions' ? (
               <Transactions
@@ -302,6 +342,13 @@ function Shell() {
                 accountFocus={accountFocus}
                 categoryFocus={categoryFocus}
                 labelFocus={labelFocus}
+              />
+            ) : route === 'planned' ? (
+              <Planned
+                onNewPlan={newPlan}
+                onEditPlan={editPlan}
+                onLinkPlan={setLinkingPlan}
+                onOpenTransaction={openTransactionById}
               />
             ) : route === 'accounts' ? (
               <Accounts onEditAccount={editAccount} onAddAccount={newAccount} />
@@ -327,6 +374,11 @@ function Shell() {
               <Categories onOpenCategory={openCategoryTransactions} />
             ) : route === 'labels' ? (
               <Labels onOpenLabel={openLabelTransactions} />
+            ) : route === 'templates' ? (
+              <Templates
+                onUseTemplate={useTemplate}
+                onAddTransaction={() => newTransaction()}
+              />
             ) : (
               <Settings />
             )}
@@ -360,6 +412,17 @@ function Shell() {
         editing={paying?.payment ?? null}
         onOpenTransaction={openTransactionById}
       />
+      <PlanLinkSheet
+        open={!!linkingPlan}
+        onClose={() => setLinkingPlan(null)}
+        plan={linkingPlan}
+      />
+      <PlanSheet
+        open={planOpen}
+        onClose={() => setPlanOpen(false)}
+        editing={editingPlan}
+        draft={planDraft}
+      />
       <HoldingSheet
         open={holdingOpen}
         onClose={() => setHoldingOpen(false)}
@@ -377,6 +440,7 @@ function Shell() {
         onClose={() => setPaletteOpen(false)}
         onNavigate={setRoute}
         onNewTransaction={(kind: TxKind) => newTransaction({ kind })}
+        onUseTemplate={useTemplate}
         onOpenTransaction={openTransaction}
       />
       <Toasts />

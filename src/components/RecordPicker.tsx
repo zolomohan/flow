@@ -6,17 +6,28 @@ import { sheetBackdrop, sheetPanel } from '../lib/motion';
 import type { Transaction } from '../lib/types';
 
 /**
- * Picking a record to attach something to — a fund purchase, a repayment —
- * against the whole ledger rather than a shortlist. It is the Transactions
- * screen itself inside a modal, so the search, filters and date ranges are the
- * ones already learned rather than a cut-down copy of them.
+ * Picking a record to attach something to — a fund purchase, a repayment, a
+ * run of payments against a plan — from the whole ledger rather than a
+ * shortlist. It is the Transactions screen itself inside a modal, so the
+ * search, the filters, the day headers and the date ranges are the ones
+ * already learned rather than a cut-down copy of them that drifts.
  */
 export function RecordPicker({
-  open, onClose, onPick, title, subtitle,
+  open, onClose, onPick, onPickMany, pickLabel = 'Link', search, title, subtitle,
 }: {
   open: boolean;
   onClose: () => void;
-  onPick: (tx: Transaction) => void;
+  /** Picking one, which is what attaching a repayment or a lot wants. */
+  onPick?: (tx: Transaction) => void;
+  /** Picking several — a run of past payments to hang on a plan. Given
+   *  this, rows tick instead of choosing and the ledger's own selection
+   *  does the work. */
+  onPickMany?: (ids: string[]) => void;
+  /** What the button over a multiple selection says. */
+  pickLabel?: string;
+  /** What the search box starts on, when the picker is opened about
+   *  something in particular. */
+  search?: string;
   title: string;
   subtitle?: string;
 }) {
@@ -62,7 +73,14 @@ export function RecordPicker({
               <IconButton icon="x" label="Close" onClick={onClose} />
             </header>
             <div className="record-picker-body">
-              <Transactions picking onOpenTransaction={onPick} />
+              <Transactions
+                picking
+                initialSearch={search}
+                pickMany={
+                  onPickMany ? { label: pickLabel, onConfirm: onPickMany } : undefined
+                }
+                onOpenTransaction={(tx) => onPick?.(tx)}
+              />
             </div>
           </motion.div>
         </motion.div>

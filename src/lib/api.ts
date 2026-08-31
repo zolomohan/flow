@@ -17,6 +17,7 @@ import type {
   Label,
   LabelInput,
   Overview,
+  Paise,
   PricePoint,
   StatementRow,
   ValuePoint,
@@ -26,6 +27,11 @@ import type {
   TransactionPatch,
   TransactionQuery,
   TransactionSummary,
+  TxTemplate,
+  TxTemplateInput,
+  Plan,
+  PlanInput,
+  PlanOccurrence,
 } from './types';
 
 export const isDesktop =
@@ -87,6 +93,44 @@ export const api = {
   /** "Filed right": clears Triage and teaches the importer the filing. */
   confirmTriage: (ids: string[]) => call<number>('confirm_triage', { ids }),
 
+  /** Every saved template, what you reach for most at the top. */
+  listTemplates: () => call<TxTemplate[]>('list_templates'),
+  /** Writes one whole: what it says, its parts, and the labels it pins. */
+  saveTemplate: (input: TxTemplateInput) => call<TxTemplate>('save_template', { input }),
+  /** The template goes; every posting written from it stays. */
+  deleteTemplate: (id: string) => call<void>('delete_template', { id }),
+  /** Counts one posting written from a template, so the list keeps what you
+   *  actually reach for near the top. Called once the posting is saved. */
+  useTemplate: (id: string) => call<void>('use_template', { id }),
+
+  /** Every plan, with what the ledger says each is actually costing. */
+  listPlans: () => call<Plan[]>('list_plans'),
+  savePlan: (input: PlanInput) => call<Plan>('save_plan', { input }),
+  deletePlan: (id: string) => call<void>('delete_plan', { id }),
+  setPlanArchived: (id: string, archived: boolean) =>
+    call<void>('set_plan_archived', { id, archived }),
+  /** Lets the cycle now due go by unpaid — a waived bill, a month off. */
+  skipPlan: (id: string) => call<Plan>('skip_plan', { id }),
+  /** Writes the posting this cycle describes and points the plan at it. */
+  payPlan: (id: string, amount: Paise | null, occurredAt: string | null) =>
+    call<Transaction>('pay_plan', { id, amount, occurredAt }),
+  /** Every turn of every live plan between two dates, paid ones included. */
+  planCalendar: (from: string, to: string) =>
+    call<PlanOccurrence[]>('plan_calendar', { from, to }),
+  /** The whole life of one plan, oldest cycle first — paid, let go and
+   *  missed alike. What a plan's own page is drawn from. */
+  planTimeline: (id: string) => call<PlanOccurrence[]>('plan_timeline', { id }),
+  /** Says these postings belong to this plan. Nothing counts for a plan
+   *  until it does — a plan never claims a payment on its own. */
+  linkPlanPostings: (planId: string, ids: string[]) =>
+    call<number>('link_plan_postings', { planId, ids }),
+  /** Takes a posting back off a plan. The posting itself is untouched. */
+  unlinkPlanPosting: (planId: string, transactionId: string) =>
+    call<void>('unlink_plan_posting', { planId, transactionId }),
+  /** Which plan each of these postings already backs, by posting id. */
+  plansOfPostings: (ids: string[]) =>
+    call<Record<string, string>>('plans_of_postings', { ids }),
+
   listDebts: () => call<Debt[]>('list_debts'),
   saveDebt: (input: DebtInput) => call<void>('save_debt', { input }),
   deleteDebt: (id: string) => call<void>('delete_debt', { id }),
@@ -112,6 +156,10 @@ export const api = {
   /** What the gold held has been worth, day by day. Null counts every piece. */
   goldValueSeries: (days: number | null, purityE4: number | null) =>
     call<ValuePoint[]>('gold_value_series', { days, purityE4 }),
+
+  /** What everything held has been worth, day by day, as one line. */
+  portfolioValueSeries: (days: number | null) =>
+    call<ValuePoint[]>('portfolio_value_series', { days }),
   searchSchemes: (query: string) => call<Scheme[]>('search_schemes', { query }),
 
   getSetting: (key: string) => call<string | null>('get_setting', { key }),
