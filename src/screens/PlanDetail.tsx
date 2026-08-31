@@ -103,7 +103,9 @@ export function PlanDetail({
   const change = opening && latest ? latest - opening : 0;
   const changePct = opening ? (change / opening) * 100 : 0;
 
-  const expected = plan.variable && plan.averageAmount > 0 ? plan.averageAmount : plan.amount;
+  // What the plan is for. Past payments coming in lower is history; it does
+  // not make the next one lower.
+  const expected = plan.amount;
   const late = (plan.daysUntil ?? 0) < 0 && plan.status !== 'ended';
   const tint = plan.categoryColor ?? (plan.kind === 'income' ? 'var(--green)' : 'var(--ink-3)');
 
@@ -125,7 +127,7 @@ export function PlanDetail({
             <h1>{plan.name}</h1>
             <p>
               {cadenceLabel(plan.cadence, plan.every)}
-              {plan.accountName ? ` · usually from ${plan.accountName}` : ''}
+              {plan.accountName ? ` · from ${plan.accountName}` : ''}
               {plan.categoryName ? ` · ${plan.categoryName}` : ''}
               {stats.first ? ` · since ${shortDayLabel(stats.first.dueOn)}` : ''}
             </p>
@@ -174,14 +176,10 @@ export function PlanDetail({
               {plan.nextDue
                 ? `${dueLabel(plan)} · ${shortDayLabel(plan.nextDue)}`
                 : 'nothing more due'}
-              {plan.variable ? ' · the amount moves' : ` · ${cadenceSuffix(plan.cadence, plan.every)}`}
+              {` · ${cadenceSuffix(plan.cadence, plan.every)}`}
             </p>
           </div>
           <div className="plan-row-tags plan-detail-tags">
-            {plan.automatic && (
-              <span className="plan-tag"><Icon name="zap" size={11} /> Pays itself</span>
-            )}
-            {plan.variable && <span className="plan-tag">Amount varies</span>}
             {hasRisen(plan) && (
               <span className="plan-tag is-warn">
                 <Icon name="trending-up" size={11} /> {money(plan.drift)} above plan
@@ -207,12 +205,14 @@ export function PlanDetail({
             hint={`${stats.count} ${stats.count === 1 ? 'payment' : 'payments'}`}
           />
           <Figure
-            label="Typical payment"
-            value={money(stats.average || plan.amount)}
+            label="Average paid"
+            value={stats.count ? money(stats.average) : '—'}
             hint={
-              stats.lowest !== stats.highest
-                ? `${compactMoney(stats.lowest)} – ${compactMoney(stats.highest)}`
-                : 'the same every time'
+              !stats.count
+                ? `${money(plan.amount)} a time is what it is for`
+                : stats.lowest !== stats.highest
+                  ? `${compactMoney(stats.lowest)} – ${compactMoney(stats.highest)}`
+                  : 'the same every time'
             }
           />
           <Figure

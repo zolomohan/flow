@@ -678,7 +678,11 @@ export interface Plan {
   id: string;
   name: string;
   kind: TxKind;
-  /** What it is expected to come to — a figure to budget against. */
+  /**
+   * What it comes to. This is the figure the plan is for — not an average of
+   * what has been paid before, which is history rather than what falls due
+   * next.
+   */
   amount: Paise;
   accountId: string | null;
   accountName: string | null;
@@ -701,14 +705,7 @@ export interface Plan {
    */
   anchorOn: string;
   endsOn: string | null;
-  /** Money that leaves on its own, as against a bill you go and pay. */
-  automatic: boolean;
-  /** The amount moves every cycle — a power bill, a card statement. */
-  variable: boolean;
   archived: boolean;
-  /** The key an import filed this payee under, used to suggest postings
-   *  worth linking. It never claims one. */
-  matchKey: string | null;
   createdAt: string;
 
   /** The next cycle nobody has paid. Null once the plan has run out. */
@@ -747,9 +744,6 @@ export interface PlanInput {
   every?: number | null;
   anchorOn: string;
   endsOn: string | null;
-  automatic?: boolean | null;
-  variable?: boolean | null;
-  matchKey?: string | null;
   archived?: boolean | null;
 }
 
@@ -764,7 +758,6 @@ export interface PlanOccurrence {
   categoryIcon: string | null;
   categoryColor: string | null;
   accountName: string | null;
-  automatic: boolean;
   /** Whether a posting in the book answers for this cycle. */
   paid: boolean;
   transactionId: string | null;

@@ -156,10 +156,7 @@ struct PlanRow {
     every: i64,
     anchor_on: String,
     ends_on: Option<String>,
-    automatic: bool,
-    variable: bool,
     skipped_through: Option<String>,
-    match_key: Option<String>,
     archived: bool,
     created_at: String,
 }
@@ -168,8 +165,7 @@ const PLAN_SELECT: &str = "
 SELECT p.id, p.name, p.kind, p.amount, p.account_id, a.name, a.color,
        p.to_account_id, ta.name, p.category_id, c.name, c.icon, c.color,
        p.merchant, p.note, p.cadence, p.every, p.anchor_on, p.ends_on,
-       p.automatic, p.variable, p.skipped_through, p.match_key, p.archived,
-       p.created_at
+       p.skipped_through, p.archived, p.created_at
 FROM plans p
 LEFT JOIN accounts a   ON a.id = p.account_id
 LEFT JOIN accounts ta  ON ta.id = p.to_account_id
@@ -197,12 +193,9 @@ fn plan_from_row(r: &rusqlite::Row) -> rusqlite::Result<PlanRow> {
         every: r.get::<_, i64>(16)?.max(1),
         anchor_on: r.get(17)?,
         ends_on: r.get(18)?,
-        automatic: r.get::<_, i64>(19)? != 0,
-        variable: r.get::<_, i64>(20)? != 0,
-        skipped_through: r.get(21)?,
-        match_key: r.get(22)?,
-        archived: r.get::<_, i64>(23)? != 0,
-        created_at: r.get(24)?,
+        skipped_through: r.get(19)?,
+        archived: r.get::<_, i64>(20)? != 0,
+        created_at: r.get(21)?,
     })
 }
 
@@ -390,10 +383,7 @@ fn hydrate(conn: &Connection, plan: PlanRow) -> Result<Plan> {
         every: plan.every,
         anchor_on: plan.anchor_on,
         ends_on: plan.ends_on,
-        automatic: plan.automatic,
-        variable: plan.variable,
         archived: plan.archived,
-        match_key: plan.match_key,
         created_at: plan.created_at,
         next_due: next_due.map(|d| d.to_string()),
         days_until: next_due.map(|d| (d - now_day).num_days()),
@@ -491,7 +481,7 @@ pub fn save_plan(conn: &Connection, input: PlanInput) -> Result<Plan> {
                 "UPDATE plans SET name = ?2, kind = ?3, amount = ?4, account_id = ?5,
                         to_account_id = ?6, category_id = ?7, merchant = ?8, note = ?9,
                         cadence = ?10, every = ?11, anchor_on = ?12, ends_on = ?13,
-                        automatic = ?14, variable = ?15, match_key = ?16, archived = ?17
+                        archived = ?14
                  WHERE id = ?1",
                 params![
                     id,
@@ -507,9 +497,6 @@ pub fn save_plan(conn: &Connection, input: PlanInput) -> Result<Plan> {
                     every,
                     input.anchor_on,
                     input.ends_on,
-                    input.automatic.unwrap_or(true) as i64,
-                    input.variable.unwrap_or(false) as i64,
-                    input.match_key,
                     input.archived.unwrap_or(false) as i64,
                 ],
             )
@@ -521,8 +508,8 @@ pub fn save_plan(conn: &Connection, input: PlanInput) -> Result<Plan> {
             conn.execute(
                 "INSERT INTO plans (id, name, kind, amount, account_id, to_account_id,
                                     category_id, merchant, note, cadence, every, anchor_on,
-                                    ends_on, automatic, variable, match_key, archived, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                                    ends_on, archived, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
                     id,
                     name,
@@ -537,9 +524,6 @@ pub fn save_plan(conn: &Connection, input: PlanInput) -> Result<Plan> {
                     every,
                     input.anchor_on,
                     input.ends_on,
-                    input.automatic.unwrap_or(true) as i64,
-                    input.variable.unwrap_or(false) as i64,
-                    input.match_key,
                     input.archived.unwrap_or(false) as i64,
                     now(),
                 ],
@@ -594,9 +578,10 @@ pub fn pay_plan(
     let Some(account_id) = plan.account_id.clone() else {
         return Err("Say which account this comes out of before paying it.".into());
     };
-    let amount = amount.unwrap_or({
-        if plan.variable && plan.average_amount > 0 { plan.average_amount } else { plan.amount }
-    });
+    // What the plan is for. Past payments being lower does not make the next
+    // one lower — that is the difference between what a thing costs and what
+    // it happened to cost.
+    let amount = amount.unwrap_or(plan.amount);
     if amount <= 0 {
         return Err("How much was it?".into());
     }
@@ -651,7 +636,6 @@ fn occurrences_of(plan: &PlanRow, postings: &[Paid], horizon: NaiveDate) -> Vec<
                 category_icon: plan.category_icon.clone(),
                 category_color: plan.category_color.clone(),
                 account_name: plan.account_name.clone(),
-                automatic: plan.automatic,
                 paid: cycle.paid.is_some(),
                 transaction_id: cycle.paid.as_ref().map(|p| p.id.clone()),
                 actual_amount: cycle.paid.as_ref().map(|p| p.amount).unwrap_or(0),
@@ -837,9 +821,6 @@ mod tests {
             every: Some(1),
             anchor_on: anchor.to_string(),
             ends_on: None,
-            automatic: Some(true),
-            variable: Some(false),
-            match_key: None,
             archived: Some(false),
         }
     }

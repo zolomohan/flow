@@ -71,10 +71,9 @@ export function monthlyTotal(plans: Plan[], kind: Plan['kind']) {
 
 /**
  * A plan whose last payment came in above what it says it costs, by enough
- * to be a price rise rather than a rounding. Plans that were set up as
- * variable are left out: a power bill moving is weather, not news.
+ * to be a price rise rather than a rounding.
  */
 export function hasRisen(plan: Plan) {
-  if (plan.variable || plan.paidCount === 0 || plan.amount <= 0) return false;
+  if (plan.paidCount === 0 || plan.amount <= 0) return false;
   return plan.drift > Math.max(Math.round(plan.amount * 0.03), 100);
 }

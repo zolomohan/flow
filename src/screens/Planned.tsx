@@ -46,7 +46,7 @@ export function Planned({
     .filter((p) => p.kind === 'expense')
     .reduce((sum, p) => sum + p.yearlyAmount, 0);
   const soon = live.filter((p) => p.daysUntil !== null && p.daysUntil <= 7);
-  const soonTotal = soon.reduce((sum, p) => sum + (p.variable ? p.averageAmount : p.amount), 0);
+  const soonTotal = soon.reduce((sum, p) => sum + p.amount, 0);
   const risen = useMemo(() => plans.filter(hasRisen), [plans]);
   const lapsed = plans.filter((p) => p.status === 'lapsed' && !p.archived);
   const share = overview && overview.income > 0
@@ -280,7 +280,7 @@ function Upcoming({
     <>
       {shelves.map((shelf) => {
         const total = shelf.plans.reduce(
-          (sum, p) => sum + (p.kind === 'income' ? 0 : p.variable ? p.averageAmount : p.amount),
+          (sum, p) => sum + (p.kind === 'income' ? 0 : p.amount),
           0,
         );
         return (
@@ -330,7 +330,6 @@ function PlanRow({
   onArchive: () => void;
   onOpenTransaction: (id: string) => void;
 }) {
-  const expected = plan.variable && plan.averageAmount > 0 ? plan.averageAmount : plan.amount;
   const late = (plan.daysUntil ?? 0) < 0;
   const rise = hasRisen(plan);
 
@@ -351,7 +350,6 @@ function PlanRow({
           <span>
             {cadenceLabel(plan.cadence, plan.every)}
             {plan.accountName ? ` · ${plan.accountName}` : ''}
-            {plan.automatic ? '' : ' · you pay it'}
           </span>
         </span>
         <span className="plan-row-when">
@@ -359,21 +357,16 @@ function PlanRow({
           <span>{plan.nextDue ? shortDayLabel(plan.nextDue) : '—'}</span>
         </span>
         <span className="plan-row-amount">
-          <strong className={plan.kind === 'income' ? 'is-up' : ''}>{money(expected)}</strong>
+          <strong className={plan.kind === 'income' ? 'is-up' : ''}>
+            {money(plan.amount)}
+          </strong>
           <span>
-            {rise
-              ? `up ${money(plan.drift)}`
-              : plan.variable
-                ? 'varies'
-                : cadenceSuffix(plan.cadence, plan.every)}
+            {rise ? `up ${money(plan.drift)}` : cadenceSuffix(plan.cadence, plan.every)}
           </span>
         </span>
       </button>
 
       <div className="plan-row-tags">
-        {plan.automatic && (
-          <span className="plan-tag"><Icon name="zap" size={11} /> Auto</span>
-        )}
         {rise && (
           <span className="plan-tag is-warn">
             <Icon name="trending-up" size={11} /> {money(plan.drift)} more

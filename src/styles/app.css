@@ -5348,8 +5348,6 @@ kbd {
 .plan-spark.is-empty { opacity: 0; pointer-events: none; }
 .plan-spark i { width: 4px; border-radius: 2px; background: var(--ink-3); }
 
-.plan-flags { display: grid; gap: 8px; }
-
 /* What a payee currently finds in the ledger, said as it is typed — a plan
    is held on by its payee, and a rename that quietly lets go is the one
    mistake this form can make. */
@@ -5362,7 +5360,6 @@ kbd {
   font-weight: 500;
   color: var(--ink-3);
 }
-.plan-matches.is-empty { color: var(--amber); }
 
 /* The one nudge this screen makes: subscriptions that quietly stopped. */
 .plan-nudge {

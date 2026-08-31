@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Icon } from './Icon';
 import { DateField } from './DateField';
 import {
   Button, Confirm, Field, Segmented, Select, Sheet, TextArea, TextInput,
@@ -22,8 +21,6 @@ export interface PlanDraft {
   categoryId?: string | null;
   cadence?: PlanCadence;
   anchorOn?: string;
-  variable?: boolean;
-  matchKey?: string | null;
 }
 
 const KINDS: { value: TxKind; label: string; icon: string; accent: string }[] = [
@@ -54,8 +51,6 @@ export function PlanSheet({
   const [name, setName] = useState('');
   const [merchant, setMerchant] = useState('');
   const [amount, setAmount] = useState('');
-  const [variable, setVariable] = useState(false);
-  const [automatic, setAutomatic] = useState(true);
   const [cadence, setCadence] = useState<PlanCadence>('monthly');
   const [every, setEvery] = useState('1');
   const [anchorOn, setAnchorOn] = useState(todayIso);
@@ -80,8 +75,6 @@ export function PlanSheet({
       setName(editing.name);
       setMerchant(editing.merchant);
       setAmount(paiseToRupeeString(editing.amount));
-      setVariable(editing.variable);
-      setAutomatic(editing.automatic);
       setCadence(editing.cadence);
       setEvery(String(editing.every));
       setAnchorOn(editing.anchorOn);
@@ -96,8 +89,6 @@ export function PlanSheet({
     setName(draft?.name ?? '');
     setMerchant(draft?.merchant ?? draft?.name ?? '');
     setAmount(draft?.amount ? paiseToRupeeString(draft.amount) : '');
-    setVariable(draft?.variable ?? false);
-    setAutomatic(true);
     setCadence(draft?.cadence ?? 'monthly');
     setEvery('1');
     setAnchorOn(draft?.anchorOn ?? todayIso());
@@ -157,7 +148,7 @@ export function PlanSheet({
 
   const submit = async () => {
     if (!name.trim()) return setError('What should this be called?');
-    if (paise <= 0 && !variable) return setError('How much is it, roughly?');
+    if (paise <= 0) return setError('How much is it?');
     if (!accountId) return setError('Which account does this come out of?');
     if (kind === 'transfer' && !toAccountId) return setError('And where does it land?');
     try {
@@ -175,9 +166,6 @@ export function PlanSheet({
         every: times,
         anchorOn,
         endsOn: endsOn || null,
-        automatic,
-        variable,
-        matchKey: editing?.matchKey ?? draft?.matchKey ?? null,
         archived: editing?.archived ?? false,
       });
       onClose();
@@ -257,7 +245,7 @@ export function PlanSheet({
                 }}
               />
             </Field>
-            <Field label="Amount" hint={variable ? 'roughly' : undefined}>
+            <Field label="Amount">
               <div className="rupee-input">
                 <span>₹</span>
                 <TextInput
@@ -309,10 +297,7 @@ export function PlanSheet({
           </div>
 
           <div className="tx-meta">
-            <Field
-              label={kind === 'income' ? 'Usually lands in' : 'Usually paid from'}
-              hint={kind === 'transfer' ? undefined : 'payments count from any account'}
-            >
+            <Field label={kind === 'income' ? 'Lands in' : 'Paid from'}>
               <Select
                 options={accountOptions}
                 value={accountId}
@@ -353,31 +338,11 @@ export function PlanSheet({
               onChange={(e) => setMerchant(e.target.value)}
             />
             <p className="plan-matches">
-              What this plan has been paid is whatever you link to it — the
-              payee only shapes which postings it offers you first.
+              Written on the postings this plan writes, and what the link
+              picker opens on. What the plan counts as paid is only ever what
+              you link to it.
             </p>
           </Field>
-
-          <div className="plan-flags">
-            <button
-              type="button"
-              className={`settle-toggle ${automatic ? 'is-on' : ''}`}
-              onClick={() => setAutomatic((v) => !v)}
-            >
-              <span className="settle-box">{automatic && <Icon name="check" size={12} />}</span>
-              It pays itself
-              <small>{automatic ? 'a mandate or standing instruction' : 'you go and pay it'}</small>
-            </button>
-            <button
-              type="button"
-              className={`settle-toggle ${variable ? 'is-on' : ''}`}
-              onClick={() => setVariable((v) => !v)}
-            >
-              <span className="settle-box">{variable && <Icon name="check" size={12} />}</span>
-              The amount moves
-              <small>{variable ? 'a bill, not a fixed price' : 'the same every time'}</small>
-            </button>
-          </div>
 
           <Field label="Note" hint="optional">
             <TextArea

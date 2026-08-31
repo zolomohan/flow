@@ -731,7 +731,7 @@ function PlannedCard({ plans, onOpen }: { plans: Plan[]; onOpen: () => void }) {
   const committed = monthlyTotal(plans, 'expense');
   const week = live.filter((p) => p.daysUntil !== null && p.daysUntil <= 7);
   const weekTotal = week.reduce(
-    (sum, p) => sum + (p.kind === 'income' ? 0 : p.variable ? p.averageAmount : p.amount),
+    (sum, p) => sum + (p.kind === 'income' ? 0 : p.amount),
     0,
   );
   const late = live.filter((p) => (p.daysUntil ?? 0) < 0).length;
@@ -785,7 +785,7 @@ function PlannedCard({ plans, onOpen }: { plans: Plan[]; onOpen: () => void }) {
                       {dueLabel(plan)}
                     </em>
                     <strong className={plan.kind === 'income' ? 'is-up' : ''}>
-                      {money(plan.variable && plan.averageAmount ? plan.averageAmount : plan.amount)}
+                      {money(plan.amount)}
                     </strong>
                   </span>
                 </button>

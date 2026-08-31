@@ -341,20 +341,15 @@ fn migrate(conn: &Connection) -> Result<()> {
             -- same cycle backwards.
             anchor_on       TEXT NOT NULL,
             ends_on         TEXT,
-            automatic       INTEGER NOT NULL DEFAULT 1,
-            variable        INTEGER NOT NULL DEFAULT 0,
             -- Cycles deliberately let go: nothing is owed up to this date.
             skipped_through TEXT,
-            -- The counterparty key an import would recognise this by, so a
-            -- statement's own spelling of the payee still finds its plan.
-            match_key       TEXT,
             archived        INTEGER NOT NULL DEFAULT 0,
             created_at      TEXT NOT NULL
         );
 
-        -- The postings a plan has claimed by hand. Most of what answers to a
-        -- plan is found by its payee, but a bill paid from another account,
-        -- or under a name the statement mangled, has to be pointed at.
+        -- The postings a plan is paid by. All of them: a plan finds nothing
+        -- on its own, because one payee very often bills several plans and
+        -- only the person paying knows which is which.
         CREATE TABLE IF NOT EXISTS plan_entries (
             plan_id        TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
             transaction_id TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
@@ -409,6 +404,14 @@ fn migrate(conn: &Connection) -> Result<()> {
         "ask_fields",
         "ask_fields TEXT NOT NULL DEFAULT ''",
     )?;
+    // Three columns a plan no longer has any use for. A plan is paid by what
+    // is linked to it, so nothing turns on whether the amount moves or
+    // whether it debits itself, and the importer's key stopped being how
+    // payments are found. Dropped rather than left to rot, since a column
+    // nothing reads is a column somebody will one day believe.
+    for dead in ["automatic", "variable", "match_key"] {
+        drop_column_if_present(conn, "plans", dead)?;
+    }
     migrate_gold_to_grams(conn)?;
     conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_cat_parent ON categories(parent_id);")
         .map_err(oops)?;
@@ -444,6 +447,25 @@ fn add_column_if_missing(conn: &Connection, table: &str, column: &str, decl: &st
         .any(|name| name == column);
     if !present {
         conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {decl}"), [])
+            .map_err(oops)?;
+    }
+    Ok(())
+}
+
+/// The other half of `add_column_if_missing`: takes a column back out once
+/// nothing reads it. Books that never had it are left alone.
+fn drop_column_if_present(conn: &Connection, table: &str, column: &str) -> Result<()> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(oops)?;
+    let present = stmt
+        .query_map([], |r| r.get::<_, String>(1))
+        .map_err(oops)?
+        .filter_map(std::result::Result::ok)
+        .any(|name| name == column);
+    drop(stmt);
+    if present {
+        conn.execute(&format!("ALTER TABLE {table} DROP COLUMN {column}"), [])
             .map_err(oops)?;
     }
     Ok(())

@@ -780,8 +780,9 @@ pub struct Plan {
     pub name: String,
     /// income | expense | transfer
     pub kind: String,
-    /// What it is expected to come to. For a variable plan this is the
-    /// figure to budget against, not a promise.
+    /// What it comes to. This is the figure the plan is for — not an
+    /// average of what has been paid before, which is history rather than
+    /// what falls due next.
     pub amount: Paise,
     pub account_id: Option<String>,
     pub account_name: Option<String>,
@@ -803,15 +804,7 @@ pub struct Plan {
     /// the far end of a run still carries the history behind it.
     pub anchor_on: String,
     pub ends_on: Option<String>,
-    /// Money that leaves on its own — a mandate or a standing instruction —
-    /// as against a bill somebody has to go and pay.
-    pub automatic: bool,
-    /// The amount moves every cycle: a power bill, a card statement. Drift
-    /// on one of these is weather, not news.
-    pub variable: bool,
     pub archived: bool,
-    /// The counterparty key imports recognise this by, when it came from one.
-    pub match_key: Option<String>,
     pub created_at: String,
 
     /* ------------------------------------- read off the ledger, not stored */
@@ -855,9 +848,6 @@ pub struct PlanInput {
     pub every: Option<i64>,
     pub anchor_on: String,
     pub ends_on: Option<String>,
-    pub automatic: Option<bool>,
-    pub variable: Option<bool>,
-    pub match_key: Option<String>,
     pub archived: Option<bool>,
 }
 
@@ -875,7 +865,6 @@ pub struct PlanOccurrence {
     pub category_icon: Option<String>,
     pub category_color: Option<String>,
     pub account_name: Option<String>,
-    pub automatic: bool,
     /// Whether a posting in the book answers for this cycle.
     pub paid: bool,
     pub transaction_id: Option<String>,

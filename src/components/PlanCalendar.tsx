@@ -199,9 +199,7 @@ export function PlanCalendar({
                             ? 'Skipped'
                             : o.paid
                               ? `Paid${o.accountName ? ` from ${o.accountName}` : ''}`
-                              : o.automatic
-                                ? 'Debits itself'
-                                : 'To pay'}
+                              : 'To pay'}
                         </span>
                       </span>
                       <span className="plan-cal-row-amount">
