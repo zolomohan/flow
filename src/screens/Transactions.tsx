@@ -85,8 +85,8 @@ function rangeBounds(span: number, month: string) {
 }
 
 export function Transactions({
-  onOpenTransaction, onSplitTransaction, onOweTransaction, onAddTransaction,
-  accountFocus, categoryFocus, labelFocus,
+  onOpenTransaction, onSplitTransaction, onOweTransaction, onRefundTransaction,
+  onAddTransaction, accountFocus, categoryFocus, labelFocus,
   picking, pickMany, initialSearch,
 }: {
   onOpenTransaction: (tx: Transaction) => void;
@@ -94,6 +94,8 @@ export function Transactions({
   onSplitTransaction?: (tx: Transaction) => void;
   /** Makes the whole of a row a debt in someone's name. Absent while picking. */
   onOweTransaction?: (tx: Transaction) => void;
+  /** Opens a new posting that gives a row back. Absent while picking. */
+  onRefundTransaction?: (tx: Transaction) => void;
   onAddTransaction?: () => void;
   /** Set when arriving from an account elsewhere in the app. */
   accountFocus?: { ids: string[]; token: number };
@@ -863,6 +865,11 @@ export function Transactions({
                         picking || !onOweTransaction
                           ? undefined
                           : () => onOweTransaction(tx)
+                      }
+                      onRefund={
+                        picking || !onRefundTransaction
+                          ? undefined
+                          : () => onRefundTransaction(tx)
                       }
                       selected={pickedSet.has(tx.id)}
                       enterDelay={

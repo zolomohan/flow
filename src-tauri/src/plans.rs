@@ -607,6 +607,7 @@ pub fn pay_plan(
             splits: None,
             shares: None,
             label_ids: None,
+            refund_of: None,
         },
     )?;
     conn.execute(

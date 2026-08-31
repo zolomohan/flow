@@ -103,6 +103,18 @@ pub struct Transaction {
     /// The labels pinned to this posting — "Triage" on anything an import
     /// brought in that hasn't been looked over yet.
     pub labels: Vec<TxLabel>,
+    /// The posting this one gives back, when it is a refund. A refund undoes
+    /// what it names rather than being money of its own: the two cancel, and
+    /// neither is counted as earned or spent. The money still moved, so both
+    /// still count toward the balance.
+    pub refund_of: Option<String>,
+    /// Who the refunded posting was with, and what it was for, so a row can
+    /// say what it undoes without fetching it.
+    pub refund_of_merchant: Option<String>,
+    pub refund_of_amount: Option<Paise>,
+    /// How much of *this* posting has been given back — the refunds naming
+    /// it, added up. Zero on almost everything.
+    pub refunded: Paise,
 }
 
 /// A label as it sits on a posting. The count lives on `Label`, which is the
@@ -203,6 +215,10 @@ pub struct TransactionInput {
     /// pinned alone; a list replaces the set outright, empty taking all off.
     #[serde(default)]
     pub label_ids: Option<Vec<String>>,
+    /// The posting this one refunds. Set on every save: `None` is a posting
+    /// that gives nothing back, which is how a refund is taken off again.
+    #[serde(default)]
+    pub refund_of: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

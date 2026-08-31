@@ -98,6 +98,18 @@ export interface Transaction {
   shares: TransactionShare[];
   /** Labels pinned on top — "Triage" on unverified imports, say. */
   labels: TxLabel[];
+  /**
+   * The posting this one gives back, when it is a refund. A refund undoes
+   * what it names rather than being money of its own: the two cancel, and
+   * neither counts as earned or spent. The money still moved, so both still
+   * count toward the balance.
+   */
+  refundOf: string | null;
+  /** Who that posting was with, and what it was for. */
+  refundOfMerchant: string | null;
+  refundOfAmount: Paise | null;
+  /** How much of *this* posting has been given back. Zero on nearly all. */
+  refunded: Paise;
 }
 
 /** A label as it sits on a posting. */
@@ -180,6 +192,9 @@ export interface TransactionInput {
   /** Labels this posting should wear. Left off, nothing changes; a list
    *  replaces the set outright, empty taking them all off. */
   labelIds?: string[] | null;
+  /** The posting this one refunds. Null on every save that isn't one, which
+   *  is how a refund is taken off again. */
+  refundOf?: string | null;
 }
 
 /* -------------------------------------------------------------- templates */

@@ -291,6 +291,12 @@ export function ImportSheet({ open: isOpen, onClose }: { open: boolean; onClose:
         settled: false,
       })),
       labels: [],
+      // A row waiting to import gives nothing back and has had nothing
+      // given back to it: it is not in the book yet to be refunded.
+      refundOf: null,
+      refundOfMerchant: null,
+      refundOfAmount: null,
+      refunded: 0,
     };
   };
 

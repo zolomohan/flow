@@ -19,10 +19,11 @@ import {
 } from '../lib/format';
 import { itemVariants, listVariants, pageVariants, popover, press, spring } from '../lib/motion';
 import { AskPicker } from './AskPicker';
+import { TransactionPicker } from './TransactionPicker';
 import { describeTemplate, fieldLabel } from '../lib/templates';
 import type {
-  Account, Category, TemplateField, Transaction, TransactionInput, TxKind, TxTemplate,
-  TxTemplateInput,
+  Account, Category, Paise, TemplateField, Transaction, TransactionInput, TxKind,
+  TxTemplate, TxTemplateInput,
 } from '../lib/types';
 
 /**
@@ -473,7 +474,37 @@ export interface TxDraft {
   categoryId?: string;
   /** Opened from a saved template — the sheet fills itself in from it. */
   template?: TxTemplate;
+  /** Opened to give a posting back: the sheet arrives as the other side of
+   *  it, for whatever is still standing on it. */
+  refund?: Transaction;
 }
+
+/**
+ * The posting a refund gives back to, as the form needs it: enough to say
+ * what is being undone and to check that it isn't handing back more than was
+ * there.
+ */
+interface RefundTarget {
+  id: string;
+  merchant: string;
+  /** Which way the posting being refunded ran. */
+  kind: TxKind;
+  amount: Paise;
+  /** What is still standing on it, other refunds already taken off. */
+  remaining: Paise;
+}
+
+/** A refund runs the other way from what it undoes: money spent comes back
+ *  in, money earned goes back out. */
+const refundKind = (target: TxKind): TxKind => (target === 'income' ? 'expense' : 'income');
+
+const targetOf = (tx: Transaction): RefundTarget => ({
+  id: tx.id,
+  merchant: tx.merchant || tx.categoryName || 'that transaction',
+  kind: tx.kind,
+  amount: tx.amount,
+  remaining: tx.amount - tx.refunded,
+});
 
 /**
  * Which page the sheet opens on, when it was opened to divide a bill rather
@@ -525,6 +556,11 @@ export function TransactionSheet({
   const [lines, setLines] = useState<SplitLine[]>([]);
   const [people, setPeople] = useState<SplitPeople>(emptyPeople);
   const [labelIds, setLabelIds] = useState<string[]>([]);
+  // What this posting gives back, when it is a refund. A refund undoes one
+  // posting rather than being money of its own: neither of them is counted
+  // as earned or spent, and the balance keeps both, because the money did
+  // leave and it did come back.
+  const [refund, setRefund] = useState<RefundTarget | null>(null);
   // Which template this one was filled in from: what it asks for is still
   // owed, its name belongs in the heading, and the count against it goes up
   // once the posting is actually written — not before.
@@ -544,6 +580,16 @@ export function TransactionSheet({
   const lastAccount = useRef<string | null>(null);
   lastAccount.current = settings[LAST_ACCOUNT] ?? null;
 
+  // Where a refund files itself. It counts for nothing either way — a refund
+  // is netted off the posting it undoes — but the row still wants a colour
+  // and a glyph, and money coming back belongs under Refunds when the book
+  // still has the category it was seeded with.
+  const refundFiling = (of: TxKind) =>
+    refundKind(of) === 'income'
+      ? (categories.find((c) => c.kind === 'income' && !c.parentId && c.name === 'Refunds')?.id ??
+         null)
+      : null;
+
   // Reset the form each time the sheet opens, from the edited row or the draft.
   useEffect(() => {
     if (!open) return;
@@ -562,6 +608,20 @@ export function TransactionSheet({
       setLabelIds(editing.labels.map((l) => l.id));
       setSeeded(false);
       setFromTemplate(null);
+      // What it refunds, as far as the row knows it. How much of the bill is
+      // still standing takes any other refund into account, which this side
+      // cannot see — the book is the referee, and says so on save.
+      setRefund(
+        editing.refundOf
+          ? {
+              id: editing.refundOf,
+              merchant: editing.refundOfMerchant || 'that transaction',
+              kind: refundKind(editing.kind),
+              amount: editing.refundOfAmount ?? editing.amount,
+              remaining: editing.refundOfAmount ?? editing.amount,
+            }
+          : null,
+      );
     } else {
       // Where it was asked for, then wherever the last one was written, then
       // whatever comes first — an account that has since gone or been
@@ -588,6 +648,17 @@ export function TransactionSheet({
       setLabelIds(shape ? shape.labelIds : []);
       setSeeded(false);
       setFromTemplate(draft?.template ?? null);
+      // Opened to give a posting back — the Refund action on a row. The form
+      // arrives as the other side of it, for whatever is still standing.
+      const giving = draft?.refund ? targetOf(draft.refund) : null;
+      setRefund(giving);
+      if (giving) {
+        setKind(refundKind(giving.kind));
+        setAmount(paiseToRupeeString(giving.remaining));
+        setMerchant(draft!.refund!.merchant);
+        setCategoryId(refundFiling(giving.kind));
+        setLines([]);
+      }
     }
     // The sheet opens on a split page only when it was asked for by name —
     // the Split action on a row. Otherwise it opens on the transaction, with
@@ -701,6 +772,31 @@ export function TransactionSheet({
   const swap = () => {
     setAccountId(toAccountId);
     setToAccountId(accountId);
+  };
+
+  // Naming what this gives back. The form turns round to face it: a refund
+  // of a bill is money coming in, for what is still standing on the bill.
+  const attachRefund = (tx: Transaction) => {
+    if (tx.id === editing?.id) return setError('A posting cannot refund itself.');
+    if (tx.kind === 'transfer')
+      return setError(
+        'A transfer moves money between your own accounts, so there is nothing to refund.',
+      );
+    if (tx.refundOf) return setError('That posting is itself a refund.');
+    const target = targetOf(tx);
+    setRefund(target);
+    setKind(refundKind(target.kind));
+    setAmount(paiseToRupeeString(target.remaining));
+    setCategoryId(refundFiling(target.kind));
+    if (!merchant.trim()) setMerchant(tx.merchant);
+    setError(null);
+  };
+
+  // A refund runs the other way from what it undoes, so choosing the side it
+  // no longer runs against is choosing for it not to be one.
+  const chooseKind = (next: TxKind) => {
+    setKind(next);
+    if (refund && next !== refundKind(refund.kind)) setRefund(null);
   };
 
   // Opening the categories panel on an unsplit bill seeds two halves rather
@@ -866,6 +962,12 @@ export function TransactionSheet({
     if (parts.length === 1) return setError('A split needs at least two parts.');
     if (owed > paise)
       return setError(`The shares come to ${money(owed)} — more than the bill.`);
+    // A refund can only hand back what is still standing, and money lent is
+    // not money given back: a posting is one or the other.
+    if (refund && paise > refund.remaining)
+      return setError(`${refund.merchant} has ${money(refund.remaining)} left to give back.`);
+    if (refund && lentInFull)
+      return setError('A refund comes home to you, so it cannot be owed back as well.');
 
     // Lending is not spending. If none of a bill is yours — every paisa of it
     // owed back — then it is money that left your accounts and is coming
@@ -894,6 +996,7 @@ export function TransactionSheet({
       splits: parts,
       shares: owing,
       labelIds,
+      refundOf: refund?.id ?? null,
     };
 
     // The caller wanted the input, not the save.
@@ -967,7 +1070,7 @@ export function TransactionSheet({
   // behind on a page you had to go back to.
   const fields = (
     <div className="tx-pane">
-      <Segmented options={KINDS} value={kind} onChange={setKind} name="tx-kind" size="lg" />
+      <Segmented options={KINDS} value={kind} onChange={chooseKind} name="tx-kind" size="lg" />
 
       <div className="amount-well">
         <span className="amount-symbol">₹</span>
@@ -1136,6 +1239,39 @@ export function TransactionSheet({
     </div>
   );
 
+  // What this posting undoes, when it undoes one. A transfer has nothing to
+  // give back — it moves money between your own accounts rather than earning
+  // or spending it — so it is never asked.
+  // Nor is a statement row waiting to import: it is not in the book yet, and
+  // a posting that isn't there can neither give anything back nor be given.
+  const refundPicker = kind !== 'transfer' && !onSubmit && (
+    <div className="tx-refund">
+      <span className="field-label">
+        Refund
+        {refund && <span className="field-hint">of {money(refund.amount)}</span>}
+      </span>
+      <TransactionPicker
+        value={refund?.id ?? null}
+        label={refund ? `${refund.merchant} · ${money(refund.amount)}` : null}
+        title="What is this giving back?"
+        subtitle="The posting it undoes. Neither of them will count toward what you earned or spent."
+        onChange={(id, _label, tx) => (id && tx ? attachRefund(tx) : setRefund(null))}
+      />
+      {refund && (
+        <p className="page-note">
+          <Icon name="undo-2" size={13} />
+          {paise >= refund.remaining
+            ? `Nothing of ${refund.merchant} is left standing: it drops out of your ${
+                refund.kind === 'expense' ? 'spending' : 'income'
+              } and this drops out with it. The money still moved, so both accounts keep it.`
+            : `${money(paise)} of ${money(refund.amount)} comes off ${refund.merchant} — ${money(
+                refund.remaining - paise,
+              )} of it still stands.`}
+        </p>
+      )}
+    </div>
+  );
+
   const partsSummary = split
     ? `${lines.length} parts of ${money(paise)} · ${partNames || 'pick categories'}`
     : 'File one bill under more than one category';
@@ -1178,11 +1314,15 @@ export function TransactionSheet({
                     .map((f) => fieldLabel(f, kind))
                     .join(', ')} to fill in`
                 : `From “${fromTemplate.name}”`
-              : kind === 'transfer'
-                ? 'Moving money between your own accounts'
-                : kind === 'income'
-                  ? 'Money landing in an account'
-                  : 'Money leaving an account',
+              : refund
+                ? `Giving back ${refund.merchant} — neither will count as ${
+                    refund.kind === 'expense' ? 'spending' : 'income'
+                  }`
+                : kind === 'transfer'
+                  ? 'Moving money between your own accounts'
+                  : kind === 'income'
+                    ? 'Money landing in an account'
+                    : 'Money leaving an account',
           };
 
   // Escape steps back out of a split first, since leaving the page is what it
@@ -1515,6 +1655,7 @@ export function TransactionSheet({
                 )}
               </AnimatePresence>
 
+              {refundPicker}
               {labelPicker}
             </div>
           </motion.div>

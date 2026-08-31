@@ -15,7 +15,7 @@ import type { Transaction } from '../lib/types';
  *  into, and the people who owe some of it, unfold underneath rather than
  *  filling the ledger with entries the bank never saw. */
 export function TransactionRow({
-  tx, onClick, onSplit, onDebt, showDate, selected, onSelect, enterDelay = 0,
+  tx, onClick, onSplit, onDebt, onRefund, showDate, selected, onSelect, enterDelay = 0,
 }: {
   tx: Transaction;
   onClick?: () => void;
@@ -32,6 +32,8 @@ export function TransactionRow({
   onSplit?: () => void;
   /** Turns the whole posting into a debt someone owes. Left off while picking. */
   onDebt?: () => void;
+  /** Writes the posting that gives this one back. Left off while picking. */
+  onRefund?: () => void;
   showDate?: string;
   /** Whether this row is in the current selection. Absent means the list
    *  isn't selectable at all — inside the record picker, say. */
@@ -42,6 +44,11 @@ export function TransactionRow({
 }) {
   const [open, setOpen] = useState(false);
   const isTransfer = tx.kind === 'transfer';
+  // A refund undoes the posting it names, so neither counts toward what was
+  // earned or spent. The row says so on both of them — the money moved, and
+  // the balance still has it, so nothing else would give it away.
+  const isRefund = !!tx.refundOf;
+  const givenBack = tx.refunded >= tx.amount ? 'all' : tx.refunded > 0 ? 'part' : 'none';
   const split = tx.splits.length > 0 || tx.shares.length > 0;
   const tint = isTransfer
     ? tx.accountColor
@@ -53,18 +60,24 @@ export function TransactionRow({
   // A split bill's own category is only one of several, so the parts name
   // themselves instead of it.
   const owedTo = tx.shares.map((s) => s.counterparty).join(', ');
-  const subtitle = isTransfer
-    ? `${tx.accountName} → ${tx.toAccountName ?? (owedTo || 'owed back')}`
-    : tx.splits.length
-      ? [`${tx.splits.length} parts`, tx.accountName].filter(Boolean).join(' · ')
-      : [tx.categoryName, tx.accountName].filter(Boolean).join(' · ');
+  const subtitle = isRefund
+    ? [`Gives back ${tx.refundOfMerchant || 'a transaction'}`, tx.accountName]
+        .filter(Boolean)
+        .join(' · ')
+    : isTransfer
+      ? `${tx.accountName} → ${tx.toAccountName ?? (owedTo || 'owed back')}`
+      : tx.splits.length
+        ? [`${tx.splits.length} parts`, tx.accountName].filter(Boolean).join(' · ')
+        : [tx.categoryName, tx.accountName].filter(Boolean).join(' · ');
 
   const owed = tx.shares.reduce((sum, s) => sum + s.outstanding, 0);
   const lent = tx.shares[0]?.direction === 'lent';
 
   return (
     <motion.div
-      className={`tx-bill ${open ? 'is-open' : ''} ${selected ? 'is-picked' : ''}`}
+      className={`tx-bill ${open ? 'is-open' : ''} ${selected ? 'is-picked' : ''} ${
+        givenBack === 'all' || isRefund ? 'is-undone' : ''
+      }`}
       layout="position"
     >
       {/* The box takes the avatar's place rather than sitting beside it: the
@@ -92,6 +105,18 @@ export function TransactionRow({
         <span className="tx-main">
           <span className="tx-title">
             {tx.merchant || (isTransfer ? 'Transfer' : (tx.categoryName ?? 'Uncategorised'))}
+            {isRefund && (
+              <span className="tx-label is-refund">
+                <Icon name="undo-2" size={11} strokeWidth={2.4} />
+                Refund
+              </span>
+            )}
+            {givenBack !== 'none' && (
+              <span className="tx-label is-refund">
+                <Icon name="undo-2" size={11} strokeWidth={2.4} />
+                {givenBack === 'all' ? 'Refunded' : `${money(tx.refunded)} back`}
+              </span>
+            )}
             {tx.labels.map((label) => (
               <span
                 key={label.id}
@@ -141,6 +166,16 @@ export function TransactionRow({
                   label: 'Owed by someone',
                   hint: 'the whole of it becomes a debt',
                   onClick: onDebt,
+                }]
+              : []),
+            // Nothing refunds a transfer, a refund, or a posting already
+            // given back in full: there is nothing left of it to undo.
+            ...(onRefund && !isTransfer && !isRefund && givenBack !== 'all'
+              ? [{
+                  icon: 'undo-2',
+                  label: 'Refund it',
+                  hint: 'give it back — neither will count',
+                  onClick: onRefund,
                 }]
               : []),
           ]}

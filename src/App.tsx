@@ -157,6 +157,15 @@ function Shell() {
     setTxOpen(true);
   }, []);
 
+  // Giving a posting back. A new one — the money coming home is its own entry
+  // in the ledger — opened as the other side of what it undoes.
+  const refundTransaction = useCallback((tx: Transaction) => {
+    setEditingTx(null);
+    setDraft({ refund: tx });
+    setSplitFocus(null);
+    setTxOpen(true);
+  }, []);
+
   // A template is a new transaction with the form already filled in — the
   // same sheet, opened on a shape somebody kept.
   const useTemplate = useCallback(
@@ -338,6 +347,7 @@ function Shell() {
                 onOpenTransaction={openTransaction}
                 onSplitTransaction={splitTransaction}
                 onOweTransaction={oweTransaction}
+                onRefundTransaction={refundTransaction}
                 onAddTransaction={() => newTransaction()}
                 accountFocus={accountFocus}
                 categoryFocus={categoryFocus}

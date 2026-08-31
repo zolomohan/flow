@@ -42,25 +42,57 @@ JOIN accounts a ON a.id = t.account_id
 LEFT JOIN accounts ta ON ta.id = t.to_account_id
 LEFT JOIN categories c ON c.id = t.category_id
 LEFT JOIN categories p ON p.id = c.parent_id
+LEFT JOIN transactions o ON o.id = t.refund_of
 ";
 
-const TX_SELECT: &str = "
-SELECT t.id, t.kind, t.amount, t.account_id, t.to_account_id, t.category_id,
-       t.merchant, t.note, t.occurred_at, t.created_at,
-       a.name, a.color, ta.name, c.name, c.icon, c.color,
-       COALESCE(p.id, c.id), COALESCE(p.name, c.name)
-";
+/// What a posting has had given back to it: every refund naming it, added up.
+/// Correlated on `t`, so it drops into anything reading through `TX_FROM` —
+/// and into the plain `transactions t` the totals sum over.
+const REFUNDED: &str =
+    "COALESCE((SELECT SUM(r.amount) FROM transactions r WHERE r.refund_of = t.id), 0)";
+
+/// Postings that are money of their own. A refund is not: it undoes the one
+/// it names, and both are netted rather than counted.
+const NOT_A_REFUND: &str = "t.refund_of IS NULL";
+
+/// Built rather than pasted: the figure it reads for what has come back is
+/// the same expression every total nets by.
+fn tx_select() -> String {
+    format!(
+        "SELECT t.id, t.kind, t.amount, t.account_id, t.to_account_id, t.category_id,
+                t.merchant, t.note, t.occurred_at, t.created_at,
+                a.name, a.color, ta.name, c.name, c.icon, c.color,
+                COALESCE(p.id, c.id), COALESCE(p.name, c.name),
+                t.refund_of, o.merchant, o.amount, {REFUNDED}"
+    )
+}
 
 /// Every posting as its categories actually see it: an ordinary one once, and
 /// a split bill once per line item. Because the parts add up to the posting's
 /// own amount, anything summing over this sees the same total either way —
 /// only the category each rupee lands under changes.
+///
+/// `net_amount` is the same figure less what has been refunded, which is what
+/// spending is counted by: a bill given back in full is worth nothing, and a
+/// part of one comes off the line items in order, earliest first, so the
+/// parts still add up to what the bill is now worth.
 const ATTRIBUTED: &str = "
-SELECT t.id, t.kind, t.occurred_at, t.merchant,
+SELECT t.id, t.kind, t.occurred_at, t.merchant, t.refund_of,
        COALESCE(s.category_id, t.category_id) AS category_id,
-       COALESCE(s.amount, t.amount)           AS amount
+       COALESCE(s.amount, t.amount)           AS amount,
+       CASE
+         WHEN COALESCE(rb.given_back, 0) = 0 THEN COALESCE(s.amount, t.amount)
+         WHEN s.id IS NULL THEN t.amount - rb.given_back
+         ELSE MAX(0, MIN(s.amount,
+                         SUM(s.amount) OVER (PARTITION BY s.transaction_id
+                                             ORDER BY s.sort_order, s.id)
+                         - rb.given_back))
+       END AS net_amount
 FROM transactions t
 LEFT JOIN transaction_splits s ON s.transaction_id = t.id
+LEFT JOIN (SELECT refund_of, SUM(amount) AS given_back
+           FROM transactions WHERE refund_of IS NOT NULL
+           GROUP BY refund_of) rb ON rb.refund_of = t.id
 ";
 
 pub fn open(path: &Path) -> Result<Connection> {
@@ -112,7 +144,12 @@ fn migrate(conn: &Connection) -> Result<()> {
             merchant      TEXT NOT NULL DEFAULT '',
             note          TEXT,
             occurred_at   TEXT NOT NULL,
-            created_at    TEXT NOT NULL
+            created_at    TEXT NOT NULL,
+            -- The posting this one gives back. A refund undoes what it names
+            -- rather than being money of its own: the two cancel, so neither
+            -- counts toward what was earned or spent. The money still moved,
+            -- so both still count toward the balance.
+            refund_of     TEXT REFERENCES transactions(id) ON DELETE SET NULL
         );
 
         -- A bill filed under more than one category. The parts always add up
@@ -383,6 +420,18 @@ fn migrate(conn: &Connection) -> Result<()> {
     // Books that predate splitting have debts, but none of them came from a
     // split — the default of 0 is exactly right for every one of them.
     add_column_if_missing(conn, "debts", "from_split", "from_split INTEGER NOT NULL DEFAULT 0")?;
+    // Nothing in a book written before refunds existed gives anything back,
+    // which is exactly what a column of nulls says. The index waits for the
+    // column: a book that already has the table gets the column here, and
+    // indexing it up in the batch above would be indexing nothing.
+    add_column_if_missing(
+        conn,
+        "transactions",
+        "refund_of",
+        "refund_of TEXT REFERENCES transactions(id) ON DELETE SET NULL",
+    )?;
+    conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_tx_refund ON transactions(refund_of);")
+        .map_err(oops)?;
     // The counterparty key an imported posting was recognised by, written at
     // import time so confirming it can teach a rule however the note has
     // been rewritten since. Null on anything entered by hand.
@@ -1280,6 +1329,10 @@ fn tx_from_row(r: &Row) -> rusqlite::Result<Transaction> {
         category_color: r.get(15)?,
         category_group_id: r.get(16)?,
         category_group_name: r.get(17)?,
+        refund_of: r.get(18)?,
+        refund_of_merchant: r.get(19)?,
+        refund_of_amount: r.get(20)?,
+        refunded: r.get(21)?,
         // Filled in by `attach_parts`: each is its own table, and reading
         // them per row would turn one list into three hundred queries.
         splits: Vec::new(),
@@ -1544,7 +1597,10 @@ fn tx_filters(q: &TransactionQuery) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
 
 pub fn list_transactions(conn: &Connection, q: TransactionQuery) -> Result<Vec<Transaction>> {
     let (clause, args) = tx_filters(&q);
-    let mut sql = format!("{TX_SELECT}{TX_FROM}{clause} ORDER BY t.occurred_at DESC, t.created_at DESC");
+    let mut sql = format!(
+        "{}{TX_FROM}{clause} ORDER BY t.occurred_at DESC, t.created_at DESC",
+        tx_select()
+    );
     if let Some(limit) = q.limit {
         sql.push_str(&format!(" LIMIT {limit}"));
         if let Some(offset) = q.offset {
@@ -1566,10 +1622,15 @@ pub fn list_transactions(conn: &Connection, q: TransactionQuery) -> Result<Vec<T
 /// everything the filters select, not the slice that happens to be loaded.
 pub fn transaction_summary(conn: &Connection, q: TransactionQuery) -> Result<TransactionSummary> {
     let (clause, args) = tx_filters(&q);
+    // A refund and what it gave back cancel: the refund brings in nothing of
+    // its own, and the posting it undoes cost that much less. The count still
+    // counts every row, because every row is still there to be read.
     let sql = format!(
         "SELECT COUNT(*),
-                COALESCE(SUM(CASE WHEN t.kind = 'income'   THEN t.amount ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN t.kind = 'expense'  THEN t.amount ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN t.kind = 'income'  AND {NOT_A_REFUND}
+                                  THEN t.amount - {REFUNDED} ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN t.kind = 'expense' AND {NOT_A_REFUND}
+                                  THEN t.amount - {REFUNDED} ELSE 0 END), 0),
                 COALESCE(SUM(CASE WHEN t.kind = 'transfer' THEN t.amount ELSE 0 END), 0)
          {TX_FROM}{clause}"
     );
@@ -1589,7 +1650,7 @@ pub fn transaction_summary(conn: &Connection, q: TransactionQuery) -> Result<Tra
 }
 
 pub fn get_transaction(conn: &Connection, id: &str) -> Result<Transaction> {
-    let sql = format!("{TX_SELECT}{TX_FROM} WHERE t.id = ?1");
+    let sql = format!("{}{TX_FROM} WHERE t.id = ?1", tx_select());
     let mut one = vec![conn
         .query_row(&sql, params![id], tx_from_row)
         .map_err(oops)?];
@@ -1776,6 +1837,104 @@ fn replace_shares(
     Ok(())
 }
 
+/// What a refund is allowed to be, answered before anything is written.
+///
+/// A refund names one posting, runs the other way from it, and never gives
+/// back more than was there — anything else and the two would not cancel,
+/// which is the whole of what a refund is for. Chains are refused outright: a
+/// refund of a refund is a thing nobody can read, and the netting would have
+/// to guess which end of it counted.
+///
+/// Returns what should be stored, so a posting that names nothing simply
+/// stops being a refund.
+fn settle_refund(
+    conn: &Connection,
+    id: Option<&str>,
+    kind: &str,
+    amount: Paise,
+    refund_of: Option<String>,
+) -> Result<Option<String>> {
+    // What this posting has had given back to it. It matters twice over: a
+    // posting somebody has refunded cannot turn round and become a refund
+    // itself, and it cannot be corrected down below what it gave back.
+    if let Some(own) = id {
+        let given_back: Paise = conn
+            .query_row(
+                "SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE refund_of = ?1",
+                params![own],
+                |r| r.get(0),
+            )
+            .map_err(oops)?;
+        if given_back > 0 {
+            if refund_of.is_some() {
+                return Err(
+                    "Something already refunds this posting, so it cannot be a refund itself."
+                        .into(),
+                );
+            }
+            if amount < given_back {
+                return Err(format!(
+                    "₹{} of this has already been refunded, so it cannot be worth less than that.",
+                    given_back / 100
+                ));
+            }
+        }
+    }
+
+    let Some(target) = refund_of.filter(|t| !t.trim().is_empty()) else {
+        return Ok(None);
+    };
+    if Some(target.as_str()) == id {
+        return Err("A posting cannot refund itself.".into());
+    }
+    let (target_kind, target_amount, chained): (String, Paise, Option<String>) = conn
+        .query_row(
+            "SELECT kind, amount, refund_of FROM transactions WHERE id = ?1",
+            params![&target],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .map_err(|_| "The posting this refunds is not in the book any more.".to_string())?;
+    if chained.is_some() {
+        return Err("That posting is itself a refund.".into());
+    }
+    // Only the two sides of the ledger have anything to give back: a transfer
+    // moves money between your own accounts rather than earning or spending
+    // it, so there is nothing to undo — on either side of the refund.
+    let wants = match target_kind.as_str() {
+        "expense" => "income",
+        "income" => "expense",
+        _ => {
+            return Err(
+                "A transfer moves money between your own accounts, so there is nothing to refund."
+                    .into(),
+            )
+        }
+    };
+    if kind != wants {
+        return Err(format!(
+            "A refund of an {target_kind} is money going the other way, so it has to be {wants}."
+        ));
+    }
+    // What is still standing on it: what it was for, less whatever earlier
+    // refunds have already handed back. Its own earlier self doesn't count —
+    // this save replaces it.
+    let already: Paise = conn
+        .query_row(
+            "SELECT COALESCE(SUM(amount), 0) FROM transactions
+             WHERE refund_of = ?1 AND id <> ?2",
+            params![&target, id.unwrap_or("")],
+            |r| r.get(0),
+        )
+        .map_err(oops)?;
+    if amount + already > target_amount {
+        return Err(format!(
+            "That posting has ₹{} left to give back.",
+            (target_amount - already) / 100
+        ));
+    }
+    Ok(Some(target))
+}
+
 pub fn save_transaction(conn: &Connection, input: TransactionInput) -> Result<Transaction> {
     if input.amount <= 0 {
         return Err("Amount must be greater than zero.".into());
@@ -1820,6 +1979,13 @@ pub fn save_transaction(conn: &Connection, input: TransactionInput) -> Result<Tr
         input.category_id.filter(|c| !c.is_empty())
     };
     refuse_a_group(conn, category_id.as_deref())?;
+    let refund_of = settle_refund(
+        conn,
+        input.id.as_deref(),
+        &input.kind,
+        input.amount,
+        input.refund_of.clone(),
+    )?;
     let to_account_id = if input.kind == "transfer" {
         input.to_account_id
     } else {
@@ -1842,7 +2008,7 @@ pub fn save_transaction(conn: &Connection, input: TransactionInput) -> Result<Tr
             conn.execute(
                 "UPDATE transactions SET kind = ?2, amount = ?3, account_id = ?4,
                         to_account_id = ?5, category_id = ?6, merchant = ?7, note = ?8,
-                        occurred_at = ?9
+                        occurred_at = ?9, refund_of = ?10
                  WHERE id = ?1",
                 params![
                     id,
@@ -1853,7 +2019,8 @@ pub fn save_transaction(conn: &Connection, input: TransactionInput) -> Result<Tr
                     category_id,
                     input.merchant,
                     input.note,
-                    input.occurred_at
+                    input.occurred_at,
+                    refund_of
                 ],
             )
             .map_err(oops)?;
@@ -1863,8 +2030,9 @@ pub fn save_transaction(conn: &Connection, input: TransactionInput) -> Result<Tr
             let id = new_id();
             conn.execute(
                 "INSERT INTO transactions (id, kind, amount, account_id, to_account_id,
-                                           category_id, merchant, note, occurred_at, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                                           category_id, merchant, note, occurred_at,
+                                           created_at, refund_of)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 params![
                     id,
                     input.kind,
@@ -1875,7 +2043,8 @@ pub fn save_transaction(conn: &Connection, input: TransactionInput) -> Result<Tr
                     input.merchant,
                     input.note,
                     input.occurred_at,
-                    now()
+                    now(),
+                    refund_of
                 ],
             )
             .map_err(oops)?;
@@ -3323,6 +3492,7 @@ pub fn save_debt_payment(conn: &Connection, input: DebtPaymentInput) -> Result<(
                     splits: None,
                     shares: None,
                     label_ids: None,
+                    refund_of: None,
                 },
             )?;
             (Some(tx.id), true)
@@ -4123,6 +4293,7 @@ pub fn save_investment_lot(conn: &Connection, mut input: InvestmentLotInput) -> 
                             splits: None,
                             shares: None,
                             label_ids: None,
+                            refund_of: None,
                         },
                     )?;
                 }
@@ -4174,6 +4345,7 @@ pub fn save_investment_lot(conn: &Connection, mut input: InvestmentLotInput) -> 
                     splits: None,
                     shares: None,
                     label_ids: None,
+                    refund_of: None,
                 },
             )?;
             (Some(tx.id), true)
@@ -4989,11 +5161,17 @@ fn net_flow_before(conn: &Connection, before: &str) -> Result<Paise> {
     .map_err(oops)
 }
 
+/// What came in and what went out over a window, refunds netted off. A
+/// refund counts against the posting it names, on that posting's own date —
+/// undoing a bill from March changes March, not the month the money landed.
 fn flow_for(conn: &Connection, from: &str, to: &str) -> Result<(Paise, Paise)> {
     conn.query_row(
-        "SELECT COALESCE(SUM(CASE WHEN kind = 'income'  THEN amount ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN kind = 'expense' THEN amount ELSE 0 END), 0)
-         FROM transactions WHERE occurred_at >= ?1 AND occurred_at <= ?2",
+        &format!(
+            "SELECT COALESCE(SUM(CASE WHEN t.kind = 'income'  THEN t.amount - {REFUNDED} ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN t.kind = 'expense' THEN t.amount - {REFUNDED} ELSE 0 END), 0)
+             FROM transactions t
+             WHERE {NOT_A_REFUND} AND t.occurred_at >= ?1 AND t.occurred_at <= ?2"
+        ),
         params![from, to],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )
@@ -5012,13 +5190,19 @@ fn spend_by_category(conn: &Connection, from: &str, to: &str) -> Result<Vec<Cate
                     COALESCE(p.name, c.name),
                     COALESCE(p.icon, c.icon),
                     COALESCE(p.color, c.color),
-                    SUM(t.amount), COUNT(*)
+                    SUM(t.net_amount),
+                    SUM(CASE WHEN t.net_amount > 0 THEN 1 ELSE 0 END)
              FROM ({ATTRIBUTED}) t
              JOIN categories c ON c.id = t.category_id
              LEFT JOIN categories p ON p.id = c.parent_id
-             WHERE t.kind = 'expense' AND t.occurred_at >= ?1 AND t.occurred_at <= ?2
+             WHERE t.kind = 'expense' AND {NOT_A_REFUND}
+               AND t.occurred_at >= ?1 AND t.occurred_at <= ?2
              GROUP BY c.id
-             ORDER BY SUM(t.amount) DESC"
+             -- A category whose every bill came back is not somewhere the
+             -- money went, so it drops off the breakdown rather than sitting
+             -- there at nothing.
+             HAVING SUM(t.net_amount) > 0
+             ORDER BY SUM(t.net_amount) DESC"
             ),
         )
         .map_err(oops)?;
@@ -5132,20 +5316,30 @@ pub fn overview(conn: &Connection, month: &str, span: u32) -> Result<Overview> {
         &format!("{}T23:59:59", pend.format("%Y-%m-%d")),
     )?;
 
-    // Per-day income/expense inside the window, then folded into a running balance.
+    // Per-day income and expense inside the window, twice over: as the money
+    // actually moved, which is what the balance line is folded from, and as
+    // it counts, which is the same less the refunds. A refund really did land
+    // in the account — the balance says so — but it is not money earned, and
+    // what it gave back was not money spent.
     let mut stmt = conn
         .prepare(
-            "SELECT substr(occurred_at, 1, 10) AS day,
-                    COALESCE(SUM(CASE WHEN kind = 'income'  THEN amount ELSE 0 END), 0),
-                    COALESCE(SUM(CASE WHEN kind = 'expense' THEN amount ELSE 0 END), 0)
-             FROM transactions
-             WHERE occurred_at >= ?1 AND occurred_at <= ?2
-             GROUP BY day ORDER BY day",
+            &format!(
+            "SELECT substr(t.occurred_at, 1, 10) AS day,
+                    COALESCE(SUM(CASE WHEN t.kind = 'income'  THEN t.amount ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN t.kind = 'expense' THEN t.amount ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN t.kind = 'income'  AND {NOT_A_REFUND}
+                                      THEN t.amount - {REFUNDED} ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN t.kind = 'expense' AND {NOT_A_REFUND}
+                                      THEN t.amount - {REFUNDED} ELSE 0 END), 0)
+             FROM transactions t
+             WHERE t.occurred_at >= ?1 AND t.occurred_at <= ?2
+             GROUP BY day ORDER BY day"
+            ),
         )
         .map_err(oops)?;
-    let per_day: HashMap<String, (Paise, Paise)> = stmt
+    let per_day: HashMap<String, (Paise, Paise, Paise, Paise)> = stmt
         .query_map(params![start_s, end_s], |r| {
-            Ok((r.get(0)?, (r.get(1)?, r.get(2)?)))
+            Ok((r.get(0)?, (r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
         })
         .map_err(oops)?
         .collect::<rusqlite::Result<HashMap<_, _>>>()
@@ -5158,13 +5352,13 @@ pub fn overview(conn: &Connection, month: &str, span: u32) -> Result<Overview> {
     let mut day = start;
     while day <= end {
         let key = day.format("%Y-%m-%d").to_string();
-        let (inc, exp) = per_day.get(&key).copied().unwrap_or((0, 0));
+        let (inc, exp, net_inc, net_exp) = per_day.get(&key).copied().unwrap_or((0, 0, 0, 0));
         running += inc - exp;
         balance_series.push(running);
         daily_flow.push(FlowPoint {
             bucket: key,
-            income: inc,
-            expense: exp,
+            income: net_inc,
+            expense: net_exp,
         });
         day += Duration::days(1);
     }
@@ -5192,10 +5386,15 @@ pub fn overview(conn: &Connection, month: &str, span: u32) -> Result<Overview> {
 
     let mut stmt = conn
         .prepare(
-            "SELECT merchant, SUM(amount), COUNT(*)
-             FROM transactions
-             WHERE kind = 'expense' AND merchant <> '' AND occurred_at >= ?1 AND occurred_at <= ?2
-             GROUP BY LOWER(merchant) ORDER BY SUM(amount) DESC LIMIT 6",
+            &format!(
+                "SELECT t.merchant, SUM(t.amount - {REFUNDED}), COUNT(*)
+                 FROM transactions t
+                 WHERE t.kind = 'expense' AND {NOT_A_REFUND} AND t.merchant <> ''
+                   AND t.occurred_at >= ?1 AND t.occurred_at <= ?2
+                 GROUP BY LOWER(t.merchant)
+                 HAVING SUM(t.amount - {REFUNDED}) > 0
+                 ORDER BY SUM(t.amount - {REFUNDED}) DESC LIMIT 6"
+            ),
         )
         .map_err(oops)?;
     let top_merchants = stmt
@@ -5792,6 +5991,7 @@ mod tests {
                 splits: None,
                 shares: None,
                 label_ids: None,
+                refund_of: None,
             },
         )
         .unwrap();
@@ -5975,6 +6175,7 @@ mod tests {
                 splits: None,
                 shares: None,
                 label_ids: None,
+                refund_of: None,
             },
         )
         .unwrap();
@@ -6030,6 +6231,7 @@ mod tests {
                 splits: None,
                 shares: None,
                 label_ids: None,
+                refund_of: None,
             },
         )
         .unwrap();
@@ -6081,6 +6283,7 @@ mod tests {
                 splits: None,
                 shares: None,
                 label_ids: None,
+                refund_of: None,
             },
         )
         .unwrap();
@@ -6144,6 +6347,7 @@ mod tests {
                 splits: None,
                 shares: None,
                 label_ids: None,
+                refund_of: None,
             },
         )
         .unwrap();
@@ -6189,6 +6393,7 @@ mod tests {
                 splits: None,
                 shares: None,
                 label_ids: None,
+                refund_of: None,
             },
         )
         .unwrap();
@@ -6233,6 +6438,7 @@ mod tests {
                     splits: None,
                     shares: None,
                     label_ids: None,
+                    refund_of: None,
                 },
             )
             .unwrap();
@@ -6282,6 +6488,7 @@ mod tests {
                     splits: None,
                     shares: None,
                     label_ids: None,
+                    refund_of: None,
                 },
             )
             .unwrap();
@@ -6349,6 +6556,7 @@ mod tests {
                     splits: None,
                     shares: None,
                     label_ids: None,
+                    refund_of: None,
                 },
             )
             .unwrap();
@@ -6579,6 +6787,7 @@ mod tests {
                 splits: None,
                 shares: None,
                 label_ids: None,
+                refund_of: None,
             },
         )
         .unwrap()
@@ -6626,6 +6835,7 @@ mod tests {
                 splits,
                 shares,
                 label_ids: None,
+                refund_of: None,
             },
         )
     }
@@ -6827,6 +7037,7 @@ mod tests {
                 splits: None,
                 shares: None,
                 label_ids: None,
+                refund_of: None,
             },
         )
         .unwrap();
@@ -7192,6 +7403,7 @@ mod tests {
                 splits: None,
                 shares: None,
                 label_ids: None,
+                refund_of: None,
             },
         )
         .unwrap();
@@ -7288,6 +7500,7 @@ mod tests {
                     splits: None,
                     shares,
                     label_ids: None,
+                    refund_of: None,
                 },
             )
         };
@@ -7345,6 +7558,7 @@ mod tests {
                 splits: None,
                 shares: None,
                 label_ids: None,
+                refund_of: None,
             },
         );
         assert!(direct.is_err(), "a group cannot take a posting of its own");
@@ -7473,6 +7687,7 @@ mod tests {
                     splits: None,
                     shares: None,
                     label_ids: None,
+                    refund_of: None,
                 },
                 triage: true,
                 learn: false,
@@ -7552,6 +7767,7 @@ mod tests {
                     splits: None,
                     shares: None,
                     label_ids: None,
+                    refund_of: None,
                 },
                 triage: true,
                 learn: false,
@@ -7613,6 +7829,7 @@ mod tests {
                 splits: None,
                 shares: None,
                 label_ids: None,
+                refund_of: None,
             },
             triage: false,
             learn: false,
@@ -7685,6 +7902,7 @@ mod tests {
             splits: None,
             shares: None,
             label_ids: Some(ids),
+            refund_of: None,
         };
         let saved = save_transaction(&conn, relabel(vec![label.id.clone()])).unwrap();
         assert_eq!(saved.labels.len(), 1);
@@ -8194,6 +8412,7 @@ mod tests {
                 splits: None,
                 shares: None,
                 label_ids: None,
+                refund_of: None,
             },
         )
         .unwrap();
@@ -8230,5 +8449,322 @@ mod tests {
         .unwrap();
         assert_eq!((done.balance_neutral, done.opening_adjustment), (0, 0));
         assert_eq!(balance_of(&conn, &bank), 83_000);
+    }
+
+    // -------------------------------------------------------------- refunds
+
+    /// A category by name, out of the ones every book is seeded with.
+    fn filed_under(conn: &Connection, name: &str) -> String {
+        list_categories(conn)
+            .unwrap()
+            .into_iter()
+            .find(|c| c.name == name)
+            .unwrap()
+            .id
+    }
+
+    fn posting(
+        conn: &Connection,
+        kind: &str,
+        account: &str,
+        category: Option<&str>,
+        amount: Paise,
+        day: &str,
+        refund_of: Option<&str>,
+    ) -> Result<String> {
+        save_transaction(
+            conn,
+            TransactionInput {
+                id: None,
+                kind: kind.into(),
+                amount,
+                account_id: account.into(),
+                to_account_id: None,
+                category_id: category.map(str::to_string),
+                merchant: if refund_of.is_some() { "Shop refund" } else { "Shop" }.into(),
+                note: None,
+                occurred_at: format!("{day}T10:00"),
+                splits: None,
+                shares: None,
+                label_ids: None,
+                refund_of: refund_of.map(str::to_string),
+            },
+        )
+        .map(|t| t.id)
+    }
+
+    fn spent(conn: &Connection, account: &str, category: &str, amount: Paise, day: &str) -> String {
+        posting(conn, "expense", account, Some(category), amount, day, None).unwrap()
+    }
+
+    /// The shop hands it all back: the bill stops being spending, the refund
+    /// never was any, and the account is where it started.
+    #[test]
+    fn a_refund_undoes_what_it_names() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 100_000);
+        let groceries = filed_under(&conn, "Groceries");
+        let bill = spent(&conn, &bank, &groceries, 40_000, "2026-08-04");
+
+        let before = overview(&conn, "2026-08", 1).unwrap();
+        assert_eq!(before.expense, 40_000);
+        assert_eq!(balance_of(&conn, &bank), 60_000);
+
+        posting(&conn, "income", &bank, None, 40_000, "2026-08-11", Some(&bill)).unwrap();
+
+        let after = overview(&conn, "2026-08", 1).unwrap();
+        assert_eq!((after.expense, after.income), (0, 0));
+        assert!(after.top_categories.is_empty());
+        assert!(after.top_merchants.is_empty());
+        // The money did leave and it did come back, so the balance says so.
+        assert_eq!(balance_of(&conn, &bank), 100_000);
+        assert_eq!(after.net_worth, 100_000);
+    }
+
+    /// Half of it back is half of it spent.
+    #[test]
+    fn a_part_refund_leaves_the_rest_standing() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 100_000);
+        let groceries = filed_under(&conn, "Groceries");
+        let bill = spent(&conn, &bank, &groceries, 40_000, "2026-08-04");
+        posting(&conn, "income", &bank, None, 15_000, "2026-08-11", Some(&bill)).unwrap();
+
+        let after = overview(&conn, "2026-08", 1).unwrap();
+        assert_eq!((after.expense, after.income), (25_000, 0));
+        assert_eq!(after.top_categories[0].total, 25_000);
+        assert_eq!(after.top_merchants[0].total, 25_000);
+        assert_eq!(balance_of(&conn, &bank), 75_000);
+    }
+
+    /// A refund counts against the month of the bill it undoes, not the month
+    /// the money landed: nothing that was given back was ever spending.
+    #[test]
+    fn a_refund_lands_where_the_bill_was() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 100_000);
+        let groceries = filed_under(&conn, "Groceries");
+        let bill = spent(&conn, &bank, &groceries, 40_000, "2026-07-20");
+        posting(&conn, "income", &bank, None, 40_000, "2026-08-03", Some(&bill)).unwrap();
+
+        let july = overview(&conn, "2026-07", 1).unwrap();
+        assert_eq!((july.expense, july.income), (0, 0));
+        let august = overview(&conn, "2026-08", 1).unwrap();
+        assert_eq!((august.expense, august.income), (0, 0));
+        // August is compared against a July that is likewise empty.
+        assert_eq!((august.prev_expense, august.prev_income), (0, 0));
+        assert!(august.daily_flow.iter().all(|d| d.income == 0 && d.expense == 0));
+        // The balance still walks: out in July, back in August.
+        assert_eq!(balance_of(&conn, &bank), 100_000);
+    }
+
+    /// A split bill gives back off its parts in order, so what is left of it
+    /// still adds up to what it is now worth.
+    #[test]
+    fn a_refund_comes_off_the_parts_of_a_split_bill() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 100_000);
+        let groceries = filed_under(&conn, "Groceries");
+        let taxi = filed_under(&conn, "Transport");
+        let bill = save_transaction(
+            &conn,
+            TransactionInput {
+                id: None,
+                kind: "expense".into(),
+                amount: 40_000,
+                account_id: bank.clone(),
+                to_account_id: None,
+                category_id: Some(groceries.clone()),
+                merchant: "Shop".into(),
+                note: None,
+                occurred_at: "2026-08-04T10:00".into(),
+                splits: Some(vec![
+                    TransactionSplitInput {
+                        id: None,
+                        amount: 25_000,
+                        category_id: Some(groceries.clone()),
+                        note: None,
+                    },
+                    TransactionSplitInput {
+                        id: None,
+                        amount: 15_000,
+                        category_id: Some(taxi.clone()),
+                        note: None,
+                    },
+                ]),
+                shares: None,
+                label_ids: None,
+                refund_of: None,
+            },
+        )
+        .unwrap()
+        .id;
+        posting(&conn, "income", &bank, None, 30_000, "2026-08-11", Some(&bill)).unwrap();
+
+        let after = overview(&conn, "2026-08", 1).unwrap();
+        // ₹300 off a ₹400 bill: the grocery line goes entirely, and ₹100 of
+        // the taxi is all that is left standing.
+        assert_eq!(after.expense, 10_000);
+        assert_eq!(after.top_categories.len(), 1);
+        assert_eq!(after.top_categories[0].name, "Transport");
+        assert_eq!(after.top_categories[0].total, 10_000);
+        // The breakdown and the header agree, which is the whole point of
+        // taking it off the parts rather than off the bill.
+        let breakdown: Paise = after.top_categories.iter().map(|c| c.total).sum();
+        assert_eq!(breakdown, after.expense);
+    }
+
+    /// The ledger says what has come back, so a row can too.
+    #[test]
+    fn a_posting_carries_what_has_been_given_back() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 100_000);
+        let groceries = filed_under(&conn, "Groceries");
+        let bill = spent(&conn, &bank, &groceries, 40_000, "2026-08-04");
+        let back = posting(&conn, "income", &bank, None, 15_000, "2026-08-11", Some(&bill)).unwrap();
+
+        let refunded = get_transaction(&conn, &bill).unwrap();
+        assert_eq!(refunded.refunded, 15_000);
+        assert_eq!(refunded.refund_of, None);
+
+        let refund = get_transaction(&conn, &back).unwrap();
+        assert_eq!(refund.refund_of.as_deref(), Some(bill.as_str()));
+        assert_eq!(refund.refund_of_merchant.as_deref(), Some("Shop"));
+        assert_eq!(refund.refund_of_amount, Some(40_000));
+        assert_eq!(refund.refunded, 0);
+
+        // Deleting what it gave back leaves an ordinary income behind rather
+        // than a refund of nothing.
+        delete_transaction(&conn, &bill).unwrap();
+        assert_eq!(get_transaction(&conn, &back).unwrap().refund_of, None);
+    }
+
+    /// The rules that keep a refund readable: one posting, the other way,
+    /// never more than was there, and never a chain.
+    #[test]
+    fn a_refund_is_held_to_the_posting_it_names() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 100_000);
+        let other = account(&conn, "Cash", "cash", 0);
+        let groceries = filed_under(&conn, "Groceries");
+        let bill = spent(&conn, &bank, &groceries, 40_000, "2026-08-04");
+
+        // More than the bill was for.
+        assert!(posting(&conn, "income", &bank, None, 50_000, "2026-08-11", Some(&bill)).is_err());
+        // The same way as the bill.
+        assert!(
+            posting(&conn, "expense", &bank, Some(&groceries), 10_000, "2026-08-11", Some(&bill))
+                .is_err()
+        );
+        // A transfer neither gives back nor is given back.
+        let moved = save_transaction(
+            &conn,
+            TransactionInput {
+                id: None,
+                kind: "transfer".into(),
+                amount: 10_000,
+                account_id: bank.clone(),
+                to_account_id: Some(other.clone()),
+                category_id: None,
+                merchant: "Moved".into(),
+                note: None,
+                occurred_at: "2026-08-05T10:00".into(),
+                splits: None,
+                shares: None,
+                label_ids: None,
+                refund_of: None,
+            },
+        )
+        .unwrap()
+        .id;
+        assert!(posting(&conn, "income", &bank, None, 5_000, "2026-08-11", Some(&moved)).is_err());
+
+        // Two refunds are fine while they fit, and the second one that
+        // doesn't is refused.
+        posting(&conn, "income", &bank, None, 25_000, "2026-08-11", Some(&bill)).unwrap();
+        let rest = posting(&conn, "income", &bank, None, 15_000, "2026-08-12", Some(&bill)).unwrap();
+        assert!(posting(&conn, "income", &bank, None, 100, "2026-08-13", Some(&bill)).is_err());
+        assert_eq!(overview(&conn, "2026-08", 1).unwrap().expense, 0);
+
+        // A refund of a refund is refused from either end.
+        assert!(posting(&conn, "expense", &bank, Some(&groceries), 100, "2026-08-14", Some(&rest)).is_err());
+        // And a bill somebody has refunded cannot be corrected down below
+        // what it has already handed back.
+        let err = save_transaction(
+            &conn,
+            TransactionInput {
+                id: Some(bill.clone()),
+                kind: "expense".into(),
+                amount: 10_000,
+                account_id: bank.clone(),
+                to_account_id: None,
+                category_id: Some(groceries.clone()),
+                merchant: "Shop".into(),
+                note: None,
+                occurred_at: "2026-08-04T10:00".into(),
+                splits: None,
+                shares: None,
+                label_ids: None,
+                refund_of: None,
+            },
+        );
+        assert!(err.is_err());
+    }
+
+    /// A book written before refunds existed opens, grows the column, and
+    /// indexes it — in that order, which is the whole of the bug this is here
+    /// to keep out: the index cannot be created before the column it names.
+    #[test]
+    fn a_book_written_before_refunds_picks_them_up() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE transactions (
+                 id            TEXT PRIMARY KEY,
+                 kind          TEXT NOT NULL,
+                 amount        INTEGER NOT NULL,
+                 account_id    TEXT NOT NULL,
+                 to_account_id TEXT,
+                 category_id   TEXT,
+                 merchant      TEXT NOT NULL DEFAULT '',
+                 note          TEXT,
+                 occurred_at   TEXT NOT NULL,
+                 created_at    TEXT NOT NULL
+             );",
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+
+        let indexed: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'index' AND name = 'idx_tx_refund'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(indexed, 1);
+        // And the column is there to be read, which is what the index says.
+        conn.query_row("SELECT COUNT(refund_of) FROM transactions", [], |r| {
+            r.get::<_, i64>(0)
+        })
+        .unwrap();
+    }
+
+    /// The totals over a filtered list net the same way the dashboard does.
+    #[test]
+    fn the_ledgers_own_totals_net_the_refunds_off() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 100_000);
+        let groceries = filed_under(&conn, "Groceries");
+        let bill = spent(&conn, &bank, &groceries, 40_000, "2026-08-04");
+        spent(&conn, &bank, &groceries, 10_000, "2026-08-06");
+        posting(&conn, "income", &bank, None, 40_000, "2026-08-11", Some(&bill)).unwrap();
+
+        let summary = transaction_summary(&conn, TransactionQuery::default()).unwrap();
+        // Three rows, all of them still there to be read — and ₹100 of
+        // spending between them.
+        assert_eq!(summary.count, 3);
+        assert_eq!(summary.expense, 10_000);
+        assert_eq!(summary.income, 0);
     }
 }

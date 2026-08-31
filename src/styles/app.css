@@ -1107,6 +1107,14 @@ kbd {
 .tx-bill { position: relative; }
 .tx-bill.is-open { background: var(--surface-2); }
 .tx-bill.is-picked { background: color-mix(in srgb, var(--blue) 8%, transparent); }
+/* Refunded in full, or the refund itself: the money moved and the balance
+   keeps it, but neither of them is spending or earning any more. */
+.tx-bill.is-undone .tx-right > :first-child {
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+  text-decoration-color: color-mix(in srgb, var(--ink-3) 70%, transparent);
+  opacity: 0.6;
+}
 
 /* The box stands where the avatar is rather than beside it, so the ledger
    keeps its shape whether or not anything is being picked out. It shows on
@@ -4788,6 +4796,15 @@ kbd {
 /* -------------------------------------------------- labels & statement import */
 
 /* A label pinned on a row: small, tinted, sitting after the merchant name. */
+/* Both sides of a refund wear the same mark: the one that gave the money
+   back, and the one it was given back to. Amber rather than green — this is
+   money undone, not money earned. */
+.tx-label.is-refund {
+  --tint: var(--amber);
+  gap: 4px;
+  padding-left: 6px;
+}
+
 .tx-label {
   display: inline-flex;
   align-items: center;
@@ -5140,6 +5157,21 @@ kbd {
   gap: 9px;
   padding-top: 4px;
 }
+
+/* What the posting gives back, above the labels: it is about the money
+   rather than a pin on top of it, but it is not a filing either. */
+.tx-refund {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding-top: 14px;
+}
+.tx-refund .page-note {
+  margin-top: 0;
+  background: color-mix(in srgb, var(--amber) 8%, transparent);
+  border-color: color-mix(in srgb, var(--amber) 24%, transparent);
+}
+.tx-refund .page-note svg { color: var(--amber); }
 /* Dashed, like the new sub-category chip: an opening rather than a choice. */
 .chip.is-new {
   border-style: dashed;
