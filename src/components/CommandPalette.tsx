@@ -70,6 +70,7 @@ export function CommandPalette({
       { id: 'go-transactions', label: 'Go to Transactions', icon: 'list-filter', section: 'Navigate', run: () => onNavigate('transactions') },
       { id: 'go-planned', label: 'Go to Planned', icon: 'repeat', section: 'Navigate', run: () => onNavigate('planned') },
       { id: 'go-accounts', label: 'Go to Accounts', icon: 'wallet-cards', section: 'Navigate', run: () => onNavigate('accounts') },
+      { id: 'go-cards', label: 'Go to Cards', icon: 'credit-card', section: 'Navigate', run: () => onNavigate('cards') },
       { id: 'go-debts', label: 'Go to Debts', icon: 'arrow-left-right', section: 'Navigate', run: () => onNavigate('debts') },
       { id: 'go-investments', label: 'Go to Investments', icon: 'coins', section: 'Navigate', run: () => onNavigate('investments') },
       { id: 'go-insights', label: 'Go to Insights', icon: 'sparkles', section: 'Navigate', run: () => onNavigate('insights') },

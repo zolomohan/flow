@@ -17,6 +17,7 @@ import { Overview } from './screens/Overview';
 import { Transactions } from './screens/Transactions';
 import { Planned } from './screens/Planned';
 import { Accounts } from './screens/Accounts';
+import { Cards } from './screens/Cards';
 import { Debts } from './screens/Debts';
 import { Investments } from './screens/Investments';
 import { Insights } from './screens/Insights';
@@ -46,6 +47,7 @@ const ROUTE_KEYS: Route[] = [
   'transactions',
   'planned',
   'accounts',
+  'cards',
   'debts',
   'investments',
   'insights',
@@ -253,7 +255,7 @@ function Shell() {
         setPaletteOpen((open) => !open);
         return;
       }
-      if ((e.metaKey || e.ctrlKey) && /^[1-8]$/.test(e.key)) {
+      if ((e.metaKey || e.ctrlKey) && /^[1-9]$/.test(e.key)) {
         e.preventDefault();
         setRoute(ROUTE_KEYS[Number(e.key) - 1]);
         return;
@@ -362,6 +364,14 @@ function Shell() {
               />
             ) : route === 'accounts' ? (
               <Accounts onEditAccount={editAccount} onAddAccount={newAccount} />
+            ) : route === 'cards' ? (
+              <Cards
+                onOpenAccount={openAccountTransactions}
+                onEditAccount={editAccount}
+                onAddAccount={newAccount}
+                onOpenCategory={openCategoryTransactions}
+                onOpenTransaction={openTransaction}
+              />
             ) : route === 'debts' ? (
               <Debts
                 onNewDebt={newDebt}

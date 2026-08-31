@@ -496,6 +496,48 @@ interface RefundTarget {
 
 /** A refund runs the other way from what it undoes: money spent comes back
  *  in, money earned goes back out. */
+/**
+ * A posting's id, and a way to take it with you. Two rows can read the same on
+ * screen — same day, same merchant, same amount — and still be different rows,
+ * so naming one to somebody else only works if the id comes along.
+ */
+function TransactionId({ id }: { id: string }) {
+  const { toast } = useStore();
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!copied) return;
+    const done = setTimeout(() => setCopied(false), 1600);
+    return () => clearTimeout(done);
+  }, [copied]);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(id);
+    } catch {
+      // A webview without clipboard permission, or a window that has lost
+      // focus: the selection route asks for nothing and works either way.
+      const carrier = document.createElement('textarea');
+      carrier.value = id;
+      carrier.style.cssText = 'position:fixed;top:-100px;opacity:0';
+      document.body.appendChild(carrier);
+      carrier.select();
+      document.execCommand('copy');
+      carrier.remove();
+    }
+    setCopied(true);
+    toast('Transaction ID copied');
+  };
+
+  return (
+    <button type="button" className="tx-id" onClick={copy} title="Copy this transaction's ID">
+      <span className="tx-id-tag">ID</span>
+      <span className="tx-id-value">{id}</span>
+      <Icon name={copied ? 'check' : 'copy'} size={13} />
+    </button>
+  );
+}
+
 const refundKind = (target: TxKind): TxKind => (target === 'income' ? 'expense' : 'income');
 
 const targetOf = (tx: Transaction): RefundTarget => ({
@@ -1269,6 +1311,10 @@ export function TransactionSheet({
               )} of it still stands.`}
         </p>
       )}
+      {/* The posting's own id. Two of these can look alike on screen and still
+          be different rows, so when one has to be named — a duplicate to merge,
+          a row to point somebody at — the id is the only thing that says which. */}
+      {editing?.id && <TransactionId id={editing.id} />}
     </div>
   );
 

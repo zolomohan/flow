@@ -27,6 +27,12 @@ export interface Account {
   revaluation: Paise;
   /** Credit limit for a card, in paise. Zero means it isn't tracked. */
   creditLimit: Paise;
+  /** The day of the month a card's statement closes, 1–31; 0 means the cycle
+   *  isn't tracked and the card reads by calendar month. */
+  statementDay: number;
+  /** The day the bill has to be paid by, counted from the statement: the
+   *  first such day after the cycle closed. 0 means it isn't tracked. */
+  dueDay: number;
 }
 
 export interface AccountInput {
@@ -38,6 +44,9 @@ export interface AccountInput {
   color: string;
   icon: string;
   creditLimit: Paise;
+  /** Both only mean anything on a card; 0 on either leaves it untracked. */
+  statementDay?: number;
+  dueDay?: number;
 }
 
 export interface Category {
@@ -195,6 +204,82 @@ export interface TransactionInput {
   /** The posting this one refunds. Null on every save that isn't one, which
    *  is how a refund is taken off again. */
   refundOf?: string | null;
+}
+
+/* ------------------------------------------------------------------ cards */
+
+/**
+ * One billing cycle of a card. The one still running is `open`, and its
+ * `closedOn` is the day the statement will be cut.
+ */
+export interface CardCycle {
+  from: string;
+  closedOn: string;
+  /**
+   * Charges less credits — the bank's arithmetic, not the book's: a refund
+   * counts in the cycle it landed in, because that is where the bank put it.
+   */
+  spend: Paise;
+  paid: Paise;
+  open: boolean;
+}
+
+/** One card, and everything the tab says about it. */
+export interface CardStat {
+  id: string;
+  name: string;
+  institution: string | null;
+  color: string;
+  icon: string;
+  /** Owed right now; zero on a card sitting in credit. */
+  outstanding: Paise;
+  /** The ledger's own figure: negative while anything is owed. */
+  balance: Paise;
+  creditLimit: Paise;
+  /** Limit less outstanding. Zero when no limit is set. */
+  available: Paise;
+  statementDay: number;
+  dueDay: number;
+  /** Null on a card whose cycle isn't tracked. */
+  statementOn: string | null;
+  dueOn: string | null;
+  statementTotal: Paise;
+  /** What is left of the bill, and what has been spent since it was cut.
+   *  The two always add up to `outstanding`. */
+  billed: Paise;
+  unbilled: Paise;
+  paidSince: Paise;
+  /** Spending over the window on screen, refunds netted off as everywhere
+   *  else in the book, and the same figure for the window before it. */
+  spend: Paise;
+  prevSpend: Paise;
+  paid: Paise;
+  charges: number;
+  lastUsed: string | null;
+  /** The last dozen cycles, oldest first, the open one last. */
+  cycles: CardCycle[];
+  topCategories: CategorySlice[];
+  topMerchants: MerchantSlice[];
+}
+
+export interface CardsOverview {
+  month: string;
+  span: number;
+  outstanding: Paise;
+  creditLimit: Paise;
+  available: Paise;
+  billed: Paise;
+  unbilled: Paise;
+  spend: Paise;
+  prevSpend: Paise;
+  paid: Paise;
+  /**
+   * Every card together, month by month: spent against paid off. Calendar
+   * months rather than cycles, because two cards close on different days and
+   * only the calendar is common to both.
+   */
+  monthly: FlowPoint[];
+  cards: CardStat[];
 }
 
 /* -------------------------------------------------------------- templates */

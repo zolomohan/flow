@@ -1,3 +1,4 @@
+mod cards;
 mod db;
 mod demo;
 mod import;
@@ -122,6 +123,13 @@ fn delete_transaction(db: State<Db>, id: String) -> R<()> {
 
 /// Reads a bank statement export into rows. Pure — nothing touches the book
 /// until the preview has been seen and the commit asked for.
+/// Every credit card at once: what is owed, what has been billed, and what
+/// the window on screen was spent on.
+#[tauri::command]
+fn cards(db: State<Db>, month: String, span: Option<u32>) -> R<CardsOverview> {
+    with_db(&db, |c| cards::cards_overview(c, &month, span.unwrap_or(1)))
+}
+
 #[tauri::command]
 fn parse_statement(path: String) -> R<Vec<StatementRow>> {
     import::parse_statement(&path)
@@ -475,6 +483,7 @@ pub fn run() {
             update_transactions,
             delete_transactions,
             overview,
+            cards,
             parse_statement,
             preview_statement_import,
             commit_statement_import,

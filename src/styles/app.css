@@ -913,6 +913,38 @@ kbd {
 .flow-bar-out { background: var(--ink-3); }
 .flow-col.is-hover .flow-bar-out { background: var(--ink); }
 
+/* One series, one bar: what went on, month by month or cycle by cycle. It
+   gets the whole column, since there is nothing beside it to make room for. */
+.flow-one .flow-pair { padding: 0 22%; }
+.flow-bar-spend {
+  background: color-mix(in srgb, var(--bar) 78%, transparent);
+  max-width: 34px;
+  transition: background var(--fast) var(--ease);
+}
+.flow-col.is-hover .flow-bar-spend { background: var(--bar); }
+/* The bucket still filling up is drawn as unfinished rather than as short. */
+.flow-bar-spend.is-running {
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--bar) 55%, transparent) 0 5px,
+    color-mix(in srgb, var(--bar) 22%, transparent) 5px 10px
+  );
+}
+
+.tip-figure {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: var(--tight);
+  font-variant-numeric: tabular-nums;
+}
+.tip-note {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: var(--wide);
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
 .flow-tip {
   position: absolute;
   bottom: calc(100% + 8px);
@@ -5172,6 +5204,44 @@ kbd {
   border-color: color-mix(in srgb, var(--amber) 24%, transparent);
 }
 .tx-refund .page-note svg { color: var(--amber); }
+
+/* The posting's id: quiet until you go looking for it, since it is reference
+   material rather than something the form asks you to fill in. */
+.tx-id {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 14px;
+  padding: 7px 9px;
+  background: none;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.tx-id:hover { border-color: var(--line-strong); color: var(--ink-2); border-style: solid; }
+.tx-id:hover svg { color: var(--accent); }
+.tx-id-tag {
+  flex: none;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+.tx-id-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  user-select: all;
+}
+.tx-id svg { flex: none; color: var(--ink-3); }
 /* Dashed, like the new sub-category chip: an opening rather than a choice. */
 .chip.is-new {
   border-style: dashed;
@@ -5851,3 +5921,552 @@ kbd {
 }
 .plan-history li:hover .plan-history-unlink { opacity: 1; }
 .plan-history-unlink:hover { color: var(--red); background: var(--red-soft); }
+
+/* =================================================================
+   Cards — the credit-card tab
+   ================================================================= */
+
+/* -------------------------------------------------------- every card at once */
+
+.cards-summary { display: grid; }
+
+.cards-summary-lead {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 24px;
+  padding: 20px 22px 18px;
+}
+/* Inline-flex rather than block: the card page sets this on a `BigMoney`,
+   whose rupee mark and paise sit on the figure's baseline. */
+.cards-total {
+  display: inline-flex;
+  align-items: baseline;
+  margin-top: 4px;
+  font-size: 34px;
+  font-weight: 600;
+  letter-spacing: var(--tight);
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.cards-summary-sub {
+  margin-top: 3px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+
+/* Who owes what, as one rule: it reads at a glance where a second donut
+   would only be two arcs and a legend. */
+.cards-summary-bar {
+  display: flex;
+  gap: 3px;
+  height: 7px;
+  margin-top: 14px;
+  max-width: 460px;
+}
+.cards-summary-bar i {
+  flex-basis: 0;
+  border-radius: var(--r-full);
+  min-width: 6px;
+}
+
+.cards-summary-chart { padding: 16px 22px 10px; }
+
+/* ------------------------------------------------------------- the wallet */
+
+/* These are cards, so they are drawn as cards: colour, a name, what is owed,
+   how it has been running, and how full it is. Each one opens at length. */
+.wallet-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.card-face {
+  position: relative;
+  display: grid;
+  gap: 3px;
+  flex: 0 1 282px;
+  min-width: 240px;
+  padding: 15px 17px 14px;
+  border-radius: var(--r-xl);
+  text-align: left;
+  color: rgba(255, 255, 255, 0.9);
+  background:
+    radial-gradient(120% 130% at 88% -20%, rgba(255, 255, 255, 0.22) 0%, transparent 55%),
+    linear-gradient(150deg,
+      color-mix(in srgb, var(--tint) 92%, #ffffff) 0%,
+      var(--tint) 55%,
+      color-mix(in srgb, var(--tint) 78%, #000000) 100%);
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--base) var(--ease), box-shadow var(--base) var(--ease);
+}
+.card-face:hover { box-shadow: var(--shadow-md); }
+
+.card-face-top {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: rgba(255, 255, 255, 0.78);
+}
+.card-face-top b {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+}
+.card-face-due {
+  padding: 1.5px 7px;
+  border-radius: var(--r-full);
+  background: rgba(255, 255, 255, 0.16);
+  font-size: 10.5px;
+  font-weight: 700;
+  font-style: normal;
+  color: #fff;
+}
+.card-face-due.is-soon { background: rgba(255, 255, 255, 0.3); }
+.card-face-due.is-late { background: #fff; color: var(--red); }
+
+.card-face-owed {
+  margin-top: 6px;
+  font-size: 25px;
+  font-weight: 600;
+  letter-spacing: var(--tight);
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+.card-face-sub {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.72);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* What the card has been doing, cycle by cycle. No axis and no figures: it
+   is a shape, and the page behind it has the numbers. */
+.card-face-line { margin: 8px -2px 2px; opacity: 0.85; }
+
+.card-face-bar {
+  height: 4px;
+  margin-top: 10px;
+  border-radius: var(--r-full);
+  background: rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+}
+.card-face-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: rgba(255, 255, 255, 0.92);
+}
+/* White reads on every tint. Red is kept back for the one thing worth
+   raising your voice about: a limit that is nearly gone. */
+.card-face-bar.is-high i { background: #ff6b64; }
+
+.card-face-foot {
+  margin-top: 5px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: var(--wide);
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.65);
+}
+.card-face-foot.is-quiet { margin-top: 12px; }
+
+/* The way in, which only shows itself when the pointer is on the card. It
+   takes the top corner, where a card's chip sits — and the due chip stands
+   aside for it, since a card you are about to open has already been read. */
+.card-face-go {
+  position: absolute;
+  top: 12px;
+  right: 13px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r-full);
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  opacity: 0;
+  transform: translateX(-5px);
+  transition: opacity var(--fast) var(--ease), transform var(--fast) var(--ease);
+}
+.card-face:hover .card-face-go { opacity: 1; transform: translateX(0); }
+
+.card-face-due {
+  transition: opacity var(--fast) var(--ease), transform var(--fast) var(--ease);
+}
+.card-face:hover .card-face-due { opacity: 0; transform: translateX(6px); }
+
+/* ------------------------------------------------------------- one card */
+
+.card-detail { display: grid; }
+
+.card-detail-glyph {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--r-sm);
+  color: #fff;
+}
+
+/* The page's hero: the card itself on the left, where it stands on the
+   right. The plastic carries the identity so the figures never have to. */
+.card-detail-hero {
+  display: grid;
+  grid-template-columns: 288px minmax(0, 1fr);
+  gap: 26px;
+  padding: 22px;
+}
+.card-detail-standing { align-self: center; }
+
+.card-plastic {
+  position: relative;
+  display: grid;
+  align-content: space-between;
+  height: 172px;
+  padding: 17px 19px;
+  border-radius: var(--r-xl);
+  color: #fff;
+  background:
+    radial-gradient(120% 130% at 88% -20%, rgba(255, 255, 255, 0.24) 0%, transparent 55%),
+    radial-gradient(90% 120% at 6% 108%, rgba(0, 0, 0, 0.22) 0%, transparent 60%),
+    linear-gradient(150deg,
+      color-mix(in srgb, var(--tint) 92%, #ffffff) 0%,
+      var(--tint) 55%,
+      color-mix(in srgb, var(--tint) 76%, #000000) 100%);
+  box-shadow: var(--shadow-md);
+}
+.card-plastic-chip {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 26px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.24);
+  color: #fff;
+}
+.card-plastic-name {
+  align-self: center;
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: var(--tight);
+}
+.card-plastic-foot { display: grid; gap: 2px; }
+.card-plastic-foot b {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: var(--wide);
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.9);
+}
+.card-plastic-foot em {
+  font-style: normal;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.7);
+}
+.card-detail-lead-sub {
+  margin-top: 3px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+.card-detail-limit { display: grid; gap: 7px; margin-top: 12px; max-width: 380px; }
+.card-detail-limit span {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+
+/* The figures on one rule, divided by hairlines rather than boxed up. */
+.figure-row {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  border-top: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+}
+.figure {
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  padding: 14px 22px 15px;
+  border-left: 1px solid var(--line-soft);
+}
+.figure:first-child { border-left: 0; }
+.figure-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: var(--wide);
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.figure-value {
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: var(--tight);
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.figure-hint {
+  display: flex;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+.figure-hint button {
+  color: var(--blue);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.figure-good .figure-hint { color: var(--green); }
+.figure-bad .figure-hint { color: var(--red); }
+.figure-warn .figure-hint { color: var(--amber); }
+
+/* Where the cycle stands: opened, today, closes — and the day the bill has
+   to be paid, marked on the same line. */
+.cycle-track { margin-top: 18px; max-width: 460px; }
+.cycle-track-bill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink-2);
+}
+.cycle-track-bill strong { font-weight: 600; color: var(--ink); }
+.cycle-track-bill em {
+  font-style: normal;
+  padding: 1px 7px;
+  border-radius: var(--r-full);
+  background: var(--surface-inset);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+.cycle-track-bill.is-bad { color: var(--red); }
+.cycle-track-bill.is-bad strong { color: var(--red); }
+.cycle-track-bill.is-warn { color: var(--amber); }
+.cycle-track-bill.is-good { color: var(--green); }
+.cycle-track-bill svg { flex: none; }
+
+.cycle-track-line {
+  position: relative;
+  height: 6px;
+  margin: 12px 0 7px;
+  border-radius: var(--r-full);
+  background: var(--surface-inset);
+}
+.cycle-track-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--ink) 22%, transparent);
+}
+.cycle-track-now {
+  position: absolute;
+  top: 50%;
+  width: 11px;
+  height: 11px;
+  margin-left: -5.5px;
+  border-radius: var(--r-full);
+  background: var(--ink);
+  border: 2px solid var(--surface);
+  transform: translateY(-50%);
+}
+.cycle-track-due {
+  position: absolute;
+  top: -3px;
+  width: 2px;
+  height: 12px;
+  margin-left: -1px;
+  border-radius: 2px;
+  background: var(--amber);
+}
+.cycle-track-due.is-late { background: var(--red); }
+
+.cycle-track-ends {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.cycle-track-ends small {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--ink-4);
+}
+.cycle-track-ends .is-right { text-align: right; }
+
+/* A card the book has not been told about yet. It sits above everything the
+   page says, because everything the page says is poorer for it. */
+.cards-alert {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: var(--r-xl);
+  background: color-mix(in srgb, var(--amber) 9%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--amber) 26%, transparent);
+}
+.cards-alert-glyph {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--amber) 16%, transparent);
+  color: var(--amber);
+}
+.cards-alert-body strong {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: var(--tight);
+  color: var(--ink);
+}
+.cards-alert-body p {
+  margin-top: 2px;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.5;
+  color: var(--ink-2);
+  max-width: 76ch;
+}
+
+@media (max-width: 720px) {
+  .cards-alert { grid-template-columns: 38px minmax(0, 1fr); }
+  .cards-alert > .btn { grid-column: 2; justify-self: start; }
+}
+
+.card-detail-chart { padding: 16px 22px 10px; }
+
+/* The heading over a block inside a panel, since a panel inside a panel is
+   a box too many. */
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.section-head h3 {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: var(--tight);
+  color: var(--ink);
+}
+.section-head > span {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+.section-empty {
+  padding: 10px 0 4px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+
+/* The three lists under a card: statements, categories, merchants. */
+.card-lists {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: start;
+}
+.card-lists > section { padding: 18px 22px 20px; }
+.card-lists > section + section { border-left: 1px solid var(--line-soft); }
+
+.cycle-list { display: grid; gap: 2px; }
+.cycle-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.cycle-list li:last-child { border-bottom: 0; }
+.cycle-when {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.cycle-when small {
+  display: block;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ink-4);
+}
+.cycle-amount {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.cycle-paid {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  background: var(--surface-inset);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.cycle-paid.is-clear { background: var(--green-soft); color: var(--green); }
+
+.card-recent-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 22px 6px;
+}
+.card-recent-head .section-head { margin-bottom: 0; }
+
+@media (max-width: 1180px) {
+  .card-lists { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .card-lists > section:nth-child(3) {
+    border-left: 0;
+    border-top: 1px solid var(--line-soft);
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 1080px) {
+  .figure-row {
+    grid-auto-flow: row;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .figure:nth-child(odd) { border-left: 0; }
+  .figure:nth-child(n + 3) { border-top: 1px solid var(--line-soft); }
+  .cards-summary-lead { grid-template-columns: minmax(0, 1fr); }
+  .card-detail-hero { grid-template-columns: minmax(0, 1fr); }
+  .cards-summary-lead > :last-child { justify-self: start; }
+}
+@media (max-width: 860px) {
+  .card-lists { grid-template-columns: minmax(0, 1fr); }
+  .card-lists > section + section {
+    border-left: 0;
+    border-top: 1px solid var(--line-soft);
+  }
+  .card-face { flex: 1 1 100%; }
+}

@@ -587,6 +587,91 @@ export function FlowBars({
   );
 }
 
+/* --------------------------------------------------------------- SpendBars */
+
+/** One bucket of spending: whatever it is called, and what went out in it. */
+export interface SpendPoint {
+  bucket: string;
+  value: Paise;
+}
+
+/**
+ * One bar per bucket, for the only question a card really asks: how much was
+ * put on it, and when. A single series on purpose — money in and money out is
+ * the language of a bank account, and a card only ever runs one way.
+ */
+export function SpendBars({
+  points, height = 180, labelOf, color = 'var(--ink-3)', openLast = false,
+}: {
+  points: SpendPoint[];
+  height?: number;
+  labelOf: (bucket: string) => string;
+  /** The bars' colour — a card's own, where the chart belongs to one card. */
+  color?: string;
+  /** Whether the last bucket is still running, and so still filling up. */
+  openLast?: boolean;
+}) {
+  const [hover, setHover] = useState<number | null>(null);
+  const peak = Math.max(1, ...points.map((p) => p.value));
+
+  return (
+    <div className="flow flow-one">
+      <div className="flow-grid" style={{ height }}>
+        {[1, 0.75, 0.5, 0.25, 0].map((t) => (
+          <div key={t} className="flow-line" style={{ bottom: `${t * 100}%` }}>
+            <span>{compactMoney(peak * t)}</span>
+          </div>
+        ))}
+        <div className="flow-bars">
+          {points.map((point, i) => {
+            const running = openLast && i === points.length - 1;
+            return (
+              <div
+                key={point.bucket}
+                className={`flow-col ${hover === i ? 'is-hover' : ''}`}
+                onMouseEnter={() => setHover(i)}
+                onMouseLeave={() => setHover(null)}
+              >
+                <div className="flow-pair">
+                  <motion.span
+                    className={`flow-bar flow-bar-spend ${running ? 'is-running' : ''}`}
+                    style={{ ['--bar' as any]: color }}
+                    initial={{ height: 0 }}
+                    animate={{ height: `${(point.value / peak) * 100}%` }}
+                    transition={{ duration: 0.6, delay: 0.03 * i, ease: [0.06, 0.94, 0.67, 1.01] }}
+                  />
+                </div>
+                <AnimatePresence>
+                  {hover === i && (
+                    <motion.div
+                      className="flow-tip"
+                      initial={{ opacity: 0, y: 6, scale: 0.96 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 4, scale: 0.97 }}
+                      transition={spring}
+                    >
+                      <strong>{labelOf(point.bucket)}</strong>
+                      <span className="tip-figure">{money(point.value)}</span>
+                      {running && <span className="tip-note">still running</span>}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <div className="flow-axis">
+        {points.map((point, i) => (
+          <span key={point.bucket} className={hover === i ? 'is-hover' : ''}>
+            {labelOf(point.bucket)}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* --------------------------------------------------------------- DailyBars */
 
 /** One slim column per bucket, for the “how spiky was it” read. */

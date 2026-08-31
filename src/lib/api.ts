@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type {
   Account,
   AccountInput,
+  CardsOverview,
   Category,
   CategoryInput,
   Holding,
@@ -75,6 +76,9 @@ export const api = {
   deleteTransactions: (ids: string[]) => call<number>('delete_transactions', { ids }),
 
   overview: (month: string, span = 1) => call<Overview>('overview', { month, span }),
+
+  /** Every credit card: what is owed, what is billed, what the window bought. */
+  cards: (month: string, span = 1) => call<CardsOverview>('cards', { month, span }),
 
   /** Reads a bank statement file into rows. Touches nothing. */
   parseStatement: (path: string) => call<StatementRow[]>('parse_statement', { path }),

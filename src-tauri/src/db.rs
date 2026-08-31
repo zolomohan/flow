@@ -48,12 +48,12 @@ LEFT JOIN transactions o ON o.id = t.refund_of
 /// What a posting has had given back to it: every refund naming it, added up.
 /// Correlated on `t`, so it drops into anything reading through `TX_FROM` —
 /// and into the plain `transactions t` the totals sum over.
-const REFUNDED: &str =
+pub(crate) const REFUNDED: &str =
     "COALESCE((SELECT SUM(r.amount) FROM transactions r WHERE r.refund_of = t.id), 0)";
 
 /// Postings that are money of their own. A refund is not: it undoes the one
 /// it names, and both are netted rather than counted.
-const NOT_A_REFUND: &str = "t.refund_of IS NULL";
+pub(crate) const NOT_A_REFUND: &str = "t.refund_of IS NULL";
 
 /// Built rather than pasted: the figure it reads for what has come back is
 /// the same expression every total nets by.
@@ -76,8 +76,8 @@ fn tx_select() -> String {
 /// spending is counted by: a bill given back in full is worth nothing, and a
 /// part of one comes off the line items in order, earliest first, so the
 /// parts still add up to what the bill is now worth.
-const ATTRIBUTED: &str = "
-SELECT t.id, t.kind, t.occurred_at, t.merchant, t.refund_of,
+pub(crate) const ATTRIBUTED: &str = "
+SELECT t.id, t.kind, t.occurred_at, t.merchant, t.refund_of, t.account_id,
        COALESCE(s.category_id, t.category_id) AS category_id,
        COALESCE(s.amount, t.amount)           AS amount,
        CASE
@@ -121,7 +121,12 @@ fn migrate(conn: &Connection) -> Result<()> {
             archived        INTEGER NOT NULL DEFAULT 0,
             sort_order      INTEGER NOT NULL DEFAULT 0,
             created_at      TEXT NOT NULL,
-            credit_limit    INTEGER NOT NULL DEFAULT 0
+            credit_limit    INTEGER NOT NULL DEFAULT 0,
+            -- A card's billing cycle: the day of the month the statement
+            -- closes, and the day the bill is due. Zero on either means that
+            -- half is not known, and nothing but a card has either.
+            statement_day   INTEGER NOT NULL DEFAULT 0,
+            due_day         INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS categories (
@@ -420,6 +425,15 @@ fn migrate(conn: &Connection) -> Result<()> {
     // Books that predate splitting have debts, but none of them came from a
     // split — the default of 0 is exactly right for every one of them.
     add_column_if_missing(conn, "debts", "from_split", "from_split INTEGER NOT NULL DEFAULT 0")?;
+    // A card written before cycles were tracked has none, which is exactly
+    // what zero says: the tab reads it by calendar month instead.
+    add_column_if_missing(
+        conn,
+        "accounts",
+        "statement_day",
+        "statement_day INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_missing(conn, "accounts", "due_day", "due_day INTEGER NOT NULL DEFAULT 0")?;
     // Nothing in a book written before refunds existed gives anything back,
     // which is exactly what a column of nulls says. The index waits for the
     // column: a book that already has the table gets the column here, and
@@ -833,6 +847,8 @@ fn account_from_row(r: &Row) -> rusqlite::Result<Account> {
         created_at: r.get(9)?,
         balance: r.get(10)?,
         credit_limit: r.get(11)?,
+        statement_day: r.get(12)?,
+        due_day: r.get(13)?,
         // Filled in by `apply_marks`: the ledger alone knows nothing about
         // what a holding is worth today.
         revaluation: 0,
@@ -843,7 +859,7 @@ pub fn list_accounts(conn: &Connection) -> Result<Vec<Account>> {
     let sql = format!(
         "SELECT a.id, a.name, a.kind, a.institution, a.opening_balance, a.color, a.icon,
                 a.archived, a.sort_order, a.created_at, {BALANCE_EXPR} AS balance,
-                a.credit_limit
+                a.credit_limit, a.statement_day, a.due_day
          FROM accounts a
          ORDER BY a.archived ASC, a.sort_order ASC, a.created_at ASC"
     );
@@ -858,7 +874,7 @@ fn get_account(conn: &Connection, id: &str) -> Result<Account> {
     let sql = format!(
         "SELECT a.id, a.name, a.kind, a.institution, a.opening_balance, a.color, a.icon,
                 a.archived, a.sort_order, a.created_at, {BALANCE_EXPR} AS balance,
-                a.credit_limit
+                a.credit_limit, a.statement_day, a.due_day
          FROM accounts a WHERE a.id = ?1"
     );
     let mut one = vec![conn
@@ -868,12 +884,24 @@ fn get_account(conn: &Connection, id: &str) -> Result<Account> {
     Ok(one.remove(0))
 }
 
+/// A day of the month a cycle can actually land on, or nothing. Only a card
+/// has one, and 1–31 is the whole of what a day of the month can be — which
+/// month it falls in is the caller's business, not the column's.
+fn cycle_day(kind: &str, day: i64) -> i64 {
+    if kind == "credit" && (1..=31).contains(&day) {
+        day
+    } else {
+        0
+    }
+}
+
 pub fn save_account(conn: &Connection, input: AccountInput) -> Result<Account> {
     match input.id {
         Some(id) => {
             conn.execute(
                 "UPDATE accounts SET name = ?2, kind = ?3, institution = ?4,
-                        opening_balance = ?5, color = ?6, icon = ?7, credit_limit = ?8
+                        opening_balance = ?5, color = ?6, icon = ?7, credit_limit = ?8,
+                        statement_day = ?9, due_day = ?10
                  WHERE id = ?1",
                 params![
                     id,
@@ -883,8 +911,10 @@ pub fn save_account(conn: &Connection, input: AccountInput) -> Result<Account> {
                     input.opening_balance,
                     input.color,
                     input.icon,
-                    // A limit only means anything on a card.
-                    if input.kind == "credit" { input.credit_limit } else { 0 }
+                    // A limit only means anything on a card, and so does a cycle.
+                    if input.kind == "credit" { input.credit_limit } else { 0 },
+                    cycle_day(&input.kind, input.statement_day),
+                    cycle_day(&input.kind, input.due_day)
                 ],
             )
             .map_err(oops)?;
@@ -901,8 +931,9 @@ pub fn save_account(conn: &Connection, input: AccountInput) -> Result<Account> {
                 .map_err(oops)?;
             conn.execute(
                 "INSERT INTO accounts (id, name, kind, institution, opening_balance, color, icon,
-                                       archived, sort_order, created_at, credit_limit)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?10)",
+                                       archived, sort_order, created_at, credit_limit,
+                                       statement_day, due_day)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?10, ?11, ?12)",
                 params![
                     id,
                     input.name,
@@ -913,7 +944,9 @@ pub fn save_account(conn: &Connection, input: AccountInput) -> Result<Account> {
                     input.icon,
                     next,
                     now(),
-                    if input.kind == "credit" { input.credit_limit } else { 0 }
+                    if input.kind == "credit" { input.credit_limit } else { 0 },
+                    cycle_day(&input.kind, input.statement_day),
+                    cycle_day(&input.kind, input.due_day)
                 ],
             )
             .map_err(oops)?;
@@ -5129,7 +5162,7 @@ fn day_of(text: &str, what: &str) -> Result<String> {
         .map_err(|_| format!("{what} is not a date Midas can read."))
 }
 
-fn month_bounds(month: &str) -> Result<(NaiveDate, NaiveDate)> {
+pub(crate) fn month_bounds(month: &str) -> Result<(NaiveDate, NaiveDate)> {
     let start = NaiveDate::parse_from_str(&format!("{month}-01"), "%Y-%m-%d")
         .map_err(|_| format!("`{month}` is not a YYYY-MM month."))?;
     let next = if start.month() == 12 {
@@ -5141,7 +5174,7 @@ fn month_bounds(month: &str) -> Result<(NaiveDate, NaiveDate)> {
     Ok((start, next.pred_opt().unwrap_or(next)))
 }
 
-fn shift_month(month: &str, delta: i32) -> Result<String> {
+pub(crate) fn shift_month(month: &str, delta: i32) -> Result<String> {
     let (start, _) = month_bounds(month)?;
     let total = start.year() * 12 + start.month() as i32 - 1 + delta;
     Ok(format!("{:04}-{:02}", total.div_euclid(12), total.rem_euclid(12) + 1))
@@ -5182,6 +5215,18 @@ fn flow_for(conn: &Connection, from: &str, to: &str) -> Result<(Paise, Paise)> {
 /// categories kept underneath. Charts read the groups; the expandable
 /// breakdown reads the children.
 fn spend_by_category(conn: &Connection, from: &str, to: &str) -> Result<Vec<CategorySlice>> {
+    spend_by_category_in(conn, from, to, None)
+}
+
+/// The same question asked of one account — what a card was spent on — or of
+/// the whole book when no account is named.
+pub(crate) fn spend_by_category_in(
+    conn: &Connection,
+    from: &str,
+    to: &str,
+    account: Option<&str>,
+) -> Result<Vec<CategorySlice>> {
+    let only = if account.is_some() { "AND t.account_id = ?3" } else { "" };
     let mut stmt = conn
         .prepare(
             &format!(
@@ -5196,7 +5241,7 @@ fn spend_by_category(conn: &Connection, from: &str, to: &str) -> Result<Vec<Cate
              JOIN categories c ON c.id = t.category_id
              LEFT JOIN categories p ON p.id = c.parent_id
              WHERE t.kind = 'expense' AND {NOT_A_REFUND}
-               AND t.occurred_at >= ?1 AND t.occurred_at <= ?2
+               AND t.occurred_at >= ?1 AND t.occurred_at <= ?2 {only}
              GROUP BY c.id
              -- A category whose every bill came back is not somewhere the
              -- money went, so it drops off the breakdown rather than sitting
@@ -5212,8 +5257,12 @@ fn spend_by_category(conn: &Connection, from: &str, to: &str) -> Result<Vec<Cate
         group: (String, String, String, String),
     }
 
+    let mut bound: Vec<&dyn rusqlite::ToSql> = vec![&from, &to];
+    if let Some(id) = account.as_ref() {
+        bound.push(id);
+    }
     let leaves: Vec<Leaf> = stmt
-        .query_map(params![from, to], |r| {
+        .query_map(params_from_iter(bound), |r| {
             Ok(Leaf {
                 slice: CategorySlice {
                     category_id: r.get(0)?,
@@ -5604,6 +5653,8 @@ mod tests {
                 color: "#000000".into(),
                 icon: "wallet".into(),
                 credit_limit: 0,
+                statement_day: 0,
+                due_day: 0,
             },
         )
         .unwrap()

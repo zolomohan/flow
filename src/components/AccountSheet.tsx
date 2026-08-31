@@ -30,6 +30,23 @@ const DEFAULT_ICON: Record<AccountKind, string> = {
   investment: 'trending-up',
 };
 
+/** A day of the month, or nothing. Anything else typed into the well is not
+ *  a day a cycle could land on, so it counts as leaving it blank. */
+/** 1st, 2nd, 3rd, 4th — for saying a day of the month out loud. */
+function ordinal(day: number) {
+  const tens = day % 100;
+  const suffix =
+    tens >= 11 && tens <= 13
+      ? 'th'
+      : ['th', 'st', 'nd', 'rd'][day % 10] ?? 'th';
+  return `${day}${suffix}`;
+}
+
+function dayOfMonth(text: string) {
+  const day = Number(text.trim());
+  return Number.isInteger(day) && day >= 1 && day <= 31 ? day : 0;
+}
+
 export function AccountSheet({
   open, onClose, editing,
 }: { open: boolean; onClose: () => void; editing?: Account | null }) {
@@ -42,6 +59,10 @@ export function AccountSheet({
   const [color, setColor] = useState(SWATCHES[0]);
   const [icon, setIcon] = useState('landmark');
   const [limit, setLimit] = useState('');
+  // A card's own month: the day the statement closes, and the day the bill
+  // has to be paid. Kept as typed so the wells can be emptied.
+  const [statementDay, setStatementDay] = useState('');
+  const [dueDay, setDueDay] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
 
@@ -55,6 +76,8 @@ export function AccountSheet({
       setColor(editing.color);
       setIcon(editing.icon);
       setLimit(paiseToRupeeString(editing.creditLimit));
+      setStatementDay(editing.statementDay ? String(editing.statementDay) : '');
+      setDueDay(editing.dueDay ? String(editing.dueDay) : '');
     } else {
       setName('');
       setKind('bank');
@@ -63,6 +86,8 @@ export function AccountSheet({
       setColor(SWATCHES[0]);
       setIcon('landmark');
       setLimit('');
+      setStatementDay('');
+      setDueDay('');
     }
     setError(null);
     setConfirming(false);
@@ -73,6 +98,17 @@ export function AccountSheet({
     if (icon === DEFAULT_ICON[kind]) setIcon(DEFAULT_ICON[next]);
     setKind(next);
   };
+
+  // What the two days come to, said back in words — the arithmetic is the
+  // one thing about a billing cycle nobody remembers.
+  const closes = dayOfMonth(statementDay);
+  const due = dayOfMonth(dueDay);
+  const cycleHint =
+    closes && due
+      ? due > closes
+        ? `${ordinal(due)}, same month`
+        : `${ordinal(due)} of the next month`
+      : 'optional';
 
   const submit = async () => {
     if (!name.trim()) return setError('Give the account a name.');
@@ -85,6 +121,8 @@ export function AccountSheet({
       color,
       icon,
       creditLimit: kind === 'credit' ? rupeesToPaise(limit) : 0,
+      statementDay: kind === 'credit' ? dayOfMonth(statementDay) : 0,
+      dueDay: kind === 'credit' ? dayOfMonth(dueDay) : 0,
     });
     onClose();
   };
@@ -215,6 +253,40 @@ export function AccountSheet({
             )}
           </AnimatePresence>
         </div>
+
+        {/* A card keeps its own month. Both halves are optional: without
+            them the Cards tab reads the card by the calendar like every
+            other account, which is honest but says a good deal less. */}
+        <AnimatePresence initial={false}>
+          {kind === 'credit' && (
+            <motion.div
+              key="cycle"
+              className="tx-meta"
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={spring}
+              style={{ overflow: 'hidden' }}
+            >
+              <Field label="Statement day" hint="optional">
+                <TextInput
+                  inputMode="numeric"
+                  value={statementDay}
+                  placeholder="2"
+                  onChange={(e) => setStatementDay(e.target.value.replace(/[^0-9]/g, ''))}
+                />
+              </Field>
+              <Field label="Payment due day" hint={cycleHint}>
+                <TextInput
+                  inputMode="numeric"
+                  value={dueDay}
+                  placeholder="22"
+                  onChange={(e) => setDueDay(e.target.value.replace(/[^0-9]/g, ''))}
+                />
+              </Field>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         <div>
           <span className="field-label">Colour</span>

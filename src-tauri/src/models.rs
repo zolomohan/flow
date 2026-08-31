@@ -20,6 +20,16 @@ pub struct Account {
     pub created_at: String,
     /// Credit limit for a card, in paise. Zero means "not tracked".
     pub credit_limit: Paise,
+    /// The day of the month a card's statement closes, 1–31. Zero means the
+    /// cycle isn't tracked, and the card is read by calendar month like
+    /// everything else. A day past the end of a short month falls on its
+    /// last day rather than sliding into the next.
+    pub statement_day: i64,
+    /// The day of the month the bill has to be paid by, 1–31. Counted from
+    /// the statement: the first such day after the cycle closed, so a card
+    /// billed on the 2nd and due on the 22nd is the same month, and one due
+    /// on the 1st is the month after.
+    pub due_day: i64,
     /// Derived: opening balance folded with every posting that touches it.
     pub balance: Paise,
     /// Derived: what the holdings parked in this account are worth today, less
@@ -41,6 +51,12 @@ pub struct AccountInput {
     pub color: String,
     pub icon: String,
     pub credit_limit: Paise,
+    /// Both only mean anything on a card, and zero on either means that half
+    /// of the cycle isn't known.
+    #[serde(default)]
+    pub statement_day: i64,
+    #[serde(default)]
+    pub due_day: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -405,6 +421,96 @@ pub struct Overview {
     pub monthly_flow: Vec<FlowPoint>,
     pub top_categories: Vec<CategorySlice>,
     pub top_merchants: Vec<MerchantSlice>,
+}
+
+// --------------------------------------------------------------------- cards
+
+/// One billing cycle of a card: what it came to, and what was paid against
+/// it. The cycle still running is `open`, and its `closed_on` is a date in
+/// the future — the day the statement will be cut.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardCycle {
+    /// The first day the cycle covers.
+    pub from: String,
+    /// The day the statement closes, which the cycle includes.
+    pub closed_on: String,
+    /// Charges less credits: what the cycle came to. This is the bank's
+    /// arithmetic rather than the book's — a refund counts in the cycle it
+    /// landed in, because that is the cycle the bank credited it to.
+    pub spend: Paise,
+    /// Payments that landed inside the cycle.
+    pub paid: Paise,
+    pub open: bool,
+}
+
+/// One card, and everything the tab says about it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardStat {
+    pub id: String,
+    pub name: String,
+    pub institution: Option<String>,
+    pub color: String,
+    pub icon: String,
+    /// What is owed on it right now. Zero when the card is in credit.
+    pub outstanding: Paise,
+    /// The balance as the ledger has it: negative while anything is owed,
+    /// positive on a card that has been overpaid.
+    pub balance: Paise,
+    pub credit_limit: Paise,
+    /// Limit less outstanding. Zero when no limit is set, since nothing is
+    /// known about how much room is left.
+    pub available: Paise,
+    pub statement_day: i64,
+    pub due_day: i64,
+    /// The day the last statement closed, and the day it has to be paid by.
+    /// Both `None` on a card whose cycle isn't tracked.
+    pub statement_on: Option<String>,
+    pub due_on: Option<String>,
+    /// What that statement came to.
+    pub statement_total: Paise,
+    /// What is left of it after the payments since, and what has been spent
+    /// since it closed. The two always add up to `outstanding`.
+    pub billed: Paise,
+    pub unbilled: Paise,
+    /// Payments made since the statement closed.
+    pub paid_since: Paise,
+    /// Spending over the window on screen, and over the one before it. This
+    /// is the book's arithmetic: refunds are netted off the posting they
+    /// undo, exactly as everywhere else.
+    pub spend: Paise,
+    pub prev_spend: Paise,
+    /// Payments into the card over the window, and how many times it was used.
+    pub paid: Paise,
+    pub charges: i64,
+    pub last_used: Option<String>,
+    /// The last dozen cycles, oldest first, the open one last.
+    pub cycles: Vec<CardCycle>,
+    pub top_categories: Vec<CategorySlice>,
+    pub top_merchants: Vec<MerchantSlice>,
+}
+
+/// Every card at once: the totals across them, and each one in turn.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardsOverview {
+    pub month: String,
+    pub span: u32,
+    pub outstanding: Paise,
+    pub credit_limit: Paise,
+    pub available: Paise,
+    pub billed: Paise,
+    pub unbilled: Paise,
+    pub spend: Paise,
+    pub prev_spend: Paise,
+    pub paid: Paise,
+    /// Every card together, month by month: what was spent on them and what
+    /// was paid off them. Calendar months rather than cycles, because two
+    /// cards close on different days and only the calendar is common to
+    /// both. A year of it, or the window if that reaches back further.
+    pub monthly: Vec<FlowPoint>,
+    pub cards: Vec<CardStat>,
 }
 
 // --------------------------------------------------------------------- debts
