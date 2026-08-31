@@ -5,6 +5,7 @@ mod import;
 mod models;
 mod plans;
 mod prices;
+mod tax;
 
 use std::sync::Mutex;
 use tauri::{Manager, State};
@@ -128,6 +129,39 @@ fn delete_transaction(db: State<Db>, id: String) -> R<()> {
 #[tauri::command]
 fn cards(db: State<Db>, month: String, span: Option<u32>) -> R<CardsOverview> {
     with_db(&db, |c| cards::cards_overview(c, &month, span.unwrap_or(1)))
+}
+
+/// A financial year of earnings, grouped by the head each is filed under —
+/// and, just as loudly, by what has not been filed at all. No tax is
+/// computed here on purpose: see `tax.rs`.
+#[tauri::command]
+fn tax_year(db: State<Db>, fy: i32) -> R<TaxYear> {
+    with_db(&db, |c| tax::tax_year(c, fy))
+}
+
+/// Which financial years the book has anything to say about.
+#[tauri::command]
+fn tax_years(db: State<Db>) -> R<Vec<i32>> {
+    with_db(&db, tax::tax_years)
+}
+
+/// Every category that has been given a tax head, as `categoryId -> tag`.
+#[tauri::command]
+fn tax_map(db: State<Db>) -> R<std::collections::HashMap<String, String>> {
+    with_db(&db, tax::tax_map)
+}
+
+/// Files a category under a head. A null tag puts it back on the undecided
+/// pile, which is a real answer rather than an absence of one.
+#[tauri::command]
+fn set_tax_tag(db: State<Db>, category_id: String, tag: Option<String>) -> R<()> {
+    with_db(&db, |c| tax::set_tax_tag(c, &category_id, tag.clone()))
+}
+
+/// The year as CSV, one row per posting, for whoever actually files it.
+#[tauri::command]
+fn tax_export(db: State<Db>, fy: i32) -> R<String> {
+    with_db(&db, |c| tax::tax_export(c, fy))
 }
 
 #[tauri::command]
@@ -484,6 +518,11 @@ pub fn run() {
             delete_transactions,
             overview,
             cards,
+            tax_year,
+            tax_years,
+            tax_map,
+            set_tax_tag,
+            tax_export,
             parse_statement,
             preview_statement_import,
             commit_statement_import,

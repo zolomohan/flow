@@ -6470,3 +6470,330 @@ kbd {
   }
   .card-face { flex: 1 1 100%; }
 }
+
+/* ------------------------------------------------------------------ taxes
+
+   The tab is a reading surface, not a form: long notes sit beside figures
+   and have to stay readable, so the type here runs a shade larger and the
+   rows breathe more than the ledger's do. The one piece of colour work is
+   the unfiled head — it is tinted red and stays that way however small it
+   gets, because a rounding error of unfiled income is still a decision
+   nobody has made. */
+
+.tax-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.tax-nav-year {
+  display: grid;
+  justify-items: center;
+  gap: 1px;
+  min-width: 108px;
+}
+.tax-nav-year b {
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: var(--tight);
+  color: var(--ink);
+}
+.tax-nav-year em {
+  font-size: 10.5px;
+  font-style: normal;
+  font-weight: 500;
+  letter-spacing: var(--wide);
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.tax-summary-lead {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 24px;
+  padding: 20px 22px 18px;
+}
+.tax-total {
+  display: block;
+  margin-top: 4px;
+  font-size: 34px;
+  font-weight: 600;
+  letter-spacing: var(--tighter);
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.tax-summary-sub {
+  margin-top: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+.tax-summary-actions { display: flex; gap: 8px; }
+
+/* The nag. Loud enough to act on, quiet enough to live with while a year is
+   still being filed — it is a prompt, not an error. */
+.tax-alert {
+  border-color: color-mix(in srgb, var(--amber) 32%, var(--line));
+  background: color-mix(in srgb, var(--amber) 6%, var(--surface));
+}
+.tax-alert-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 13px;
+}
+.tax-alert-head > svg { color: var(--amber); }
+.tax-alert-head b {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.tax-alert-head span {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+/* ---------------------------------------------------------------- a head */
+
+.tax-head { border-bottom: 1px solid var(--line-soft); }
+.tax-head:last-child { border-bottom: 0; }
+.tax-head-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 13px;
+  width: 100%;
+  padding: 13px 20px 12px;
+  background: none;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+.tax-head-row:hover { background: var(--surface-3); }
+.tax-head-row > svg { color: var(--ink-4); }
+.tax-head-glyph {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+}
+.tax-head-name b {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: var(--tight);
+  color: var(--ink);
+}
+.tax-head-name em,
+.tax-head-figures em {
+  display: block;
+  margin-top: 1px;
+  font-size: 11.5px;
+  font-style: normal;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+.tax-head-figures { text-align: right; }
+.tax-head-figures b {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+/* The bar under a shut head is the only thing carrying proportion, so it
+   stays visible rather than sitting inside the open body. */
+.tax-head > .meter { margin: 0 20px 12px; }
+.tax-head.is-unfiled .tax-head-figures b { color: var(--red); }
+
+.tax-head-body {
+  padding: 2px 20px 18px;
+  border-top: 1px solid var(--line-soft);
+}
+.tax-head-note {
+  max-width: 74ch;
+  margin: 13px 0 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+.tax-head-chart { margin-top: 16px; }
+.tax-head-months {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  margin-top: 5px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: var(--wide);
+  text-transform: uppercase;
+  color: var(--ink-4);
+  text-align: center;
+}
+.tax-head-splits {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px 34px;
+  margin-top: 18px;
+}
+.tax-head-splits h5 {
+  margin-bottom: 7px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: var(--wide);
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.tax-line {
+  display: grid;
+  grid-template-columns: minmax(90px, 1.1fr) minmax(40px, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 5px 0;
+}
+.tax-line-pad {
+  padding: 11px 20px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.tax-line-pad:last-child { border-bottom: 0; }
+.tax-line-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.tax-line-name > svg { color: var(--ink-3); flex: none; }
+.tax-line b {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+/* Struck through rather than hidden: the point of the lens is to see the
+   size of what you would be giving up, not to make it disappear. */
+.tax-line.is-lost { opacity: 0.55; }
+.tax-line.is-lost b { text-decoration: line-through; }
+.tax-lost-flag {
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 600;
+  letter-spacing: var(--wide);
+  text-transform: uppercase;
+  color: var(--red);
+}
+.tax-lens { padding: 12px 20px 4px; }
+
+/* ------------------------------------------------------ limits and dates */
+
+.tax-limit-body { display: grid; gap: 9px; margin-top: 12px; }
+.tax-limit-body strong {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: var(--tight);
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.tax-limit-body p {
+  max-width: 78ch;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+
+.tax-quarters {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+}
+.tax-quarter {
+  display: grid;
+  gap: 3px;
+  padding: 15px 20px 16px;
+  border-left: 1px solid var(--line-soft);
+}
+.tax-quarter:first-child { border-left: 0; }
+/* A date still ahead is a projection, not a record. */
+.tax-quarter:not(.is-past) { opacity: 0.62; }
+.tax-quarter-share {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: var(--wide);
+  color: var(--ink-3);
+}
+.tax-quarter b {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: var(--tight);
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.tax-quarter em {
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+
+.tax-footnote {
+  max-width: 82ch;
+  margin: 4px 0 0;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.65;
+  color: var(--ink-3);
+}
+
+/* ----------------------------------------------------------- the mapping */
+
+.tax-sheet { display: grid; gap: 14px; }
+.tax-sheet-tabs { display: flex; gap: 7px; }
+.tax-sheet-note {
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+.tax-sheet-rows { display: grid; gap: 8px; }
+.tax-sheet-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 208px;
+  align-items: center;
+  gap: 14px;
+}
+.tax-sheet-cat {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.tax-sheet-dot {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  color: #fff;
+}
+
+@media (max-width: 940px) {
+  .tax-summary-lead { grid-template-columns: minmax(0, 1fr); }
+  .tax-quarters { grid-auto-flow: row; }
+  .tax-quarter { border-left: 0; border-top: 1px solid var(--line-soft); }
+  .tax-quarter:first-child { border-top: 0; }
+  .tax-sheet-row { grid-template-columns: minmax(0, 1fr); }
+}

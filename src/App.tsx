@@ -18,6 +18,7 @@ import { Transactions } from './screens/Transactions';
 import { Planned } from './screens/Planned';
 import { Accounts } from './screens/Accounts';
 import { Cards } from './screens/Cards';
+import { Taxes } from './screens/Taxes';
 import { Debts } from './screens/Debts';
 import { Investments } from './screens/Investments';
 import { Insights } from './screens/Insights';
@@ -48,6 +49,7 @@ const ROUTE_KEYS: Route[] = [
   'planned',
   'accounts',
   'cards',
+  'taxes',
   'debts',
   'investments',
   'insights',
@@ -372,6 +374,8 @@ function Shell() {
                 onOpenCategory={openCategoryTransactions}
                 onOpenTransaction={openTransaction}
               />
+            ) : route === 'taxes' ? (
+              <Taxes onOpenTransaction={openTransaction} />
             ) : route === 'debts' ? (
               <Debts
                 onNewDebt={newDebt}

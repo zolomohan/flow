@@ -162,6 +162,9 @@ interface Store {
    *  of yours, only where the template sits in the list. */
   markTemplateUsed: (id: string) => Promise<void>;
   resetAll: () => Promise<void>;
+  /** Files a category under a tax head; null puts it back on the undecided
+   *  pile. Quiet: the tab redraws, and a toast per tag would drown it. */
+  setTaxTag: (categoryId: string, tag: string | null) => Promise<void>;
   /** Bumped after every write so screens can re-run their own queries. */
   revision: number;
 }
@@ -443,6 +446,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
       },
       resetAll: () => mutate(() => api.resetAll(), 'Everything cleared'),
+      setTaxTag: (categoryId, tag) => mutate(() => api.setTaxTag(categoryId, tag)),
     }),
     [
       ready,

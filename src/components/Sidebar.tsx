@@ -13,6 +13,7 @@ export type Route =
   | 'insights'
   | 'accounts'
   | 'cards'
+  | 'taxes'
   | 'categories'
   | 'labels'
   | 'templates'
@@ -28,6 +29,7 @@ const NAV: { id: Route; label: string; icon: string }[] = [
   { id: 'insights', label: 'Insights', icon: 'sparkles' },
   { id: 'accounts', label: 'Accounts', icon: 'wallet-cards' },
   { id: 'cards', label: 'Cards', icon: 'credit-card' },
+  { id: 'taxes', label: 'Taxes', icon: 'scroll-text' },
   { id: 'categories', label: 'Categories', icon: 'tags' },
   { id: 'labels', label: 'Labels', icon: 'bookmark' },
   { id: 'templates', label: 'Templates', icon: 'shapes' },

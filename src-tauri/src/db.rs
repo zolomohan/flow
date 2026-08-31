@@ -36,7 +36,7 @@ const BALANCE_EXPR: &str = "
 
 /// Joined once, used by both the row query and the totals that go with it —
 /// the filters reach into account and category names, so they have to be here.
-const TX_FROM: &str = "
+pub(crate) const TX_FROM: &str = "
 FROM transactions t
 JOIN accounts a ON a.id = t.account_id
 LEFT JOIN accounts ta ON ta.id = t.to_account_id
@@ -57,7 +57,7 @@ pub(crate) const NOT_A_REFUND: &str = "t.refund_of IS NULL";
 
 /// Built rather than pasted: the figure it reads for what has come back is
 /// the same expression every total nets by.
-fn tx_select() -> String {
+pub(crate) fn tx_select() -> String {
     format!(
         "SELECT t.id, t.kind, t.amount, t.account_id, t.to_account_id, t.category_id,
                 t.merchant, t.note, t.occurred_at, t.created_at,
@@ -399,6 +399,16 @@ fn migrate(conn: &Connection) -> Result<()> {
         ) WITHOUT ROWID;
 
         CREATE INDEX IF NOT EXISTS idx_plan_entries_tx ON plan_entries(transaction_id);
+
+        -- What a category means to the taxman, which is not what it means to
+        -- you. \"Freelance\" is a category; whether it is salary or a
+        -- professional receipt is a decision, and this is where the decision
+        -- is kept. Untagged is a real state and the honest default: the tab
+        -- shows you what it does not know rather than guessing a head.
+        CREATE TABLE IF NOT EXISTS tax_map (
+            category_id TEXT PRIMARY KEY REFERENCES categories(id) ON DELETE CASCADE,
+            tag         TEXT NOT NULL
+        );
         ",
     )
     .map_err(oops)?;
@@ -1342,7 +1352,7 @@ pub fn delete_category(
 
 // ------------------------------------------------------------ transactions
 
-fn tx_from_row(r: &Row) -> rusqlite::Result<Transaction> {
+pub(crate) fn tx_from_row(r: &Row) -> rusqlite::Result<Transaction> {
     Ok(Transaction {
         id: r.get(0)?,
         kind: r.get(1)?,
@@ -1376,7 +1386,7 @@ fn tx_from_row(r: &Row) -> rusqlite::Result<Transaction> {
 
 /// The line items and the shares belonging to a page of postings, fetched in
 /// two queries however many rows are on screen and hung off the right ones.
-fn attach_parts(conn: &Connection, rows: &mut [Transaction]) -> Result<()> {
+pub(crate) fn attach_parts(conn: &Connection, rows: &mut [Transaction]) -> Result<()> {
     if rows.is_empty() {
         return Ok(());
     }

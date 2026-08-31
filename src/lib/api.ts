@@ -27,6 +27,7 @@ import type {
   TransactionInput,
   TransactionPatch,
   TransactionQuery,
+  TaxYear,
   TransactionSummary,
   TxTemplate,
   TxTemplateInput,
@@ -79,6 +80,19 @@ export const api = {
 
   /** Every credit card: what is owed, what is billed, what the window bought. */
   cards: (month: string, span = 1) => call<CardsOverview>('cards', { month, span }),
+
+  /** A financial year of earnings, grouped by the head each is filed under.
+   *  Computes no tax, on purpose. */
+  taxYear: (fy: number) => call<TaxYear>('tax_year', { fy }),
+  /** Which financial years the book has anything to say about. */
+  taxYears: () => call<number[]>('tax_years'),
+  /** Every category that has been given a tax head, as categoryId -> tag. */
+  taxMap: () => call<Record<string, string>>('tax_map'),
+  /** Files a category under a head; null puts it back on the undecided pile. */
+  setTaxTag: (categoryId: string, tag: string | null) =>
+    call<void>('set_tax_tag', { categoryId, tag }),
+  /** The year as CSV, one row per posting, for whoever actually files it. */
+  taxExport: (fy: number) => call<string>('tax_export', { fy }),
 
   /** Reads a bank statement file into rows. Touches nothing. */
   parseStatement: (path: string) => call<StatementRow[]>('parse_statement', { path }),

@@ -865,3 +865,61 @@ export interface PlanOccurrence {
   /** Deliberately let go rather than paid. */
   skipped: boolean;
 }
+
+// ------------------------------------------------------------------ tax
+
+/** One line of working behind a head: a category it came from, or a
+ *  counterparty who paid it. */
+export interface TaxSlice {
+  id: string;
+  label: string;
+  icon: string | null;
+  color: string | null;
+  total: Paise;
+  count: number;
+}
+
+/** Everything filed under one tax tag for the year. An empty `tag` is the
+ *  pile that has not been filed at all. */
+export interface TaxHead {
+  tag: string;
+  total: Paise;
+  count: number;
+  prevTotal: Paise;
+  categories: TaxSlice[];
+  sources: TaxSlice[];
+  /** Twelve figures, April first. */
+  monthly: Paise[];
+}
+
+/** An advance-tax instalment date and the income that had landed by it. The
+ *  instalment itself is a share of a liability Midas will not guess. */
+export interface TaxQuarter {
+  label: string;
+  dueOn: string;
+  /** The statutory cumulative share: 15, 45, 75, 100. */
+  share: number;
+  income: Paise;
+  past: boolean;
+}
+
+export interface TaxYear {
+  /** The calendar year the financial year opens in: 2025 is FY 2025-26. */
+  fy: number;
+  label: string;
+  assessment: string;
+  startsOn: string;
+  endsOn: string;
+  closed: boolean;
+  income: Paise;
+  prevIncome: Paise;
+  classified: Paise;
+  unclassified: Paise;
+  unclassifiedCount: number;
+  heads: TaxHead[];
+  deductions: TaxHead[];
+  quarters: TaxQuarter[];
+  interest: TaxSlice[];
+  unfiled: Transaction[];
+  untaggedCategories: number;
+}

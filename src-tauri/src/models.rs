@@ -995,3 +995,88 @@ pub struct PlanOccurrence {
     /// Deliberately let go rather than paid.
     pub skipped: bool,
 }
+
+// ----------------------------------------------------------------------- tax
+
+/// One line of a head: which category, or which counterparty, the money
+/// under a head actually came from. The head is the answer; this is the
+/// working that got there, so a wrong tag is visible rather than buried.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaxSlice {
+    pub id: String,
+    pub label: String,
+    pub icon: Option<String>,
+    pub color: Option<String>,
+    pub total: Paise,
+    pub count: i64,
+}
+
+/// Everything filed under one tax tag for the year. `tag` is empty for the
+/// pile that has not been filed at all — the one the tab exists to shrink.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaxHead {
+    pub tag: String,
+    pub total: Paise,
+    pub count: i64,
+    /// What it came to last year, for the same tag. Zero when there was none.
+    pub prev_total: Paise,
+    /// The categories feeding this head, largest first.
+    pub categories: Vec<TaxSlice>,
+    /// Who the money came from, largest first, capped at a readable few.
+    pub sources: Vec<TaxSlice>,
+    /// April through March, twelve figures, so a lumpy head reads as lumpy.
+    pub monthly: Vec<Paise>,
+}
+
+/// An advance-tax instalment window. Midas does not compute the instalment —
+/// that needs a tax figure it deliberately refuses to guess — but it can say
+/// exactly how much income had landed by each date, which is the input.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaxQuarter {
+    pub label: String,
+    pub due_on: String,
+    /// The cumulative share of the year's liability due by this date: the
+    /// statutory 15 / 45 / 75 / 100.
+    pub share: u32,
+    /// Income that had landed by the due date, counted from 1 April.
+    pub income: Paise,
+    /// Whether the date has passed.
+    pub past: bool,
+}
+
+/// A year of earnings, sorted into the heads you have told it about and the
+/// pile you have not. Nothing here is a tax computation and nothing here is
+/// advice: it is the ledger, grouped the way a return asks its questions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaxYear {
+    /// The calendar year the financial year opens in: 2025 means FY 2025-26.
+    pub fy: i32,
+    pub label: String,
+    pub assessment: String,
+    pub starts_on: String,
+    pub ends_on: String,
+    /// Whether 31 March has passed. An open year is a running total.
+    pub closed: bool,
+    /// Every income posting in the year, refunds netted off.
+    pub income: Paise,
+    pub prev_income: Paise,
+    pub classified: Paise,
+    pub unclassified: Paise,
+    pub unclassified_count: i64,
+    /// Income heads, largest first, with the unfiled pile always last.
+    pub heads: Vec<TaxHead>,
+    /// Expense-side tags — the things a return asks you to prove you paid.
+    pub deductions: Vec<TaxHead>,
+    pub quarters: Vec<TaxQuarter>,
+    /// Interest earned per account, which is the shape AIS reports it in.
+    pub interest: Vec<TaxSlice>,
+    /// The unfiled postings themselves, newest first, so the decision can be
+    /// made from the tab rather than hunted for in the ledger.
+    pub unfiled: Vec<Transaction>,
+    /// How many income categories carry no tag at all.
+    pub untagged_categories: i64,
+}
