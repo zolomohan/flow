@@ -4,7 +4,7 @@ import { Icon } from '../components/Icon';
 import { Button, Card, CardHead, Segmented, type SegmentOption } from '../components/ui';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { api } from '../lib/api';
-import { REQUIRE_NOTE, useStore } from '../lib/store';
+import { REQUIRE_NOTE, THEMES, useStore } from '../lib/store';
 import { spring } from '../lib/motion';
 
 type Tab = 'preferences' | 'data';
@@ -58,30 +58,31 @@ export function Settings() {
 }
 
 function PreferencesPanel() {
-  const { theme, toggleTheme, settings, saveSetting } = useStore();
+  const { theme, setTheme, settings, saveSetting } = useStore();
   const requireNote = settings[REQUIRE_NOTE] === '1';
   return (
     <>
     <Card>
       <CardHead title="Theme" hint="Midas follows whichever you pick" />
       <div className="theme-row">
-        {(['light', 'dark'] as const).map((option) => (
+        {THEMES.map((option) => (
           <button
-            key={option}
-            className={`theme-card ${theme === option ? 'is-active' : ''} theme-${option}`}
-            onClick={() => { if (theme !== option) toggleTheme(); }}
+            key={option.value}
+            className={`theme-card ${theme === option.value ? 'is-active' : ''} theme-${option.value}`}
+            onClick={() => setTheme(option.value)}
           >
             <span className="theme-preview">
               <i /><i /><i />
             </span>
             <span className="theme-name">
-              {option === 'light' ? 'Light' : 'Dark'}
-              {theme === option && (
+              {option.label}
+              {theme === option.value && (
                 <motion.span layoutId="theme-check" transition={spring}>
                   <Icon name="check" size={14} />
                 </motion.span>
               )}
             </span>
+            <span className="theme-hint">{option.hint}</span>
           </button>
         ))}
       </div>

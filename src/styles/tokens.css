@@ -115,9 +115,38 @@
   --titlebar-h: 38px;
 }
 
-:root[data-theme='dark'] {
+/* ------------------------------------------------------------------
+   The dark themes. What they share — the accents, the money colours, the
+   depth of the shadows — sits here; each one below says only how dark it
+   is and what colour that dark is.
+   ------------------------------------------------------------------ */
+:root[data-theme='midnight'],
+:root[data-theme='graphite'],
+:root[data-theme='black'] {
   color-scheme: dark;
 
+  --ink-on-dark: #eef0f7;
+
+  --blue: #3b9dfb;
+  --blue-bright: #5cb0ff;
+  --green: #42c251;
+  --green-bright: #93ea62;
+  --red: #ff6b62;
+  --amber: #f0b429;
+  --violet: #a78bfa;
+
+  --expense: var(--ink);
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.32);
+  --shadow-md: 0 9px 25px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.55);
+  --shadow-pop: 0 32px 80px rgba(0, 0, 0, 0.65);
+  --ring: 0 0 0 3px rgba(59, 157, 251, 0.25);
+}
+
+/* Midnight — the navy the light theme is drawn in, after dark. */
+:root[data-theme='midnight'] {
   --bg: #0d1122;
   --bg-deep: #080b16;
   --surface: #161b31;
@@ -129,7 +158,6 @@
   --ink-2: #9aa1c0;
   --ink-3: #737b9e;
   --ink-4: #4d5578;
-  --ink-on-dark: #eef0f7;
 
   --solid: #eef0f7;
   --on-solid: #10152a;
@@ -139,25 +167,76 @@
   --line-soft: #1f2542;
   --line-strong: #333c63;
 
-  --blue: #3b9dfb;
-  --blue-bright: #5cb0ff;
   --blue-soft: #14264a;
-  --green: #42c251;
-  --green-bright: #93ea62;
   --green-soft: #123222;
-  --red: #ff6b62;
   --red-soft: #3a1d20;
-  --amber: #f0b429;
   --amber-soft: #3a2d12;
-  --violet: #a78bfa;
   --violet-soft: #241c46;
+}
 
-  --expense: var(--ink);
+/* Graphite — a very dark neutral grey, no colour in the surfaces at all. */
+:root[data-theme='graphite'] {
+  --bg: #131315;
+  --bg-deep: #0c0c0e;
+  --surface: #1c1c1f;
+  --surface-2: #212125;
+  --surface-3: #2a2a2f;
+  --surface-inset: #161618;
 
-  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.32);
-  --shadow-md: 0 9px 25px rgba(0, 0, 0, 0.45);
-  --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.55);
-  --shadow-pop: 0 32px 80px rgba(0, 0, 0, 0.65);
-  --ring: 0 0 0 3px rgba(59, 157, 251, 0.25);
+  --ink: #f2f2f4;
+  --ink-2: #a5a5ad;
+  --ink-3: #7c7c85;
+  --ink-4: #55555d;
+
+  --solid: #f2f2f4;
+  --on-solid: #161618;
+  --brand-bg: #2b2b31;
+
+  --line: #2c2c31;
+  --line-soft: #232327;
+  --line-strong: #3c3c43;
+
+  /* The tinted backs of chips and pills, dimmed until they are grey with
+     only enough of the accent left to name it. */
+  --blue-soft: #17222f;
+  --green-soft: #16261c;
+  --red-soft: #2e1c1c;
+  --amber-soft: #2e2617;
+  --violet-soft: #241f33;
+}
+
+/* Pitch black — a true black ground, for a screen that can switch pixels off. */
+:root[data-theme='black'] {
+  --bg: #000000;
+  --bg-deep: #000000;
+  --surface: #0a0a0a;
+  --surface-2: #101010;
+  --surface-3: #181818;
+  --surface-inset: #050505;
+
+  --ink: #f5f5f5;
+  --ink-2: #a1a1a1;
+  --ink-3: #777777;
+  --ink-4: #4f4f4f;
+
+  --solid: #f5f5f5;
+  --on-solid: #000000;
+  --brand-bg: #161616;
+
+  --line: #222222;
+  --line-soft: #191919;
+  --line-strong: #343434;
+
+  --blue-soft: #0d1b2b;
+  --green-soft: #0c2015;
+  --red-soft: #2a1212;
+  --amber-soft: #291f0c;
+  --violet-soft: #1b1430;
+
+  /* Shadows do nothing against black; the lines carry the elevation. */
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.6);
+  --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.65);
+  --shadow-md: 0 9px 25px rgba(0, 0, 0, 0.75);
+  --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.8);
+  --shadow-pop: 0 32px 80px rgba(0, 0, 0, 0.85);
 }
