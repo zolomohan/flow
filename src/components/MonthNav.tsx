@@ -13,6 +13,9 @@ const QUARTERS = [
   { label: 'Oct – Dec', start: 10 },
 ];
 
+/** How many years the year grid shows at once, and how far a chevron jumps. */
+const YEARS_SHOWN = 12;
+
 /** Which shape of window a period picker offers. */
 type Mode = 'month' | 'quarter' | 'year' | 'range';
 
@@ -107,6 +110,9 @@ export function MonthNav({
   // One end of a range, held while the other end is being picked.
   const [anchor, setAnchor] = useState<string | null>(null);
   const [hover, setHover] = useState<string | null>(null);
+  // The year in the header opens a block of years to jump to, rather than
+  // making you step to 2019 one click at a time.
+  const [browsingYears, setBrowsingYears] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
 
   const step = (delta: number) => {
@@ -121,6 +127,7 @@ export function MonthNav({
     setMode(modeOf(month, span, current));
     setAnchor(null);
     setHover(null);
+    setBrowsingYears(false);
   }, [open, month, span, current]);
 
   useEffect(() => {
@@ -198,17 +205,26 @@ export function MonthNav({
     setYear((y) => y + delta);
   };
 
+  // Browsing years, the chevrons move by the whole block on show.
+  const yearStep = browsingYears ? YEARS_SHOWN : 1;
+
   const yearStepper = (
     <motion.div className="period-pop-head" variants={itemVariants}>
       <motion.button
         type="button"
         aria-label="Previous year"
         whileTap={press}
-        onClick={() => stepYear(-1)}
+        onClick={() => stepYear(-yearStep)}
       >
         <Icon name="chevron-left" size={15} />
       </motion.button>
-      <strong>
+      <motion.button
+        type="button"
+        aria-label="Pick a year"
+        className={`period-year ${browsingYears ? 'is-on' : ''}`}
+        whileTap={press}
+        onClick={() => setBrowsingYears((b) => !b)}
+      >
         <AnimatePresence mode="popLayout" initial={false}>
           <motion.span
             key={year}
@@ -220,13 +236,13 @@ export function MonthNav({
             {year}
           </motion.span>
         </AnimatePresence>
-      </strong>
+      </motion.button>
       <motion.button
         type="button"
         aria-label="Next year"
         whileTap={press}
-        disabled={`${year + 1}-01` > current}
-        onClick={() => stepYear(1)}
+        disabled={`${year + yearStep}-01` > current}
+        onClick={() => stepYear(yearStep)}
       >
         <Icon name="chevron-right" size={15} />
       </motion.button>
@@ -298,11 +314,15 @@ export function MonthNav({
     </div>
   );
 
-  const yearGrid = (
+  /** A block of years — either to select a window from, or only to jump to. */
+  const yearsGrid = (
+    onPick: (y: number) => void,
+    isPicked: (y: number) => boolean,
+    layoutId?: string,
+  ) => (
     <div className="period-years">
-      {Array.from({ length: 12 }, (_, i) => year - 8 + i).map((y) => {
-        const picked =
-          y === Number(month.slice(0, 4)) && (!onSpanChange || mode === 'year');
+      {Array.from({ length: YEARS_SHOWN }, (_, i) => year - 8 + i).map((y) => {
+        const picked = isPicked(y);
         return (
           <motion.button
             key={y}
@@ -311,11 +331,11 @@ export function MonthNav({
             whileTap={`${y}-01` > current ? undefined : press}
             disabled={`${y}-01` > current}
             className={picked ? 'is-picked' : ''}
-            onClick={() => (onSpanChange ? pickWindow(`${y}-01`, `${y}-12`) : pick(`${y}-12`))}
+            onClick={() => onPick(y)}
           >
             {picked && (
               <motion.span
-                layoutId={`period-pick-${pill}`}
+                layoutId={layoutId}
                 className="period-pick"
                 transition={spring}
               />
@@ -325,6 +345,85 @@ export function MonthNav({
         );
       })}
     </div>
+  );
+
+  const yearGrid = yearsGrid(
+    (y) => (onSpanChange ? pickWindow(`${y}-01`, `${y}-12`) : pick(`${y}-12`)),
+    (y) => y === Number(month.slice(0, 4)) && (!onSpanChange || mode === 'year'),
+    `period-pick-${pill}`,
+  );
+
+  // The header's own year grid moves the picker to a year; it selects nothing,
+  // so it carries no travelling pill either.
+  const browseYears = yearsGrid(
+    (y) => {
+      setYear(y);
+      setBrowsingYears(false);
+    },
+    (y) => y === year,
+  );
+
+  const [thisYear, thisMonth] = current.split('-').map(Number);
+  const quarterStart = `${thisYear}-${String(thisMonth - ((thisMonth - 1) % 3)).padStart(2, '0')}`;
+  /**
+   * The windows people ask for by name. Each is clamped to the current month,
+   * so this quarter and this year are as much of them as has happened.
+   */
+  const PRESETS = [
+    { label: 'This month', from: current, to: current },
+    { label: 'Last month', from: shiftMonth(current, -1), to: shiftMonth(current, -1) },
+    { label: 'This quarter', from: quarterStart, to: current },
+    {
+      label: 'Last quarter',
+      from: shiftMonth(quarterStart, -3),
+      to: shiftMonth(quarterStart, -1),
+    },
+    { label: 'This year', from: `${thisYear}-01`, to: current },
+    { label: 'Last year', from: `${thisYear - 1}-01`, to: `${thisYear - 1}-12` },
+    { label: 'Last 6 months', from: shiftMonth(current, -5), to: current },
+    { label: 'Last 12 months', from: shiftMonth(current, -11), to: current },
+  ];
+
+  const presetGrid = (
+    <motion.div className="period-presets" variants={itemVariants}>
+      {PRESETS.map((p) => (
+        <button
+          key={p.label}
+          type="button"
+          className={`period-preset ${
+            p.from === windowStart && p.to === month ? 'is-on' : ''
+          }`}
+          onClick={() => pickWindow(p.from, p.to)}
+        >
+          {p.label}
+        </button>
+      ))}
+    </motion.div>
+  );
+
+  /**
+   * The way back to now. It lives in the picker rather than beside it: a
+   * button that appeared in the toolbar the moment you stepped away shifted
+   * everything around it, and a nav you are clicking through is the last
+   * place that should move under the pointer.
+   */
+  const todayFoot = (
+    <motion.div layout className="period-foot" variants={itemVariants}>
+      <motion.button
+        type="button"
+        className="period-today"
+        whileTap={press}
+        onClick={() => {
+          direction.current = month < current ? 1 : -1;
+          onChange(current);
+          onSpanChange?.(1);
+          setOpen(false);
+        }}
+      >
+        <Icon name="calendar-days" size={13} />
+        Today
+      </motion.button>
+    </motion.div>
   );
 
   return (
@@ -353,7 +452,6 @@ export function MonthNav({
             {periodLabel(month, span)}
           </motion.span>
         </AnimatePresence>
-        <Icon name="chevron-down" size={13} />
       </button>
 
       <AnimatePresence>
@@ -383,6 +481,7 @@ export function MonthNav({
                       onClick={() => {
                         setMode(m.value);
                         setAnchor(null);
+                        setBrowsingYears(false);
                       }}
                     >
                       {m.value === mode && (
@@ -398,19 +497,26 @@ export function MonthNav({
                 </motion.div>
                 <AnimatePresence mode="popLayout" initial={false}>
                   <motion.div
-                    key={mode}
+                    key={browsingYears ? `${mode}-years` : mode}
                     className="period-body"
                     variants={bodyVariants}
                     initial="initial"
                     animate="animate"
                     exit="exit"
                   >
+                    {ranging && !browsingYears && presetGrid}
                     {mode !== 'year' && yearStepper}
-                    {mode === 'quarter' ? quarterGrid : mode === 'year' ? yearGrid : monthGrid}
+                    {browsingYears
+                      ? browseYears
+                      : mode === 'quarter'
+                        ? quarterGrid
+                        : mode === 'year'
+                          ? yearGrid
+                          : monthGrid}
                   </motion.div>
                 </AnimatePresence>
                 <AnimatePresence mode="popLayout" initial={false}>
-                  {ranging && (
+                  {ranging && !browsingYears && (
                     <motion.p
                       key={anchor ?? 'none'}
                       className="period-hint"
@@ -432,9 +538,10 @@ export function MonthNav({
             ) : (
               <>
                 {yearStepper}
-                {span === 1 ? monthGrid : quarterGrid}
+                {browsingYears ? browseYears : span === 1 ? monthGrid : quarterGrid}
               </>
             )}
+            {todayFoot}
           </motion.div>
         )}
       </AnimatePresence>
@@ -445,21 +552,6 @@ export function MonthNav({
         disabled={month >= current}
         onClick={() => step(1)}
       />
-      {(month !== current || (!!onSpanChange && span > 1)) && (
-        <motion.button
-          className="month-today"
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={spring}
-          onClick={() => {
-            direction.current = month < current ? 1 : -1;
-            onChange(current);
-            onSpanChange?.(1);
-          }}
-        >
-          Today
-        </motion.button>
-      )}
     </div>
   );
 }

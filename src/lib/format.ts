@@ -179,6 +179,12 @@ export function monthLabel(key: string, full = false) {
   return `${name} ${y}`;
 }
 
+/** "August" — the month alone, for a header where the year is its own control. */
+export function monthName(key: string) {
+  const [, m] = key.split('-').map(Number);
+  return FULL_MONTHS[m - 1];
+}
+
 export function shortMonthLabel(key: string) {
   const [, m] = key.split('-').map(Number);
   return MONTHS[m - 1];
