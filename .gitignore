@@ -22,3 +22,9 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Python venv for scripts/ (Pillow, for the merchant-logo pass)
+.venv
+
+# Bytecode from the merchant-logo script
+__pycache__/

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from './Icon';
+import { MerchantLogo } from './MerchantLogo';
 import { Amount } from './Money';
 import { MoreMenu } from './ui';
 import { spring } from '../lib/motion';
@@ -87,9 +88,7 @@ export function TransactionRow({
         onClick={onClick}
         whileTap={{ scale: 0.995 }}
       >
-        <span className="tx-avatar" style={{ ['--tint' as any]: tint }}>
-          <Icon name={glyph} size={17} strokeWidth={2.05} />
-        </span>
+        <MerchantLogo merchant={isTransfer ? null : tx.merchant} icon={glyph} tint={tint} />
         <span className="tx-main">
           <span className="tx-title">
             {tx.merchant || (isTransfer ? 'Transfer' : (tx.categoryName ?? 'Uncategorised'))}
