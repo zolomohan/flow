@@ -179,7 +179,7 @@ export function PlanDetail({
               {` · ${cadenceSuffix(plan.cadence, plan.every)}`}
             </p>
           </div>
-          <div className="plan-row-tags plan-detail-tags">
+          <div className="plan-detail-tags">
             {hasRisen(plan) && (
               <span className="plan-tag is-warn">
                 <Icon name="trending-up" size={11} /> {money(plan.drift)} above plan

@@ -331,7 +331,6 @@ function PlanRow({
   onOpenTransaction: (id: string) => void;
 }) {
   const late = (plan.daysUntil ?? 0) < 0;
-  const rise = hasRisen(plan);
 
   return (
     <motion.article
@@ -360,31 +359,9 @@ function PlanRow({
           <strong className={plan.kind === 'income' ? 'is-up' : ''}>
             {money(plan.amount)}
           </strong>
-          <span>
-            {rise ? `up ${money(plan.drift)}` : cadenceSuffix(plan.cadence, plan.every)}
-          </span>
+          <span>{cadenceSuffix(plan.cadence, plan.every)}</span>
         </span>
       </button>
-
-      <div className="plan-row-tags">
-        {rise && (
-          <span className="plan-tag is-warn">
-            <Icon name="trending-up" size={11} /> {money(plan.drift)} more
-          </span>
-        )}
-        {plan.paidCount > 0 ? (
-          <span className="plan-tag">
-            {plan.paidCount} paid · {money(plan.observedTotal)} so far
-          </span>
-        ) : (
-          <span className="plan-tag">
-            <Icon name="link" size={11} /> no payments linked yet
-          </span>
-        )}
-        {plan.lastPaidOn && (
-          <span className="plan-tag">Last {shortDayLabel(plan.lastPaidOn)}</span>
-        )}
-      </div>
 
       <div className="plan-row-actions">
         <PaymentSpark
