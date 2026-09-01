@@ -1,12 +1,14 @@
 import {
-  createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState,
-  type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode,
+  createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef,
+  useState,
+  type ButtonHTMLAttributes, type CSSProperties, type InputHTMLAttributes, type ReactNode,
+  type Ref,
   type TextareaHTMLAttributes,
 } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from './Icon';
-import { popover, press, sheetBackdrop, sheetPanel, spring } from '../lib/motion';
+import { popover, press, sheetBackdrop, sheetPanel, spring, springSoft } from '../lib/motion';
 
 /* ------------------------------------------------------------------ Button */
 
@@ -171,7 +173,12 @@ export function Field({
   );
 }
 
-export function TextInput({ className = '', ...rest }: InputHTMLAttributes<HTMLInputElement>) {
+export function TextInput({
+  className = '', ...rest
+}: InputHTMLAttributes<HTMLInputElement> & { ref?: Ref<HTMLInputElement> }) {
+  // `ref` rides in with the rest of the props: a function component takes it
+  // as one, and a caller that wants to put the cursor in the field it has
+  // just revealed needs to reach the input itself.
   return <input className={`input ${className}`} {...rest} />;
 }
 
@@ -424,6 +431,108 @@ export function Select({
   );
 }
 
+/* -------------------------------------------------------------- OptionRail */
+
+/**
+ * The same options a Select would hold, laid out end to end and scrolled
+ * sideways instead of opened. For a short list picked from constantly — the
+ * accounts on a transaction — where a menu costs two clicks to say what a row
+ * of chips says at a glance.
+ *
+ * The ends fade rather than cut, and each side only fades while there is
+ * something past it: a hard edge on a row that has stopped scrolling reads as
+ * a cut-off name.
+ */
+export function OptionRail({
+  options, value, onChange, allowClear, clearLabel = 'None',
+  empty = 'Nothing to choose from.',
+}: {
+  options: SelectOption[];
+  value: string | null;
+  onChange: (value: string | null) => void;
+  /** Offers a leading chip for choosing nothing. */
+  allowClear?: boolean;
+  clearLabel?: string;
+  empty?: string;
+}) {
+  const track = useRef<HTMLDivElement>(null);
+  const [fade, setFade] = useState({ left: false, right: false });
+
+  const measure = useCallback(() => {
+    const node = track.current;
+    if (!node) return;
+    const max = node.scrollWidth - node.clientWidth;
+    setFade((was) => {
+      const left = node.scrollLeft > 1;
+      const right = node.scrollLeft < max - 1;
+      return was.left === left && was.right === right ? was : { left, right };
+    });
+  }, []);
+
+  // The row is measured against its own width, which the sheet changes as it
+  // grows a column — so watch the element, not just the list.
+  useLayoutEffect(() => {
+    const node = track.current;
+    if (!node) return;
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [measure, options.length]);
+
+  // Chosen from somewhere other than the row — swapped round, or filled in by
+  // a template — so bring it into view rather than leaving the scroll where
+  // the last hand left it.
+  useEffect(() => {
+    const node = track.current;
+    if (!node || !value) return;
+    const chip = node.querySelector<HTMLElement>(`[data-value="${CSS.escape(value)}"]`);
+    if (!chip) return;
+    const near = chip.offsetLeft - 16;
+    const far = chip.offsetLeft + chip.offsetWidth + 16 - node.clientWidth;
+    if (near < node.scrollLeft) node.scrollTo({ left: Math.max(0, near), behavior: 'smooth' });
+    else if (far > node.scrollLeft) node.scrollTo({ left: far, behavior: 'smooth' });
+  }, [value]);
+
+  return (
+    <div className={`rail ${fade.left ? 'is-fade-left' : ''} ${fade.right ? 'is-fade-right' : ''}`}>
+      <div className="rail-track" ref={track} onScroll={measure} role="radiogroup">
+        {allowClear && (
+          <button
+            type="button"
+            role="radio"
+            aria-checked={value === null}
+            className={`rail-chip ${value === null ? 'is-active' : ''}`}
+            onClick={() => onChange(null)}
+          >
+            <span className="swatch swatch-empty" />
+            <span className="rail-chip-label">{clearLabel}</span>
+          </button>
+        )}
+        {options.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={option.value === value}
+            data-value={option.value}
+            title={option.hint ? `${option.label} · ${option.hint}` : option.label}
+            style={{ '--chip-accent': option.color } as CSSProperties}
+            className={`rail-chip ${option.value === value ? 'is-active' : ''}`}
+            onClick={() => onChange(option.value)}
+          >
+            <span className="swatch" style={{ background: option.color ?? 'var(--ink-3)' }}>
+              {option.icon && <Icon name={option.icon} size={12} strokeWidth={2.2} />}
+            </span>
+            <span className="rail-chip-label">{option.label}</span>
+          </button>
+        ))}
+        {options.length === 0 && !allowClear && <p className="rail-empty">{empty}</p>}
+      </div>
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------- Sheet */
 
 const SheetCtx = createContext<() => void>(() => {});
@@ -431,7 +540,7 @@ export const useSheetClose = () => useContext(SheetCtx);
 
 /** Centred modal with a blurred scrim; Escape and scrim clicks both dismiss. */
 export function Sheet({
-  open, onClose, title, subtitle, children, footer, onBack, width = 520, full,
+  open, onClose, title, subtitle, children, footer, onBack, aside, width = 520, full,
 }: {
   open: boolean;
   onClose: () => void;
@@ -439,6 +548,10 @@ export function Sheet({
   subtitle?: string;
   children: ReactNode;
   footer?: ReactNode;
+  /** Something the sheet is rather than something it asks — a record's own
+   *  id, say. It rides in the header beside the way out, where it is
+   *  reachable without being another line of the form. */
+  aside?: ReactNode;
   /** Set when the sheet is showing a page of its own: puts a way back in the
    *  header, where the title has already changed to say where you are. */
   onBack?: () => void;
@@ -499,24 +612,13 @@ export function Sheet({
                     {subtitle && <p className="sheet-sub">{subtitle}</p>}
                   </motion.div>
                 </AnimatePresence>
+                {aside}
                 <IconButton icon="x" label="Close" onClick={onClose} />
               </header>
               <div className="sheet-body">
-                {/* The content is laid out at the width the sheet is heading
-                    for, not the one it is passing through. A sheet that grows
-                    a column would otherwise reflow at every width on the way —
-                    two columns squeezed into six hundred pixels, wrapping down
-                    the page — and lurch taller before settling back. */}
-                <div
-                  className="sheet-canvas"
-                  style={
-                    full
-                      ? { width: '100%' }
-                      : { width: `min(${width - 44}px, calc(100vw - 92px))` }
-                  }
-                >
+                <SheetCanvas width={width} full={full}>
                   {children}
-                </div>
+                </SheetCanvas>
               </div>
               {footer && <footer className="sheet-foot">{footer}</footer>}
             </motion.div>
@@ -524,6 +626,111 @@ export function Sheet({
         </SheetCtx.Provider>
       )}
     </AnimatePresence>
+  );
+}
+
+/**
+ * What a sheet is holding, measured.
+ *
+ * The content is laid out at the width the sheet is heading for, not the one
+ * it is passing through: a sheet that grows a column would otherwise reflow at
+ * every width on the way — two columns squeezed into six hundred pixels,
+ * wrapping down the page — and lurch taller before settling back.
+ *
+ * The height is carried the same way. A field that appears, a panel that
+ * swaps, an error that arrives: the panel glides into its new size instead of
+ * jumping to it, and everything under the sheet stops flinching.
+ */
+function SheetCanvas({
+  width, full, children,
+}: {
+  width: number;
+  full?: boolean;
+  children: ReactNode;
+}) {
+  const inner = useRef<HTMLDivElement>(null);
+  const [height, setHeight] = useState<number | 'auto'>('auto');
+  // Held to the box only while it is moving: a menu hanging off a field near
+  // the foot of the form must not be cut off once it has settled.
+  const [moving, setMoving] = useState(false);
+
+  useLayoutEffect(() => {
+    const node = inner.current;
+    if (!node) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const next = entry.contentRect.height;
+      // A page on its way out leaves the canvas empty for a frame. Keeping
+      // the last height stops the sheet collapsing and reopening around the
+      // page arriving behind it.
+      if (next > 0) setHeight(next);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <motion.div
+      className="sheet-canvas"
+      style={{
+        width: full ? '100%' : `min(${width - 44}px, calc(100vw - 92px))`,
+        overflow: moving && !full ? 'hidden' : undefined,
+      }}
+      // Whatever it opens at is its own height already; only what happens
+      // after is worth animating.
+      initial={false}
+      animate={{ height: full ? 'auto' : height }}
+      transition={springSoft}
+      onAnimationStart={() => setMoving(true)}
+      onAnimationComplete={() => setMoving(false)}
+    >
+      <div ref={inner} className="sheet-canvas-inner">{children}</div>
+    </motion.div>
+  );
+}
+
+/* ----------------------------------------------------------------- Switch */
+
+/**
+ * On or off, said the way a switch says it. A tick box asks you to read a
+ * sentence and work out what ticking it would mean; a switch shows the state
+ * it is in and moves when you change it.
+ */
+export function Switch({
+  on, onChange, label, hint, disabled, size = 'md', ariaLabel,
+}: {
+  on: boolean;
+  onChange: (on: boolean) => void;
+  /** Left off where the row it sits on already says what it is for. */
+  label?: string;
+  hint?: string;
+  disabled?: boolean;
+  /** `lg` for a switch that answers a row of its own rather than a line. */
+  size?: 'md' | 'lg';
+  /** What a label-less switch is called, for anyone who cannot see the row. */
+  ariaLabel?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={label ? undefined : ariaLabel ?? 'Toggle'}
+      disabled={disabled}
+      className={`switch ${on ? 'is-on' : ''} ${label ? 'has-label' : ''} ${
+        size === 'lg' ? 'switch-lg' : ''
+      }`}
+      onClick={() => onChange(!on)}
+    >
+      <span className="switch-track">
+        <motion.span layout className="switch-knob" transition={spring} />
+      </span>
+      {label && (
+        <span className="switch-label">
+          {label}
+          {hint && <small>{hint}</small>}
+        </span>
+      )}
+    </button>
   );
 }
 

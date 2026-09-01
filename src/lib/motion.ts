@@ -66,6 +66,28 @@ export const sheetPanel: Variants = {
   exit: { opacity: 0, y: 14, scale: 0.985, transition: { duration: 0.15 } },
 };
 
+/**
+ * A sheet opened on top of another sheet — the ledger you pick a record from,
+ * over the form asking for one. It comes up further and settles slower than a
+ * sheet opened over the page: what it covers is already a panel, so a small
+ * hop would read as that panel resizing rather than a second one arriving.
+ */
+export const stackedPanel: Variants = {
+  initial: { opacity: 0, y: 46, scale: 0.96 },
+  animate: {
+    opacity: 1,
+    y: 0,
+    scale: 1,
+    transition: { type: 'spring', stiffness: 230, damping: 32, mass: 1.05 },
+  },
+  exit: {
+    opacity: 0,
+    y: 22,
+    scale: 0.975,
+    transition: { duration: 0.17, ease: [0.4, 0, 1, 1] },
+  },
+};
+
 export const popover: Variants = {
   initial: { opacity: 0, y: -6, scale: 0.97 },
   animate: { opacity: 1, y: 0, scale: 1, transition: spring },

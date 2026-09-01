@@ -124,12 +124,19 @@ export const linesToInput = (
  * left: there is no remainder to reconcile and no way to be out of balance.
  */
 export function SplitLinesEditor({
-  amount, kind, lines, onChange,
+  amount, kind, lines, onChange, needsNote = false, error,
 }: {
   amount: Paise;
   kind: TxKind;
   lines: SplitLine[];
   onChange: (lines: SplitLine[]) => void;
+  /** What is wrong with the parts, said under them rather than up beside the
+   *  amount — it is about these rows, so it belongs with these rows. */
+  error?: string | null;
+  /** The book asks for a note on everything new. A split bill has no note of
+   *  its own — the parts carry them — so the asking lands here, on each part
+   *  that comes to anything. */
+  needsNote?: boolean;
 }) {
   const { categories } = useStore();
 
@@ -248,9 +255,11 @@ export function SplitLinesEditor({
               </div>
               <div className="split-line-foot">
                 <TextInput
-                  className="split-line-note"
+                  className={`split-line-note ${
+                    needsNote && !line.note.trim() && amounts[i] > 0 ? 'is-wanted' : ''
+                  }`}
                   value={line.note}
-                  placeholder="Note — optional"
+                  placeholder={needsNote ? 'Note — required' : 'Note — optional'}
                   onChange={(e) => patch(line.key, { note: e.target.value })}
                 />
               </div>
@@ -283,6 +292,20 @@ export function SplitLinesEditor({
           The parts run {money(-rest)} over the {money(amount)} bill.
         </p>
       )}
+
+      <AnimatePresence>
+        {error && (
+          <motion.p
+            className="split-tally is-over"
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+          >
+            <Icon name="alert-circle" size={13} />
+            {error}
+          </motion.p>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -345,6 +368,25 @@ export const emptyPeople = (): SplitPeople => ({
   method: 'equal',
   dueOn: '',
   people: [you()],
+});
+
+/**
+ * Nobody on it but the one person who owes it. Marking a whole posting as a
+ * debt is not a division of it — there is nothing to divide, and no row for
+ * you — so it starts from one name and gives them the lot.
+ */
+export const owedInFull = (name = ''): SplitPeople => ({
+  method: 'equal',
+  dueOn: '',
+  people: [{
+    key: nextKey(),
+    debtId: null,
+    name,
+    you: false,
+    weight: '1',
+    exact: '',
+    paid: 0,
+  }],
 });
 
 /**
@@ -605,7 +647,7 @@ export function SplitPeopleEditor({
 /* ------------------------------------------------------------------- menu */
 
 export interface SplitWay {
-  which: 'categories' | 'people' | 'debt';
+  which: 'categories' | 'people';
   icon: string;
   title: string;
   summary: string;

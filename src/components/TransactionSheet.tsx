@@ -3,13 +3,14 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from './Icon';
 import { DateField } from './DateField';
 import {
-  Button, Chip, Confirm, Field, IconButton, Segmented, Select, Sheet, TextArea, TextInput,
+  Button, Chip, Confirm, Field, IconButton, OptionRail, Segmented, Select, Sheet,
+  TextArea, TextInput,
   type SegmentOption, type SelectOption,
 } from './ui';
 import {
   SplitLinesEditor, SplitPeopleEditor, SplitMenu,
   directionFor, emptyPeople, lineFromScratch, linesFor, linesOf, linesToInput,
-  peopleFor, peopleToInput, restOf, shareAmounts,
+  owedInFull, peopleFor, peopleToInput, restOf, shareAmounts,
   type SplitLine, type SplitPeople,
 } from './SplitEditors';
 import { LAST_ACCOUNT, REQUIRE_NOTE, useStore } from '../lib/store';
@@ -18,11 +19,10 @@ import {
   toLocalInput,
 } from '../lib/format';
 import { itemVariants, listVariants, pageVariants, popover, press, spring } from '../lib/motion';
-import { AskPicker } from './AskPicker';
-import { TransactionPicker } from './TransactionPicker';
-import { describeTemplate, fieldLabel } from '../lib/templates';
+import { RecordPicker } from './RecordPicker';
+import { describeTemplate } from '../lib/templates';
 import type {
-  Account, Category, Paise, TemplateField, Transaction, TransactionInput, TxKind,
+  Account, Category, Paise, Transaction, TransactionInput, TxKind,
   TxTemplate, TxTemplateInput,
 } from '../lib/types';
 
@@ -203,33 +203,20 @@ function NewLabel({ onAdded }: { onAdded: (labelId: string) => void }) {
  * being corrected, and there is no way back from that.
  */
 function TemplateMenu({
-  templates, canApply, kind, suggested, defaultAsk, onApply, onSave,
+  templates, canApply, suggested, onApply, onSave,
 }: {
   templates: TxTemplate[];
   /** Whether picking one is on offer at all — a new transaction, in short. */
   canApply: boolean;
-  /** Which fields there are to ask about, which depends on the kind. */
-  kind: TxKind;
   /** What to call this one, if nothing better is typed. */
   suggested: string;
-  /** What it would ask for, before anyone says otherwise: whatever is blank
-   *  on the form now, since a blank is not something to pre-bake. */
-  defaultAsk: TemplateField[];
   onApply: (template: TxTemplate) => void;
   /** Resolves true once it is written, so the menu knows to shut. */
-  onSave: (
-    name: string,
-    ask: TemplateField[],
-    replacing: TxTemplate | null,
-  ) => Promise<boolean>;
+  onSave: (name: string, replacing: TxTemplate | null) => Promise<boolean>;
 }) {
   const [open, setOpen] = useState(false);
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState('');
-  const [ask, setAsk] = useState<TemplateField[]>([]);
-  // Whether the chips have been touched, so that landing on an existing name
-  // can adopt what that template already asks for without overruling anyone.
-  const [tuned, setTuned] = useState(false);
   const [saving, setSaving] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLInputElement>(null);
@@ -238,7 +225,6 @@ function TemplateMenu({
     if (!open) {
       setNaming(false);
       setName('');
-      setTuned(false);
     }
   }, [open]);
 
@@ -271,17 +257,11 @@ function TemplateMenu({
   const typed = (name.trim() || suggested).trim();
   const clash = templates.find((t) => t.name.toLowerCase() === typed.toLowerCase()) ?? null;
 
-  // Replacing a template is correcting it, so what it already asks for is
-  // where the chips start — until somebody moves them.
-  useEffect(() => {
-    if (naming && !tuned) setAsk(clash ? clash.ask : defaultAsk);
-  }, [naming, tuned, clash, defaultAsk]);
-
   const save = async () => {
     if (!typed || saving) return;
     setSaving(true);
     try {
-      if (await onSave(typed, ask, clash)) setOpen(false);
+      if (await onSave(typed, clash)) setOpen(false);
     } finally {
       setSaving(false);
     }
@@ -392,21 +372,9 @@ function TemplateMenu({
                 </span>
                 <span className="split-section-title">
                   Save as template
-                  <em>Everything but the date, kept under a name</em>
+                  <em>The form as it stands, blanks and all, under a name</em>
                 </span>
               </button>
-            )}
-            {naming && (
-              <div className="tpl-asks">
-                <AskPicker
-                  kind={kind}
-                  value={ask}
-                  onChange={(next) => {
-                    setTuned(true);
-                    setAsk(next);
-                  }}
-                />
-              </div>
             )}
             {naming && (clash || !typed) && (
               <p className="tpl-none">
@@ -426,31 +394,24 @@ const glyphFor = (kind: TxKind) =>
   kind === 'transfer' ? 'arrow-left-right' : kind === 'income' ? 'arrow-down-left' : 'circle-dashed';
 
 /**
- * The form as a template says it should be. A template speaks for the shape
- * of a posting and nothing else — the date above all is left alone, since the
- * date is the one thing that is never the same twice.
+ * The form as a template says it should be. What it carries is filled in and
+ * what it was left blank stays blank — a template with no amount opens on an
+ * empty well, which is how it says the figure is different every time. The
+ * date it says nothing about at all: that one is always today's business.
  */
-function shapeOf(template: TxTemplate, live: Account[], fallbackAccount: string | null) {
+function shapeOf(template: TxTemplate, live: Account[]) {
+  // An account archived or deleted since is no account at all, and blank is
+  // the honest answer: better to be asked than to post somewhere unintended.
   const held = (id: string | null) => (live.some((a) => a.id === id) ? id : null);
-  // What it asks for it does not answer: those fields arrive blank however
-  // they were left when the template was made, and the sheet will not save
-  // until they have been filled in.
-  const asks = (field: TemplateField) => template.ask.includes(field);
   return {
     kind: template.kind,
-    amount: asks('amount') || !template.amount ? '' : paiseToRupeeString(template.amount),
-    // An account archived or deleted since falls through to wherever the
-    // sheet would have opened, rather than to nothing. So does one it asks
-    // for: a blank account well would be a form with nowhere to post.
-    accountId: asks('account') ? null : (held(template.accountId) ?? fallbackAccount),
-    toAccountId:
-      template.kind !== 'transfer' || asks('toAccount') ? null : held(template.toAccountId),
-    categoryId: template.kind === 'transfer' || asks('category') ? null : template.categoryId,
-    merchant: asks('merchant') ? '' : template.merchant,
-    note: asks('note') ? '' : (template.note ?? ''),
-    // Parts stand against a figure the template had to know, so a template
-    // that asks the amount never carries any.
-    lines: asks('amount') ? [] : linesOf(template.splits),
+    amount: template.amount ? paiseToRupeeString(template.amount) : '',
+    accountId: held(template.accountId),
+    toAccountId: template.kind === 'transfer' ? held(template.toAccountId) : null,
+    categoryId: template.kind === 'transfer' ? null : template.categoryId,
+    merchant: template.merchant,
+    note: template.note ?? '',
+    lines: linesOf(template.splits),
     labelIds: template.labels.map((l) => l.id),
   };
 }
@@ -576,7 +537,16 @@ export function TransactionSheet({
     accounts, categories, labels, saveTransaction, deleteTransaction, toast, settings,
     saveSetting, templates, saveTemplate, markTemplateUsed,
   } = useStore();
-  const live = useMemo(() => accounts.filter((a) => !a.archived), [accounts]);
+  const live = useMemo(() => accounts.filter((a) => !a.archived && !a.system), [accounts]);
+  // The account every debt runs through, named by the book itself.
+  const holding = useMemo(() => accounts.find((a) => a.system), [accounts]);
+  // Read by the reset below rather than watched by it. Every write anywhere in
+  // the app hands the store a fresh accounts array, and a reset that listed
+  // that array as a reason to run would empty the form under whoever was
+  // filling it in — adding a sub-category from this very sheet does exactly
+  // that.
+  const liveRef = useRef(live);
+  liveRef.current = live;
   // A book can ask for a note on everything new. What is already in it stays
   // as it is — the rule is about what you are writing down now.
   // Anything without an id of its own is being written now, whatever the
@@ -594,6 +564,9 @@ export function TransactionSheet({
   const [note, setNote] = useState('');
   const [occurredAt, setOccurredAt] = useState(toLocalInput());
   const [error, setError] = useState<string | null>(null);
+  // What is wrong with the parts of a split, kept apart from the form's own
+  // error: it is said under the rows it is about, not beside the amount.
+  const [partsError, setPartsError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [lines, setLines] = useState<SplitLine[]>([]);
   const [people, setPeople] = useState<SplitPeople>(emptyPeople);
@@ -603,6 +576,9 @@ export function TransactionSheet({
   // as earned or spent, and the balance keeps both, because the money did
   // leave and it did come back.
   const [refund, setRefund] = useState<RefundTarget | null>(null);
+  // The ledger, opened from the footer to name what this gives back.
+  const [refundPicking, setRefundPicking] = useState(false);
+  const debtorRef = useRef<HTMLInputElement>(null);
   // Which template this one was filled in from: what it asks for is still
   // owed, its name belongs in the heading, and the count against it goes up
   // once the posting is actually written — not before.
@@ -636,6 +612,12 @@ export function TransactionSheet({
   useEffect(() => {
     if (!open) return;
     const carried = editing ? linesFor(editing) : [];
+    // A split bill has no note of its own any more — the parts carry them. A
+    // posting written before that moves its note onto its first part rather
+    // than losing it the next time it is saved.
+    if (editing?.note && carried.length && !carried[0].note) {
+      carried[0] = { ...carried[0], note: editing.note };
+    }
     if (editing) {
       setKind(editing.kind);
       setAmount(paiseToRupeeString(editing.amount));
@@ -643,7 +625,7 @@ export function TransactionSheet({
       setToAccountId(editing.toAccountId);
       setCategoryId(editing.categoryId);
       setMerchant(editing.merchant);
-      setNote(editing.note ?? '');
+      setNote(carried.length ? '' : (editing.note ?? ''));
       setOccurredAt(editing.occurredAt.slice(0, 16));
       setLines(carried);
       setPeople(peopleFor(editing));
@@ -668,13 +650,13 @@ export function TransactionSheet({
       // Where it was asked for, then wherever the last one was written, then
       // whatever comes first — an account that has since gone or been
       // archived falls through rather than opening on nothing.
-      const remembered = live.some((a) => a.id === lastAccount.current)
+      const remembered = liveRef.current.some((a) => a.id === lastAccount.current)
         ? lastAccount.current
         : null;
-      const fallback = draft?.accountId ?? remembered ?? live[0]?.id ?? null;
+      const fallback = draft?.accountId ?? remembered ?? liveRef.current[0]?.id ?? null;
       // Opened on a template — from the Templates screen, say — the form
       // arrives filled in, on today's date.
-      const shape = draft?.template ? shapeOf(draft.template, live, fallback) : null;
+      const shape = draft?.template ? shapeOf(draft.template, liveRef.current) : null;
       // A blank in the shape is a question the template means to ask, so it
       // is set as it stands rather than fallen back over.
       setKind(shape ? shape.kind : (draft?.kind ?? 'expense'));
@@ -723,9 +705,10 @@ export function TransactionSheet({
       setSeeded(true);
     }
     setError(null);
+    setPartsError(null);
     const focus = window.setTimeout(() => amountRef.current?.focus(), 220);
     return () => window.clearTimeout(focus);
-  }, [open, editing, draft, live, splitFocus]);
+  }, [open, editing, draft, splitFocus]);
 
   // Categories only apply to one side of the ledger at a time.
   const palette = useMemo(
@@ -765,31 +748,6 @@ export function TransactionSheet({
     .filter(Boolean)
     .join(', ');
 
-  // What the template this was opened from still wants from you. Only while
-  // it is unanswered: a hint that stays put once a field is filled in is
-  // noise, and the same question asked twice reads as a complaint.
-  const asks = (field: TemplateField) => !!fromTemplate?.ask.includes(field);
-  const askHint = (field: TemplateField, filled: boolean) =>
-    asks(field) && !filled ? 'fill in' : undefined;
-  const filledIn: Record<TemplateField, boolean> = {
-    amount: paise > 0,
-    account: !!accountId,
-    toAccount: !!toAccountId,
-    category: !!categoryId,
-    merchant: !!merchant.trim(),
-    note: !!note.trim(),
-  };
-  const outstanding = (fromTemplate?.ask ?? []).filter((field) => !filledIn[field]);
-  // What a template made from this form would have nothing to say about.
-  // Memoised because the menu watches it, and a fresh array every render
-  // would reset the chips under the person setting them.
-  const blankNow = useMemo(
-    () =>
-      (Object.keys(filledIn) as TemplateField[]).filter((field) => !filledIn[field]),
-    [filledIn.amount, filledIn.account, filledIn.toAccount, filledIn.category,
-     filledIn.merchant, filledIn.note],
-  );
-
   const selected = palette.find((c) => c.id === categoryId) ?? null;
   // A group with something under it is a heading: tapping it opens what is
   // inside rather than filing the bill against the heading itself. The one it
@@ -798,10 +756,16 @@ export function TransactionSheet({
   const openGroupId = selected ? (selected.parentId ?? selected.id) : browsing;
   const openGroup = groups.find((g) => g.id === openGroupId) ?? null;
 
+  // Switching sides drops a filing that belongs to the other one. Only a
+  // category the book actually knows is dropped, though: one just made from
+  // the panel below is chosen the moment it is saved, a breath before the
+  // store has finished re-reading the list, and it is not to be thrown away
+  // in that gap.
   useEffect(() => {
-    if (kind === 'transfer') return;
-    if (categoryId && !palette.some((c) => c.id === categoryId)) setCategoryId(null);
-  }, [kind, palette, categoryId]);
+    if (kind === 'transfer' || !categoryId) return;
+    const known = categories.some((c) => c.id === categoryId);
+    if (known && !palette.some((c) => c.id === categoryId)) setCategoryId(null);
+  }, [kind, palette, categories, categoryId]);
 
   const accountOptions: SelectOption[] = live.map((a) => ({
     value: a.id,
@@ -824,6 +788,11 @@ export function TransactionSheet({
       return setError(
         'A transfer moves money between your own accounts, so there is nothing to refund.',
       );
+    // A refund is money coming home, so it is always income and always undoes
+    // something spent. Money going back out is not a refund of anything — it
+    // is spending, or it is a debt.
+    if (tx.kind === 'income')
+      return setError('Only something you spent can be given back to you.');
     if (tx.refundOf) return setError('That posting is itself a refund.');
     const target = targetOf(tx);
     setRefund(target);
@@ -838,7 +807,8 @@ export function TransactionSheet({
   // no longer runs against is choosing for it not to be one.
   const chooseKind = (next: TxKind) => {
     setKind(next);
-    if (refund && next !== refundKind(refund.kind)) setRefund(null);
+    // Only money landing in an account gives anything back.
+    if (refund && next !== 'income') setRefund(null);
   };
 
   // Opening the categories panel on an unsplit bill seeds two halves rather
@@ -849,21 +819,17 @@ export function TransactionSheet({
   // it was: looking at a split is not the same as asking for one.
   const dropSeeded = () => {
     if (page === 'categories' && seeded) {
+      // The bill's own note went onto the first part on the way in. Walking
+      // back out without splitting hands it back.
+      if (!note.trim() && lines[0]?.note.trim()) setNote(lines[0].note.trim());
       setLines([]);
       setSeeded(false);
     }
   };
 
-  const openPage = (which: SplitFocus) => {
+  const openPage = (which: 'categories' | 'people') => {
     setBack(false);
-    setPage(which === 'debt' ? 'people' : which);
-    // Owed in full: your own row goes, so the one person picked up next takes
-    // all of it rather than half. Never over shares that already exist —
-    // clearing those would throw away debts somebody is repaying.
-    if (which === 'debt') {
-      if (owed === 0) setPeople({ ...emptyPeople(), people: [] });
-      return;
-    }
+    setPage(which);
     // Emptied of everyone, including you, on a previous visit: start it over
     // rather than opening on a list with nothing in it.
     if (which === 'people' && people.people.length === 0) setPeople(emptyPeople());
@@ -871,8 +837,13 @@ export function TransactionSheet({
     if (lines.length === 0) {
       // An empty first part and a rest holding the whole bill: you type what
       // one part came to and watch the rest come down, rather than being
-      // handed a division nobody asked for.
-      setLines([{ ...lineFromScratch(), categoryId }, lineFromScratch()]);
+      // handed a division nobody asked for. Whatever was written about the
+      // bill as a whole belongs to the first part now.
+      setLines([
+        { ...lineFromScratch(), categoryId, note: note.trim() },
+        lineFromScratch(),
+      ]);
+      setNote('');
       setSeeded(true);
     }
   };
@@ -889,7 +860,13 @@ export function TransactionSheet({
   const editLines = (next: SplitLine[]) => {
     setLines(next);
     setSeeded(false);
-    if (lines.length > 0 && next.length === 0) leavePage();
+    setPartsError(null);
+    if (lines.length > 0 && next.length === 0) {
+      // Un-splitting a bill gives it back its note, which has been living on
+      // the first part while it was in pieces.
+      if (!note.trim() && lines[0]?.note.trim()) setNote(lines[0].note.trim());
+      leavePage();
+    }
   };
 
   const editPeople = (next: SplitPeople) => {
@@ -905,7 +882,7 @@ export function TransactionSheet({
   // template speaks for and nothing else: the date stays where it is, and so
   // does anyone already down for a share of the bill.
   const applyTemplate = (template: TxTemplate) => {
-    const shape = shapeOf(template, live, accountId);
+    const shape = shapeOf(template, live);
     setKind(shape.kind);
     setAmount(shape.amount);
     setAccountId(shape.accountId);
@@ -919,27 +896,15 @@ export function TransactionSheet({
     setBrowsing(null);
     setFromTemplate(template);
     setError(null);
-    // Straight into the first thing it wants, when that is the amount — the
-    // well the sheet opens on anyway, and the answer to most templates.
-    if (template.ask.includes('amount')) {
-      window.setTimeout(() => amountRef.current?.focus(), 60);
-    }
-    toast(
-      template.ask.length
-        ? `From “${template.name}” — ${template.ask
-            .map((f) => fieldLabel(f, template.kind))
-            .join(', ')} to fill in`
-        : `Filled in from “${template.name}”`,
-    );
+    // Into whatever it left blank, when that is the amount — the well the
+    // sheet opens on anyway, and what most templates leave for you.
+    if (!template.amount) window.setTimeout(() => amountRef.current?.focus(), 60);
+    toast(`Filled in from “${template.name}”`);
   };
 
-  /** Keeping this one under a name: what is on the form, less the date, and
-   *  less whatever it was told to ask for instead of answering. */
-  const keepAsTemplate = async (
-    name: string,
-    ask: TemplateField[],
-    replacing: TxTemplate | null,
-  ) => {
+  /** Keeping this one under a name: the form as it stands, less the date.
+   *  A field left blank is kept blank, and comes out blank every time. */
+  const keepAsTemplate = async (name: string, replacing: TxTemplate | null) => {
     if (kind !== 'transfer' && split && rest < 0) {
       setError(`The parts run ${money(-rest)} over the ${money(paise)} bill.`);
       return false;
@@ -954,19 +919,14 @@ export function TransactionSheet({
       categoryId: kind === 'transfer' ? null : categoryId,
       merchant: merchant.trim(),
       note: note.trim() || null,
-      // Parts are shares of a figure, so they only go in when there is one to
-      // divide — and not when the figure is the thing being asked for.
-      splits:
-        kind !== 'transfer' && paise > 0 && !ask.includes('amount')
-          ? linesToInput(lines, paise)
-          : [],
+      // Parts are shares of a figure, so they only go in when there is one
+      // to divide. Everything else about the template is kept either way.
+      splits: kind !== 'transfer' && paise > 0 ? linesToInput(lines, paise) : [],
       labelIds,
-      ask,
     };
     try {
       const saved = await saveTemplate(input);
-      // What it was just saved as is what this form now stands for — asked
-      // fields included, since they are already filled in here.
+      // What it was just saved as is what this form now stands for.
       setFromTemplate(saved);
       return true;
     } catch {
@@ -978,17 +938,8 @@ export function TransactionSheet({
   const submit = async () => {
     if (!paise) return setError('Enter an amount.');
     if (!accountId) return setError('Pick an account.');
-    if (needsNote && !note.trim()) return setError('Add a note — this book asks for one.');
-    // A template that asks for something means it: the field is left blank on
-    // purpose, and filling it in is the point of using the template at all.
-    if (asks('category') && !categoryId)
-      return setError(`Pick a category — “${fromTemplate?.name}” asks for one.`);
-    if (asks('merchant') && !merchant.trim())
-      return setError(
-        `Add a ${kind === 'transfer' ? 'description' : 'merchant'} — “${fromTemplate?.name}” asks for one.`,
-      );
-    if (asks('note') && !note.trim())
-      return setError(`Add a note — “${fromTemplate?.name}” asks for one.`);
+    if (needsNote && !split && !note.trim())
+      return setError('Add a note — this book asks for one.');
     if (kind === 'transfer' && toAccountId === accountId)
       return setError('A transfer needs two different accounts.');
 
@@ -1002,6 +953,14 @@ export function TransactionSheet({
     if (kind !== 'transfer' && split && rest < 0)
       return setError(`The parts run ${money(-rest)} over the ${money(paise)} bill.`);
     if (parts.length === 1) return setError('A split needs at least two parts.');
+    // The note is asked of the parts, since the bill itself no longer has one.
+    // Said on the parts page, and the sheet opens it: a message about rows
+    // nobody can see is no message at all.
+    if (needsNote && parts.length && parts.some((part) => !part.note)) {
+      setBack(false);
+      setPage('categories');
+      return setPartsError('Every part needs a note — this book asks for one.');
+    }
     if (owed > paise)
       return setError(`The shares come to ${money(owed)} — more than the bill.`);
     // A refund can only hand back what is still standing, and money lent is
@@ -1033,7 +992,9 @@ export function TransactionSheet({
                categoryId)
             : categoryId,
       merchant: merchant.trim(),
-      note: note.trim() || null,
+      // Split into parts, the note belongs to the parts: one note standing
+      // for a bill that was several things is a note about none of them.
+      note: parts.length ? null : (note.trim() || null),
       occurredAt,
       splits: parts,
       shares: owing,
@@ -1089,19 +1050,32 @@ export function TransactionSheet({
     onClose();
   };
 
-  // The right-hand column says what the money was for: the categories, and
-  // the two ways of splitting it. Only a transfer has none of that — it moves
-  // between your own accounts — so only a transfer drops to one column.
-  const twoPane = kind !== 'transfer';
-
-  // How wide the sheet has to be, which is not the same question: a split
-  // page is two columns whatever it is dividing, so a transfer being split
-  // with people needs the room even though its own form is one column.
-  const wide = twoPane || page !== null;
+  // Two columns, whatever is being written. The right-hand one says what the
+  // money was for — the categories on a bill, the pins on anything — and a
+  // transfer has pins like everything else. Dropping it to one column meant
+  // the sheet changed shape under whoever switched kinds, and left a transfer
+  // with nowhere to put its labels.
 
   // Nothing of it is yours: an expense entirely owed back is lending, and the
   // sheet says so before it saves it that way.
   const lentInFull = kind === 'expense' && paise > 0 && owed === paise;
+
+  // A transfer marked as a debt: one name, holding the whole of it. There is
+  // no share to work out and no row for you, so it is not a division of the
+  // posting and does not open the page that divides one — it is a question
+  // with one answer, asked beside the form.
+  const debtor =
+    kind === 'transfer' && people.people.length === 1 && !people.people[0].you
+      ? people.people[0]
+      : null;
+  const nameDebt = (name: string) =>
+    setPeople((was) => ({ ...was, people: [{ ...was.people[0], name }] }));
+  const markAsDebt = () => {
+    setPeople(owedInFull());
+    // Owed back is where it went: there is no account of yours to land in.
+    setToAccountId(null);
+    window.setTimeout(() => debtorRef.current?.focus(), 60);
+  };
 
   const accentVar =
     kind === 'income' ? 'var(--green)' : kind === 'transfer' ? 'var(--blue)' : 'var(--ink)';
@@ -1159,17 +1133,28 @@ export function TransactionSheet({
         )}
       </AnimatePresence>
 
-      <div className="tx-accounts">
-        <Field
-          label={kind === 'income' ? 'Into account' : 'From account'}
-          hint={askHint('account', !!accountId)}
-        >
-          <Select
-            options={accountOptions}
-            value={accountId}
-            onChange={setAccountId}
-            placeholder="Choose an account"
-          />
+      {/* One account to pick, and the row to pick it from: the rail reads
+          left to right and costs no clicks. Two of them side by side is a
+          different question — half the width each, and the answer to one
+          narrows the other — so a transfer asks the way a form asks, with a
+          menu apiece. */}
+      <div className={`tx-accounts ${kind === 'transfer' ? 'is-transfer' : ''}`}>
+        <Field label={kind === 'income' ? 'Into account' : 'From account'}>
+          {kind === 'transfer' ? (
+            <Select
+              options={accountOptions}
+              value={accountId}
+              onChange={setAccountId}
+              placeholder="Choose an account"
+            />
+          ) : (
+            <OptionRail
+              options={accountOptions}
+              value={accountId}
+              onChange={setAccountId}
+              empty="No open accounts yet."
+            />
+          )}
         </Field>
         <AnimatePresence mode="popLayout">
           {kind === 'transfer' && (
@@ -1181,28 +1166,37 @@ export function TransactionSheet({
               exit={{ opacity: 0, x: 12 }}
               transition={spring}
             >
-              <IconButton icon="arrow-left-right" label="Swap accounts" onClick={swap} />
-              {/* Optional once somebody owes it: money out of your accounts
-                  with nowhere of yours to go is lending, and the debt is
-                  where it went. */}
-              <Field label="To account" hint={askHint('toAccount', !!toAccountId)}>
-                <Select
-                  options={accountOptions.filter((o) => o.value !== accountId)}
-                  value={toAccountId}
-                  onChange={setToAccountId}
-                  placeholder={owed > 0 ? 'Owed back to you' : 'Choose an account'}
-                  allowClear={owed > 0}
-                />
+              <IconButton
+                icon="arrow-left-right"
+                label="Swap accounts"
+                onClick={swap}
+                disabled={!!debtor}
+              />
+              {/* Marked as a debt, the far side is settled: it is out with
+                  the person, and the book files that against the account
+                  that stands for what is out with people. There is nothing
+                  left to choose, so nothing is offered. */}
+              <Field label="To account">
+                {debtor ? (
+                  <div className="field-fixed">
+                    <Icon name="users" size={15} />
+                    {holding?.name ?? 'Debts'}
+                  </div>
+                ) : (
+                  <Select
+                    options={accountOptions.filter((o) => o.value !== accountId)}
+                    value={toAccountId}
+                    onChange={setToAccountId}
+                    placeholder="Choose an account"
+                  />
+                )}
               </Field>
             </motion.div>
           )}
         </AnimatePresence>
       </div>
 
-      <Field
-        label={kind === 'transfer' ? 'Description' : 'Merchant or payee'}
-        hint={askHint('merchant', !!merchant.trim())}
-      >
+      <Field label={kind === 'transfer' ? 'Description' : 'Merchant or payee'}>
         <TextInput
           value={merchant}
           placeholder={kind === 'income' ? 'Monthly salary' : 'Swiggy'}
@@ -1227,21 +1221,24 @@ export function TransactionSheet({
         </div>
       </Field>
 
-      <Field
-        label="Note"
-        hint={askHint('note', !!note.trim()) ?? (needsNote ? 'required' : 'optional')}
-      >
-        <TextArea
-          value={note}
-          placeholder={
-            needsNote || asks('note') ? 'What was this for?' : 'Anything worth remembering'
-          }
-          onChange={(e) => {
-            setNote(e.target.value);
-            setError(null);
-          }}
-        />
-      </Field>
+      {/* One bill cut into parts is several things, and each says what it
+          was for on its own row. A note over the top of them would be a note
+          about none of them. */}
+      {!split && (
+        <Field
+          label="Note"
+          hint={needsNote ? 'required' : 'optional'}
+        >
+          <TextArea
+            value={note}
+            placeholder={needsNote ? 'What was this for?' : 'Anything worth remembering'}
+            onChange={(e) => {
+              setNote(e.target.value);
+              setError(null);
+            }}
+          />
+        </Field>
+      )}
 
     </div>
   );
@@ -1281,41 +1278,61 @@ export function TransactionSheet({
     </div>
   );
 
+  // Who owes the whole of it, asked as one field rather than as a page about
+  // dividing something that is not being divided.
+  const debtBlock = debtor && (
+    <div className="tx-debt">
+      <span className="field-label">
+        Owed back by
+        {owed > 0 && <span className="field-hint">{money(owed)}</span>}
+      </span>
+      <TextInput
+        ref={debtorRef}
+        value={debtor.name}
+        placeholder="Suhruth"
+        onChange={(e) => nameDebt(e.target.value)}
+      />
+      <Field label="Due" hint="optional">
+        <DateField
+          value={people.dueOn}
+          onChange={(value) => setPeople((was) => ({ ...was, dueOn: value }))}
+          placeholder="No due date"
+          allowClear
+        />
+      </Field>
+      <p className="page-note">
+        <Icon name="arrow-left-right" size={13} />
+        {debtor.name.trim()
+          ? `The whole ${money(paise)} is ${debtor.name.trim()}'s to pay back. It leaves ${
+              live.find((a) => a.id === accountId)?.name ?? 'the account'
+            } and stays out of your spending until it comes home.`
+          : 'Say whose it is and the whole of it becomes their debt — money out of your account with nowhere of yours to go.'}
+      </p>
+    </div>
+  );
+
   // What this posting undoes, when it undoes one. A transfer has nothing to
   // give back — it moves money between your own accounts rather than earning
   // or spending it — so it is never asked.
   // Nor is a statement row waiting to import: it is not in the book yet, and
   // a posting that isn't there can neither give anything back nor be given.
-  const refundPicker = kind !== 'transfer' && !onSubmit && (
-    <div className="tx-refund">
-      <span className="field-label">
-        Refund
-        {refund && <span className="field-hint">of {money(refund.amount)}</span>}
-      </span>
-      <TransactionPicker
-        value={refund?.id ?? null}
-        label={refund ? `${refund.merchant} · ${money(refund.amount)}` : null}
-        title="What is this giving back?"
-        subtitle="The posting it undoes. Neither of them will count toward what you earned or spent."
-        onChange={(id, _label, tx) => (id && tx ? attachRefund(tx) : setRefund(null))}
-      />
-      {refund && (
-        <p className="page-note">
-          <Icon name="undo-2" size={13} />
-          {paise >= refund.remaining
-            ? `Nothing of ${refund.merchant} is left standing: it drops out of your ${
-                refund.kind === 'expense' ? 'spending' : 'income'
-              } and this drops out with it. The money still moved, so both accounts keep it.`
-            : `${money(paise)} of ${money(refund.amount)} comes off ${refund.merchant} — ${money(
-                refund.remaining - paise,
-              )} of it still stands.`}
-        </p>
-      )}
-      {/* The posting's own id. Two of these can look alike on screen and still
-          be different rows, so when one has to be named — a duplicate to merge,
-          a row to point somebody at — the id is the only thing that says which. */}
-      {editing?.id && <TransactionId id={editing.id} />}
-    </div>
+  // Only an income posting can be one: a refund is what comes back, and the
+  // bill it undoes is something spent. Nor can a statement row waiting to
+  // import be one — it is not in the book yet.
+  const canRefund = kind === 'income' && !onSubmit;
+
+  // What attaching one does to the two postings, said where it is decided.
+  const refundNote = canRefund && refund && (
+    <p className="page-note tx-note-refund">
+      <Icon name="undo-2" size={13} />
+      {paise >= refund.remaining
+        ? `Nothing of ${refund.merchant} is left standing: it drops out of your ${
+            refund.kind === 'expense' ? 'spending' : 'income'
+          } and this drops out with it. The money still moved, so both accounts keep it.`
+        : `${money(paise)} of ${money(refund.amount)} comes off ${refund.merchant} — ${money(
+            refund.remaining - paise,
+          )} of it still stands.`}
+    </p>
   );
 
   const partsSummary = split
@@ -1352,14 +1369,9 @@ export function TransactionSheet({
           }
         : {
             title: isNew ? 'New transaction' : 'Edit transaction',
-            // Opened from a template, the heading says which — and what is
-            // still owed to it, which is the whole reason it was left blank.
+            // Opened from a template, the heading says which one.
             subtitle: fromTemplate
-              ? outstanding.length
-                ? `From “${fromTemplate.name}” · ${outstanding
-                    .map((f) => fieldLabel(f, kind))
-                    .join(', ')} to fill in`
-                : `From “${fromTemplate.name}”`
+              ? `From “${fromTemplate.name}”`
               : refund
                 ? `Giving back ${refund.merchant} — neither will count as ${
                     refund.kind === 'expense' ? 'spending' : 'income'
@@ -1404,9 +1416,15 @@ export function TransactionSheet({
       open={open}
       onClose={onClose}
       onBack={page ? leavePage : undefined}
+      // The posting's own id, in the header. Two rows can read the same on
+      // screen and still be different rows, so when one has to be named — a
+      // duplicate to merge, a row to point somebody at — the id is the only
+      // thing that says which. It belongs to the sheet rather than to the
+      // form, so it rides with the sheet's own chrome.
+      aside={editing?.id && !onSubmit ? <TransactionId id={editing.id} /> : undefined}
       title={heading.title}
       subtitle={heading.subtitle}
-      width={wide ? 1040 : 600}
+      width={1040}
       footer={
         <>
           <div className="foot-lead">
@@ -1426,33 +1444,60 @@ export function TransactionSheet({
               <TemplateMenu
                 templates={templates}
                 canApply={isNew}
-                kind={kind}
                 suggested={merchant.trim() || selected?.name || ''}
-                // Whatever is blank now is what it will ask for: you fill in
-                // what the template should answer, and leave the rest.
-                defaultAsk={blankNow}
                 onApply={applyTemplate}
                 onSave={keepAsTemplate}
               />
             )}
-            {/* Not while you are already inside one: the way out of a split is
-                back to the transaction, and the menu would only offer the way
-                in again. */}
-            {!page && (
+            {/* Neither of these while you are already inside a page: the way
+                out is back to the transaction, and they would only offer the
+                way in again.
+
+                A transfer moves money between your own accounts, so there is
+                nothing to divide it between — but money that left with
+                nowhere of yours to go is money somebody owes back. One way
+                in, one button, where the menu of two ways stands on a bill. */}
+            {!page && kind === 'transfer' && (
+              <>
+                <button
+                  type="button"
+                  className={`split-menu-trigger ${debtor || owed > 0 ? 'is-on' : ''}`}
+                  // Already owed by several people — an older posting divided
+                  // between them — so that one opens the page that divides it
+                  // rather than being flattened back to a single name.
+                  onClick={() =>
+                    debtor
+                      ? debtorRef.current?.focus()
+                      : owed > 0
+                        ? openPage('people')
+                        : markAsDebt()
+                  }
+                  title="Whoever this money went to owes it back"
+                >
+                  <span><Icon name="user-round" size={14} strokeWidth={2.1} /></span>
+                  {owed > 0 ? `${money(owed)} owed back` : debtor ? 'Owed back by…' : 'Mark as debt'}
+                </button>
+                {(debtor || owed > 0) && (
+                  <IconButton
+                    icon="x"
+                    label="Not a debt"
+                    size={30}
+                    onClick={() => setPeople(emptyPeople())}
+                  />
+                )}
+              </>
+            )}
+
+            {!page && kind !== 'transfer' && (
               <SplitMenu
                 ways={[
-                  // A transfer has no category to divide it between.
-                  ...(kind === 'transfer'
-                    ? []
-                    : [
-                        {
-                          which: 'categories' as const,
-                          icon: 'split',
-                          title: 'Split transaction',
-                          summary: partsSummary,
-                          on: split,
-                        },
-                      ]),
+                  {
+                    which: 'categories' as const,
+                    icon: 'split',
+                    title: 'Split transaction',
+                    summary: partsSummary,
+                    on: split,
+                  },
                   {
                     which: 'people',
                     icon: 'users',
@@ -1460,22 +1505,34 @@ export function TransactionSheet({
                     summary: peopleSummary,
                     on: owed > 0,
                   },
-                  // Only while nothing is owed on it yet: once it is, the
-                  // people page above is where it is changed.
-                  ...(owed === 0
-                    ? [
-                        {
-                          which: 'debt' as const,
-                          icon: 'user-round',
-                          title: 'Owed by someone',
-                          summary: 'The whole of it becomes a debt in their name',
-                          on: false,
-                        },
-                      ]
-                    : []),
                 ]}
                 onPick={openPage}
               />
+            )}
+
+            {/* Naming what this gives back is the same size of decision as
+                splitting it, so it stands beside it rather than as a field
+                halfway down the form. */}
+            {!page && canRefund && (
+              <>
+                <button
+                  type="button"
+                  className={`split-menu-trigger ${refund ? 'is-on' : ''}`}
+                  onClick={() => setRefundPicking(true)}
+                  title={refund ? 'Choose a different posting' : 'Say what this gives back'}
+                >
+                  <span><Icon name="undo-2" size={14} strokeWidth={2.1} /></span>
+                  {refund ? `Refund of ${refund.merchant}` : 'Mark as refund'}
+                </button>
+                {refund && (
+                  <IconButton
+                    icon="x"
+                    label="Not a refund"
+                    size={30}
+                    onClick={() => setRefund(null)}
+                  />
+                )}
+              </>
             )}
           </div>
           <div className="foot-actions">
@@ -1514,7 +1571,14 @@ export function TransactionSheet({
             <div className="tx-pane tx-pane-detail">
               <div className="tx-page">
                 {page === 'categories' ? (
-                  <SplitLinesEditor amount={paise} kind={kind} lines={lines} onChange={editLines} />
+                  <SplitLinesEditor
+                    amount={paise}
+                    kind={kind}
+                    lines={lines}
+                    onChange={editLines}
+                    needsNote={needsNote}
+                    error={partsError}
+                  />
                 ) : (
                   <>
                     <SplitPeopleEditor amount={paise} split={people} onChange={editPeople} />
@@ -1530,12 +1594,17 @@ export function TransactionSheet({
                   </>
                 )}
               </div>
+
+              {/* The pins belong to the posting, not to the page you are on:
+                  cutting a bill into parts is exactly when you reach for
+                  one, and it used to leave with the form. */}
+              {labelPicker}
             </div>
           </motion.div>
         ) : (
           <motion.div
             key="form"
-            className={`tx-form ${twoPane ? 'is-two-pane' : ''}`}
+            className="tx-form is-two-pane"
             style={{ ['--accent' as any]: accentVar }}
             custom={back ? -1 : 1}
             variants={pageVariants}
@@ -1562,13 +1631,7 @@ export function TransactionSheet({
                   >
                     <span className="field-label">
                       Category
-                      {selected ? (
-                        <span className="field-hint">{selected.name}</span>
-                      ) : (
-                        askHint('category', false) && (
-                          <span className="field-hint">fill in</span>
-                        )
-                      )}
+                      {selected && <span className="field-hint">{selected.name}</span>}
                     </span>
                     <motion.div
                       className="cat-grid"
@@ -1701,12 +1764,23 @@ export function TransactionSheet({
                 )}
               </AnimatePresence>
 
-              {refundPicker}
+              {debtBlock}
+              {refundNote}
               {labelPicker}
             </div>
           </motion.div>
         )}
       </AnimatePresence>
+      <RecordPicker
+        open={refundPicking}
+        onClose={() => setRefundPicking(false)}
+        title="What is this giving back?"
+        subtitle="The posting it undoes. Neither of them will count toward what you earned or spent."
+        onPick={(tx) => {
+          attachRefund(tx);
+          setRefundPicking(false);
+        }}
+      />
       <Confirm
         stacked
         open={confirmingDelete}

@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { ACCOUNT_ICONS, Icon } from './Icon';
-import { Button, Field, Segmented, Sheet, TextInput, type SegmentOption } from './ui';
+import {
+  Button, Confirm, Field, Segmented, Sheet, TextInput, type SegmentOption,
+} from './ui';
 import { useStore } from '../lib/store';
 import {
   amountChars, money, paiseToRupeeString, rupeesToPaise, settleAmount,
@@ -152,16 +154,8 @@ export function AccountSheet({
               >
                 {editing.archived ? 'Restore' : 'Archive'}
               </Button>
-              <Button
-                tone="danger"
-                icon="trash-2"
-                onClick={async () => {
-                  if (!confirming) return setConfirming(true);
-                  await deleteAccount(editing.id);
-                  onClose();
-                }}
-              >
-                {confirming ? 'Delete with its history?' : 'Delete'}
+              <Button tone="danger" icon="trash-2" onClick={() => setConfirming(true)}>
+                Delete
               </Button>
             </div>
           ) : (
@@ -334,6 +328,23 @@ export function AccountSheet({
           </motion.div>
         </div>
       </div>
+
+      <Confirm
+        stacked
+        open={confirming}
+        title="Delete this account?"
+        onConfirm={async () => {
+          if (!editing) return;
+          setConfirming(false);
+          await deleteAccount(editing.id);
+          onClose();
+        }}
+        onCancel={() => setConfirming(false)}
+      >
+        {editing?.name
+          ? `${editing.name} goes, and every posting in it goes with it. This cannot be undone — archive it instead to keep the history.`
+          : 'Every posting in it goes with it. This cannot be undone.'}
+      </Confirm>
     </Sheet>
   );
 }

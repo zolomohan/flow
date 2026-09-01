@@ -647,6 +647,13 @@ kbd {
 .select-option-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .select-option-hint { font-size: 12px; color: var(--ink-4); }
 
+/* A part still wanting the note this book asks for. Quiet — it is a
+   reminder, not a mistake: nothing has been submitted yet. */
+.split-line-note.is-wanted {
+  border-color: color-mix(in srgb, var(--amber) 55%, transparent);
+}
+.split-line-note.is-wanted::placeholder { color: var(--amber); }
+
 /* =================================================================
    Sheet / scrim
    ================================================================= */
@@ -696,8 +703,12 @@ kbd {
 
 .sheet-body { padding: 0 22px 22px; overflow-y: auto; overflow-x: hidden; }
 /* Its width is set inline, from the sheet's own target — deliberately not
-   from its parent, which is the thing that moves. */
+   from its parent, which is the thing that moves. Its height is set inline
+   too, from what it is holding, so the panel glides between sizes. */
 .sheet-canvas { flex: none; }
+/* A block of its own, so a child's margin is inside the measurement rather
+   than collapsing out of it and leaving the sheet a few pixels short. */
+.sheet-canvas-inner { display: flow-root; }
 
 .sheet.is-confirm { max-width: 400px; }
 .confirm-body {
@@ -2143,10 +2154,14 @@ kbd {
    and no less: squeezed into a form-sized sheet the filters wrap, the search
    box shrinks to a slot and the columns stop lining up. Generous, then, is
    not indulgence — it is the width the thing was drawn at. */
+/* A fixed height, not a fitted one: the ledger inside it is a different
+   length on every search, and a modal that resized under each keystroke
+   would move the row being reached for. */
 .record-picker {
   position: relative;
   max-width: min(1240px, calc(100vw - 48px));
-  max-height: min(92vh, 960px);
+  height: min(92vh, 960px);
+  max-height: none;
 }
 
 /* The ledger brings its selection bar with it. Inside a sheet that bar cannot
@@ -2357,9 +2372,10 @@ kbd {
 .tx-form.is-two-pane > .tx-pane:first-child { padding-right: 26px; }
 .tx-pane { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-content: start; }
 .tx-pane > * { min-width: 0; }
-/* A rule rather than a box: the two halves are one form, not two. It is only
-   drawn where there are two — a transfer has no category to put on the right,
-   and the sheet narrows to one column. */
+/* A rule rather than a box: the two halves are one form, not two. Every kind
+   has a right-hand column now — a transfer has no categories to put in it,
+   but it has pins like everything else, and a sheet that changed shape when
+   the kind changed was a sheet that moved under the hand filling it in. */
 .tx-form.is-two-pane .tx-pane-detail {
   padding-left: 26px;
   border-left: 1px solid var(--line-soft);
@@ -2527,6 +2543,9 @@ kbd {
 .rail.is-fade-left .rail-track { --fade-left: 28px; }
 .rail.is-fade-right .rail-track { --fade-right: 28px; }
 
+/* The outline is an inset shadow rather than a border, and the weight never
+   changes: both of those take up room, so picking a chip would shove the rest
+   of the row sideways under the hand that picked it. */
 .rail-chip {
   display: inline-flex;
   align-items: center;
@@ -2537,20 +2556,19 @@ kbd {
   padding: 0 13px 0 8px;
   border-radius: var(--r-full);
   background: var(--surface);
-  border: 1px solid var(--line);
+  box-shadow: inset 0 0 0 1px var(--line);
   font-size: 13px;
   font-weight: 500;
   color: var(--ink-2);
   cursor: pointer;
-  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease),
+  transition: box-shadow var(--fast) var(--ease), background var(--fast) var(--ease),
     color var(--fast) var(--ease);
 }
-.rail-chip:hover { border-color: var(--line-strong); color: var(--ink); }
+.rail-chip:hover { box-shadow: inset 0 0 0 1px var(--line-strong); color: var(--ink); }
 .rail-chip.is-active {
   color: var(--chip-accent, var(--ink));
-  border-color: color-mix(in srgb, var(--chip-accent, var(--ink)) 45%, transparent);
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--chip-accent, var(--ink)) 45%, transparent);
   background: color-mix(in srgb, var(--chip-accent, var(--ink)) 10%, var(--surface));
-  font-weight: 600;
 }
 .rail-chip-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rail-empty { padding: 10px 2px; font-size: 12.5px; color: var(--ink-4); }
@@ -2567,7 +2585,10 @@ kbd {
   flex: 1 1 calc(var(--swap) + var(--gap));
   min-width: 0;
 }
-.tx-transfer-to > .icon-btn { margin-bottom: 5px; flex-shrink: 0; }
+/* Two menus, not two rails: the swap button lines up with their middles
+   rather than with a chip's. */
+.tx-accounts.is-transfer { align-items: flex-end; }
+.tx-transfer-to > .icon-btn { margin-bottom: 2px; flex-shrink: 0; }
 .tx-transfer-to > .field { flex: 1 1 0; min-width: 0; }
 
 .cat-grid { display: flex; flex-wrap: wrap; gap: 6px; max-width: 100%; }
@@ -2703,6 +2724,22 @@ kbd {
   gap: 12px;
 }
 .tx-meta > * { min-width: 0; }
+/* One field left in the row takes the whole of it rather than sitting in half
+   a row beside nothing. */
+.tx-meta:has(> :only-child) { grid-template-columns: minmax(0, 1fr); }
+
+/* A row of an entry's figures: half each when there are two, the whole row
+   when there is one. Nothing animates — the fields appear where they belong
+   and stay there, which is what a form asking a question should do. */
+.lot-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  gap: 12px;
+}
+.lot-row > * { min-width: 0; }
+/* A row with one field in it that should still read as half a row — a date
+   stretched across the sheet looks like a mistake. */
+.lot-row.is-pair { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
 /* The money date beside the units date — an SIP pays on one and allots on
    another, and the two read as a pair. */
@@ -5334,6 +5371,35 @@ kbd {
 
 /* Labels in the sheet's right column, under whatever it says about the
    money: pins, so they come after the filing rather than among it. */
+/* A field with one answer, which the book has already given: it reads like a
+   control so the row keeps its shape, and takes no clicks because there is
+   nothing to decide. */
+.field-fixed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 12px;
+  border-radius: var(--r-md);
+  background: var(--surface-inset);
+  border: 1px dashed var(--line-strong);
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+.field-fixed svg { color: var(--ink-4); flex-shrink: 0; }
+
+/* Marking a whole posting as a debt: one name, and when it is due. Not a
+   division of anything, so not a page — it stands in the right-hand column
+   where the categories would be on a bill. */
+.tx-debt {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding-top: 4px;
+}
+.tx-debt .page-note { margin-top: 5px; }
+
 .tx-labels {
   display: flex;
   flex-direction: column;
@@ -5341,20 +5407,17 @@ kbd {
   padding-top: 4px;
 }
 
-/* What the posting gives back, above the labels: it is about the money
-   rather than a pin on top of it, but it is not a filing either. */
-.tx-refund {
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-  padding-top: 14px;
-}
-.tx-refund .page-note {
-  margin-top: 0;
+/* What the posting gives back. The saying-so lives in the footer now, beside
+   the split menu; this is what it means for the two postings, in the form
+   where the amount it turns on is being typed. */
+/* A purchase whose units the AMC has not credited yet: a wait, not a figure. */
+.detail-lot-qty .is-waiting { color: var(--amber); font-weight: 600; }
+
+.tx-note-refund {
   background: color-mix(in srgb, var(--amber) 8%, transparent);
   border-color: color-mix(in srgb, var(--amber) 24%, transparent);
 }
-.tx-refund .page-note svg { color: var(--amber); }
+.tx-note-refund svg { color: var(--amber); }
 
 /* The posting's id: quiet until you go looking for it, since it is reference
    material rather than something the form asks you to fill in. */
@@ -5375,6 +5438,18 @@ kbd {
   cursor: pointer;
 }
 .tx-id:hover { border-color: var(--line-strong); color: var(--ink-2); border-style: solid; }
+/* In the header it is a mark rather than a row: as much of the id as fits,
+   taking none of the form's width. It stands at the top of the header on the
+   close button's own line, and is built to the same 34px so the two read as
+   one row however many lines the heading beside them runs to. */
+.sheet-head .tx-id {
+  width: auto;
+  max-width: 190px;
+  height: 34px;
+  margin-top: 0;
+  align-self: flex-start;
+  gap: 6px;
+}
 .tx-id:hover svg { color: var(--accent); }
 .tx-id-tag {
   flex: none;

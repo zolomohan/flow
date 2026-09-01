@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { motion } from 'motion/react';
 import { Icon } from '../components/Icon';
-import { Button, Card, CardHead, Empty, TextInput } from '../components/ui';
+import { Button, Card, CardHead, Confirm, Empty, TextInput } from '../components/ui';
 import { useStore } from '../lib/store';
 import { itemVariants, listVariants } from '../lib/motion';
 import type { Label } from '../lib/types';
@@ -28,15 +28,10 @@ export function Labels({
   const [editing, setEditing] = useState<Label | null>(null);
   const [name, setName] = useState('');
   const [color, setColor] = useState(SWATCHES[0]);
+  // The label being asked about, held by id: the row it belongs to is still
+  // there behind the dialog.
   const [confirming, setConfirming] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
-  // A delete armed and then abandoned disarms itself.
-  useEffect(() => {
-    if (!confirming) return;
-    const timer = window.setTimeout(() => setConfirming(null), 4000);
-    return () => window.clearTimeout(timer);
-  }, [confirming]);
 
   const startEdit = (label: Label) => {
     setEditing(label);
@@ -142,16 +137,11 @@ export function Labels({
                   </Button>
                   <Button
                     size="sm"
-                    tone={confirming === label.id ? 'danger' : 'ghost'}
+                    tone="ghost"
                     icon="trash-2"
-                    onClick={async () => {
-                      if (confirming !== label.id) return setConfirming(label.id);
-                      setConfirming(null);
-                      if (editing?.id === label.id) clear();
-                      await deleteLabel(label.id).catch(() => {});
-                    }}
+                    onClick={() => setConfirming(label.id)}
                   >
-                    {confirming === label.id ? 'Sure?' : 'Delete'}
+                    Delete
                   </Button>
                 </div>
               </motion.div>
@@ -159,6 +149,29 @@ export function Labels({
           </motion.div>
         )}
       </Card>
+
+      <Confirm
+        open={!!confirming}
+        title="Delete this label?"
+        onConfirm={async () => {
+          const id = confirming;
+          setConfirming(null);
+          if (!id) return;
+          if (editing?.id === id) clear();
+          await deleteLabel(id).catch(() => {});
+        }}
+        onCancel={() => setConfirming(null)}
+      >
+        {(() => {
+          const going = labels.find((l) => l.id === confirming);
+          if (!going) return 'The postings wearing it stay; they simply stop wearing it.';
+          return going.count > 0
+            ? `${going.name} comes off the ${going.count} ${
+                going.count === 1 ? 'posting' : 'postings'
+              } wearing it. Nothing else about them changes.`
+            : `${going.name} goes. Nothing is wearing it.`;
+        })()}
+      </Confirm>
     </div>
   );
 }

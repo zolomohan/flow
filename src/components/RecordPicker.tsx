@@ -1,8 +1,9 @@
 import { useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import { IconButton } from './ui';
 import { Transactions } from '../screens/Transactions';
-import { sheetBackdrop, sheetPanel } from '../lib/motion';
+import { sheetBackdrop, stackedPanel } from '../lib/motion';
 import type { Transaction } from '../lib/types';
 
 /**
@@ -44,7 +45,13 @@ export function RecordPicker({
     return () => document.removeEventListener('keydown', onKey, true);
   }, [open, onClose]);
 
-  return (
+  // Through a portal, like every other layer that opens over a sheet. Left in
+  // the sheet's own tree it is a fixed box inside a transformed, briefly
+  // clipped ancestor: the panel is anchored to the sheet rather than to the
+  // window, and the moment the sheet animates its own height the picker is
+  // cut out of the page — which is what made closing it look like a
+  // disappearance rather than an exit.
+  return createPortal(
     <AnimatePresence>
       {open && (
         <motion.div
@@ -57,7 +64,7 @@ export function RecordPicker({
         >
           <motion.div
             className="sheet record-picker"
-            variants={sheetPanel}
+            variants={stackedPanel}
             initial="initial"
             animate="animate"
             exit="exit"
@@ -66,7 +73,9 @@ export function RecordPicker({
             aria-label={title}
           >
             <header className="sheet-head">
-              <div>
+              {/* The heading takes the row, so the close button ends up where
+                  every other sheet keeps it — hard right. */}
+              <div className="sheet-heading">
                 <h2 className="sheet-title">{title}</h2>
                 {subtitle && <p className="sheet-sub">{subtitle}</p>}
               </div>
@@ -85,6 +94,7 @@ export function RecordPicker({
           </motion.div>
         </motion.div>
       )}
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body,
   );
 }
