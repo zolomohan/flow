@@ -1,12 +1,12 @@
 import {
-  AlertCircle, AppWindow, ArrowDownLeft, ArrowLeftRight, ArrowRight, ArrowUpRight,
+  AlertCircle, AppWindow, ArrowDownLeft, ArrowLeftRight, ArrowRight, ArrowUpDown, ArrowUpRight,
   Award, Banknote, Beer, Bike, Bitcoin, BookOpen, Bookmark, Box, Brain, Briefcase,
   Building2, Bus, Cake, CalendarDays, Candy, Car, CarFront, CarTaxiFront, Check,
   CheckCheck, ChevronDown, ChevronLeft, ChevronRight, ChevronsUpDown, CircleCheckBig,
   CircleDashed, CircleHelp, Clapperboard, Coffee, Cog, Coins, Cookie, CornerUpLeft,
   Copy, Cpu, CreditCard, Croissant, Download, Drama, Droplets, Dumbbell, Equal, FileUp,
   Flag, Flower2, ForkKnifeCrossed, Fuel, Gamepad2, Gem, Gift, Glasses, Globe,
-  GraduationCap, Grid2x2, Hammer, HandHeart, HandPlatter, Handshake, HeartHandshake,
+  GraduationCap, Grid2x2, GripVertical, Hammer, HandHeart, HandPlatter, Handshake, HeartHandshake,
   HeartPulse, Heart, Hospital, Hourglass, House, IceCreamCone, Inbox, Info, KeyRound,
   Landmark, Laptop,
   LayoutDashboard, Lightbulb, Link2, ListFilter, Luggage, Milk, MonitorSmartphone, Moon,
@@ -30,6 +30,7 @@ export const ICONS: Record<string, LucideIcon> = {
   'arrow-down-left': ArrowDownLeft,
   'arrow-left-right': ArrowLeftRight,
   'arrow-right': ArrowRight,
+  'arrow-up-down': ArrowUpDown,
   'arrow-up-right': ArrowUpRight,
   award: Award,
   banknote: Banknote,
@@ -84,6 +85,7 @@ export const ICONS: Record<string, LucideIcon> = {
   globe: Globe,
   'graduation-cap': GraduationCap,
   'grid-2x2': Grid2x2,
+  'grip-vertical': GripVertical,
   hammer: Hammer,
   'hand-heart': HandHeart,
   'hand-platter': HandPlatter,
@@ -268,4 +270,28 @@ export function Icon({
 }) {
   const Glyph = ICONS[name ?? ''] ?? CircleDashed;
   return <Glyph size={size} strokeWidth={strokeWidth} className={className} />;
+}
+
+/**
+ * Siri's mark, as Apple draws it.
+ *
+ * Drawn rather than added to the registry above: that is a map of Lucide
+ * glyphs, and this is a single traced path with its own aspect and its own
+ * fill rule. It takes `currentColor` like every other icon in the sidebar, so
+ * it dims and lifts with the nav line it sits on instead of shouting in
+ * colour beside a row of grey strokes.
+ */
+export function SiriMark({ size = 17 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 426.26 425.91"
+      fill="currentColor"
+      aria-hidden
+      focusable="false"
+    >
+      <path fillRule="evenodd" d="M376.36 288.56C347.8 350.11 285.45 392.8 213.13 392.8c-64.02 0-120.22-33.45-152.09-83.82 11.67 6.13 24.47 10.2 37.92 11.65 57.77 6.2 107.13-25.2 147.04-65.11l-23.41-23.41c-37.37 37.37-77.27 60.2-120.09 55.6-36.22-3.89-66.53-36.21-69.2-72.35l-.02-2.4c0-4.33.15-8.62.45-12.88l.19-1.46c2.59-18.72 8.27-29.69 21.79-43.87 11.5-12.06 29.88-16.91 52.16-14.56 22.14 2.33 45.31 11.61 62.43 23.8 28.01 19.95 58.99 46.56 108.69 96.92 19.33 19.59 49.75 33.11 78.47 31.31 6.64-.42 12.96-1.67 18.89-3.65zm16.32-65.2a46.31 46.31 0 0 1-.68 3.62c-4.3 18.71-18.42 31.04-36.61 32.18-17.94 1.13-39.32-7.84-52.82-21.52-50.4-51.06-82.88-79.14-113.05-100.62-21.51-15.32-50.06-26.8-78.17-29.76-15.48-1.63-31.69-.73-46.69 4.17 32.4-47.29 86.81-78.32 148.47-78.32 77.05 0 142.79 48.46 168.4 116.56-10.27-4.06-21.73-5.48-33.76-3.32-23.6 4.26-47.76 17.37-71 40.6l23.41 23.41c19.55-19.55 37.88-28.62 53.46-31.43 17.87-3.22 37.38 12.41 39.33 33.94v.08c0 3.49-.1 6.96-.3 10.4zm33.4-11.8C425.34 94.59 330.28 0 213.13 0S8.93 86.83.76 196.98c-.45 3.92-.7 7.87-.76 11.87a98.84 98.84 0 0 0 .2 7.9c2.02 115.86 96.58 209.16 212.92 209.16s205.53-88.09 212.53-199.37c.53-4.23.72-8.67.51-13.38-.02-.53-.06-1.07-.09-1.6z" />
+    </svg>
+  );
 }

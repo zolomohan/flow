@@ -27,7 +27,26 @@
 
 html, body, #root { height: 100%; }
 
+/* The window is the app's own frame, not a page in a browser: nothing here
+   scrolls past its end. Without this, a trackpad flick on a pane with
+   nothing to scroll bounces the whole window and shows the webview's white
+   ground behind it. `overscroll-behavior` stops the rubber band, and the
+   background on `html` means even a stray pixel of it is the page's grey. */
+html {
+  background: var(--bg);
+  overscroll-behavior: none;
+}
+
+/* A desktop app, not a page: dragging across a heading should not paint it
+   blue, and the pointer should not turn into an I-beam over every label.
+   What is genuinely there to take away — a field being typed in, an id put
+   on screen to be copied — says so for itself, below and where it lives. */
 body {
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+  overscroll-behavior: none;
+  overflow: hidden;
   margin: 0;
   font-family: var(--font);
   font-size: 14px;
@@ -52,11 +71,19 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
-input {
+input, textarea {
   font: inherit;
   color: inherit;
   font-variant-numeric: tabular-nums;
+  /* Selection is what typing in a field is made of — the app's own ban on it
+     stops at the edge of anything you can write in. */
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
 }
+
+/* Nothing drags out of the window as a picture, the way it would off a page. */
+img { -webkit-user-drag: none; }
 
 kbd {
   display: inline-flex;
@@ -157,6 +184,9 @@ kbd {
   height: 100%;
   overflow-y: scroll;
   overflow-x: hidden;
+  /* Always-scroll above means the pane bounces even on a short screen that
+     has nothing to scroll — and takes the window with it. */
+  overscroll-behavior: none;
 }
 
 .boot {
@@ -2486,7 +2516,9 @@ kbd {
 .split-recap-parts { display: flex; flex-direction: column; margin-top: 2px; }
 .split-recap-part {
   display: flex;
-  align-items: center;
+  /* The dot sits on the category's line rather than centred against a part
+     that has grown a second line under it. */
+  align-items: flex-start;
   gap: 8px;
   padding: 7px 2px;
   font-size: 13px;
@@ -2495,9 +2527,23 @@ kbd {
   border-bottom: 1px solid var(--line-soft);
 }
 .split-recap-part:last-child { border-bottom: 0; }
-.split-recap-part i { width: 7px; height: 7px; flex: none; border-radius: 99px; }
-.split-recap-part em {
+.split-recap-part i {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  margin-top: 6px;
+  border-radius: 99px;
+}
+.split-recap-what { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.split-recap-what em {
+  font-style: normal;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+.split-recap-amount {
   margin-left: auto;
+  padding-left: 8px;
   font-style: normal;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -3586,6 +3632,96 @@ kbd {
 .cat-row.is-sub .cat-row-glyph { width: 26px; height: 26px; border-radius: 9px; }
 .cat-row.is-sub .cat-row-text strong { font-size: 12.5px; font-weight: 500; }
 .cat-row.is-sub .cat-row-text span { font-size: 11.5px; }
+
+/* Putting the categories in order: one draggable list of groups, each opening
+   onto a draggable list of its own. */
+.ro-list { display: grid; gap: 6px; }
+.ro-item {
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  /* A lifted row sits above its neighbours — Reorder gives it the z-index,
+     this gives it something to stack against. */
+  position: relative;
+}
+.ro-item.is-open { border-color: color-mix(in srgb, var(--cat) 34%, var(--line)); }
+
+.ro-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px 7px 4px;
+  background: var(--surface);
+  border-radius: var(--r-lg);
+}
+.ro-row:hover { background: var(--surface-2); }
+
+/* The whole row does not drag — the grip does, so a click can still open the
+   group and a sub-category never carries its group along with it. */
+.ro-grip {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 30px;
+  flex: none;
+  color: var(--ink-4);
+  cursor: grab;
+  touch-action: none;
+}
+.ro-grip:active { cursor: grabbing; }
+.ro-row:hover .ro-grip { color: var(--ink-3); }
+
+.ro-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+.ro-main:disabled { cursor: default; }
+
+.ro-glyph {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: 10px;
+  background: var(--cat);
+  color: #fff;
+}
+.ro-text { display: grid; gap: 1px; min-width: 0; }
+.ro-text strong {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ro-text span { font-size: 11.5px; font-weight: 500; color: var(--ink-3); }
+
+.ro-caret { display: grid; place-items: center; margin-left: auto; color: var(--ink-4); }
+
+.ro-subs { overflow: hidden; }
+.ro-sublist {
+  display: grid;
+  gap: 3px;
+  margin: 0 10px 8px 30px;
+  padding: 6px 0 2px 10px;
+  border-left: 1.5px solid var(--line);
+}
+.ro-row.is-sub {
+  padding: 3px 8px 3px 2px;
+  background: var(--surface-2);
+  border-radius: var(--r-md);
+  position: relative;
+}
+.ro-row.is-sub:hover { background: var(--surface-3); }
+.ro-row.is-sub .ro-grip { height: 26px; width: 20px; }
+.ro-row.is-sub .ro-glyph { width: 24px; height: 24px; border-radius: 8px; }
+.ro-row.is-sub .ro-text strong { font-size: 12.5px; font-weight: 500; }
+.ro-row.is-sub .ro-text span { font-size: 11px; }
 
 /* Reaching the rest of a long ledger, and saying how much of it is loaded. */
 .ledger-more {
@@ -4745,13 +4881,34 @@ kbd {
 .switch-label small { margin-left: auto; font-size: 11.5px; color: var(--ink-4); }
 .switch.is-on .switch-label { color: var(--ink); }
 
-/* How a debt meets the ledger: one label, one switch, and a panel that says
-   what the answer means. The switch takes the full width — three answers to
-   one question read as a row, not as a pill sitting in a corner. */
-.debt-record { display: flex; flex-direction: column; gap: 10px; }
+/* How a debt — or a repayment against one — meets the ledger: one label, the
+   three ways of answering it, and a panel saying what the answer means. The
+   rail takes the full width and splits it evenly: three answers to one
+   question read as a row, not as a pill sitting in a corner. */
+.debt-record {
+  display: grid;
+  /* The column is told its own width outright. Left to `auto` it takes the
+     widest thing inside it — a rail of accounts, a row of three labels — and
+     carries the sheet out with it. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+.debt-record > * { min-width: 0; }
+.debt-record .field-label { margin-bottom: 0; }
 .debt-record .segmented { display: flex; width: 100%; }
-.debt-record-panel { display: flex; flex-direction: column; gap: 10px; }
+.debt-record .segment { flex: 1 1 0; min-width: 0; overflow: hidden; }
+/* Nothing to show under an answer that asks for nothing — no empty gap. */
+.debt-record-slot:empty { display: none; }
+
+.debt-record-panel { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.debt-record-panel > * { min-width: 0; }
 .debt-record-panel .page-note { margin-top: 0; }
+/* Under the rail there is one thing being asked for, so it takes the width it
+   is offered rather than sitting as a pill against the left edge. */
+.debt-record-panel .link-add,
+.debt-record-panel .link-chip { display: flex; width: 100%; }
+.debt-record-panel .link-add { justify-content: center; }
+.debt-record-panel .link-chip > span:first-of-type { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The answer that writes nothing says so quietly — it is where the form
    rests, not an instruction. */
 .page-note.is-quiet {
@@ -7108,4 +7265,228 @@ kbd {
   .tax-quarter { border-left: 0; border-top: 1px solid var(--line-soft); }
   .tax-quarter:first-child { border-top: 0; }
   .tax-sheet-row { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* =================================================================
+   Siri — what was said out loud, waiting and done
+   ================================================================= */
+
+/* A count on the one nav line that is work rather than a place. */
+.nav-count {
+  margin-left: auto;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: var(--r-full);
+  background: var(--amber);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+
+.capture-list { display: flex; flex-direction: column; gap: 12px; }
+
+/* Each capture is a card of its own rather than a row in a list: it carries a
+   form, and a form crammed into a row reads as a row you cannot use. */
+.capture {
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-xs);
+}
+
+.capture-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+/* The words, given the weight of a quotation: they are the evidence every
+   field below is checked against. */
+.capture-said {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  font-size: 14.5px;
+  font-weight: 600;
+  letter-spacing: var(--tight);
+  color: var(--ink);
+}
+.capture-said svg { flex: none; color: var(--ink-3); }
+
+.capture-when { font-size: 11.5px; font-weight: 500; color: var(--ink-3); flex: none; }
+
+.capture-missing {
+  margin-top: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--amber);
+}
+
+/* Five controls across where there is room, wrapping to two lines where there
+   is not. The kind sits first and narrow — it is a choice, not a field. */
+.capture-form {
+  display: grid;
+  grid-template-columns: auto 100px minmax(140px, 1fr) minmax(140px, 1fr) minmax(140px, 1fr);
+  align-items: end;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.capture-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+
+@media (max-width: 1100px) {
+  .capture-form { grid-template-columns: minmax(140px, 1fr) minmax(140px, 1fr); }
+  .capture-form > .segmented { grid-column: 1 / -1; }
+}
+
+/* The tab strip sits under the heading, so the two halves read as one screen
+   rather than two places. */
+.screen > .segmented { align-self: flex-start; }
+
+.spoken-list { display: flex; flex-direction: column; }
+
+/* The wrapper animates in; the button inside it handles hover. Putting both
+   on one element let Motion's per-frame inline styles interrupt the CSS
+   transition, which is what made the hover stutter. */
+.spoken-item + .spoken-item { border-top: 1px solid var(--line-soft); }
+
+/* Four columns on one baseline: the mark, what it is, what was said, and
+   what it came to. Fixed at both ends so every row's figures line up and
+   only the middle two give way. */
+.spoken-row {
+  display: grid;
+  grid-template-columns: 26px minmax(120px, 0.9fr) minmax(0, 1.4fr) auto;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 11px 18px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--fast) var(--ease);
+}
+.spoken-row:hover { background: var(--surface-2); }
+
+.spoken-dot {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  color: #fff;
+}
+
+.spoken-what { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.spoken-what strong {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The words are the quiet column: present, readable, never competing with
+   the payee for the eye. */
+.spoken-said {
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spoken-figures {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  white-space: nowrap;
+}
+.spoken-figures strong { font-size: 13.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.spoken-figures strong.is-in { color: var(--green); }
+
+.spoken-meta {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------ one capture, in a sheet */
+
+.spoken-detail { display: flex; flex-direction: column; gap: 20px; }
+.spoken-detail h4 {
+  margin-bottom: 7px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.spoken-quote {
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--ink);
+}
+
+.spoken-facts {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 6px 14px;
+  font-size: 13px;
+}
+.spoken-facts dt { font-weight: 500; color: var(--ink-3); }
+.spoken-facts dd { font-weight: 500; color: var(--ink); text-transform: capitalize; }
+
+.spoken-json {
+  padding: 12px 14px;
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--ink-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow: auto;
+}
+
+@media (max-width: 1100px) {
+  /* The words are the first thing to go: the row still says what it is and
+     what it came to, and the sheet has them in full. */
+  .spoken-row { grid-template-columns: 26px minmax(0, 1fr) auto; }
+  .spoken-said { display: none; }
+}
+
+/* A template's fields, two across where there is room. The note runs the
+   full width: it is the one that is a sentence rather than a value. */
+.tpl-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+.tpl-fields > .field:last-child { grid-column: 1 / -1; }
+
+@media (max-width: 620px) {
+  .tpl-fields { grid-template-columns: minmax(0, 1fr); }
 }

@@ -361,6 +361,7 @@ pub fn seed(conn: &Connection) -> Result<()> {
                     amount: rupees(1_600),
                     due_on: None,
                     note: None,
+                    from_split: None,
                 },
                 TransactionShareInput {
                     id: None,
@@ -369,6 +370,7 @@ pub fn seed(conn: &Connection) -> Result<()> {
                     amount: rupees(1_600),
                     due_on: None,
                     note: None,
+                    from_split: None,
                 },
             ]),
             label_ids: None,

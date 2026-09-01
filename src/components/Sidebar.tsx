@@ -1,5 +1,5 @@
 import { motion } from 'motion/react';
-import { Icon } from './Icon';
+import { Icon, SiriMark } from './Icon';
 import { OWNER_FALLBACK, OWNER_NAME, useStore } from '../lib/store';
 import { money } from '../lib/format';
 import { press, spring } from '../lib/motion';
@@ -8,6 +8,7 @@ import type { InvestmentTab } from '../lib/types';
 export type Route =
   | 'overview'
   | 'transactions'
+  | 'siri'
   | 'planned'
   | 'debts'
   | 'funds'
@@ -40,6 +41,7 @@ export const isInvestmentRoute = (route: Route): route is keyof typeof INVESTMEN
 const NAV: { id: Route; label: string; icon: string }[] = [
   { id: 'overview', label: 'Overview', icon: 'layout-dashboard' },
   { id: 'transactions', label: 'Transactions', icon: 'list-filter' },
+  { id: 'siri', label: 'Siri', icon: 'sparkles' },
   { id: 'planned', label: 'Planned', icon: 'repeat' },
   { id: 'debts', label: 'Debts', icon: 'arrow-left-right' },
   { id: 'funds', label: 'Mutual funds', icon: 'trending-up' },
@@ -65,7 +67,7 @@ export function Sidebar({
   canBack: boolean;
   canForward: boolean;
 }) {
-  const { overview, theme, toggleTheme, settings } = useStore();
+  const { overview, theme, toggleTheme, settings, captures } = useStore();
   // Whose book this is, as set under Settings › Your data. The mark takes its
   // letter from the name, so the two never disagree.
   const owner = settings[OWNER_NAME]?.trim() || OWNER_FALLBACK;
@@ -132,8 +134,16 @@ export function Sidebar({
                 <motion.span layoutId="nav-pill" className="nav-pill" transition={spring} />
               )}
               <span className="nav-content">
-                <Icon name={item.icon} size={17} />
+                {/* Siri is the one line that wears a mark rather than a
+                    glyph: it is what the thing looks like everywhere else on
+                    the machine, and the colour earns its place by saying so. */}
+                {item.id === 'siri' ? <SiriMark size={17} /> : <Icon name={item.icon} size={17} />}
                 {item.label}
+                {/* Only Siri counts: it is the one line that is work
+                    waiting rather than a place to go and look. */}
+                {item.id === 'siri' && captures.length > 0 && (
+                  <span className="nav-count">{captures.length}</span>
+                )}
               </span>
             </button>
           );

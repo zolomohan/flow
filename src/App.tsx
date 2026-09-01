@@ -1,5 +1,5 @@
 import {
-  useCallback, useEffect, useLayoutEffect, useRef, useState,
+  useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
   type MutableRefObject, type ReactNode,
 } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
@@ -18,6 +18,7 @@ import { Toasts } from './components/Toasts';
 import { Button, Empty } from './components/ui';
 import { Overview } from './screens/Overview';
 import { Transactions } from './screens/Transactions';
+import { Siri } from './screens/Siri';
 import { Planned } from './screens/Planned';
 import { Accounts } from './screens/Accounts';
 import { Cards } from './screens/Cards';
@@ -48,6 +49,7 @@ import type {
 const ROUTE_KEYS: Route[] = [
   'overview',
   'transactions',
+  'siri',
   'planned',
   'accounts',
   'cards',
@@ -185,7 +187,7 @@ function ScrollPane({
 }
 
 function Shell() {
-  const { ready, fatal, accounts } = useStore();
+  const { ready, fatal, accounts, labels } = useStore();
   const {
     route, stop, marks, navigate: setRoute, back, forward, canBack, canForward,
   } = useHistory('overview');
@@ -324,6 +326,14 @@ function Shell() {
     setLabelFocus((f) => ({ ids: [labelId], token: f.token + 1 }));
     setRoute('transactions');
   }, [setRoute]);
+
+  // Every spoken posting keeps the Siri label, so "what I said out loud" is
+  // one label away from anywhere that asks.
+  const siriLabel = labels.find((l) => l.name === 'Siri');
+  const openSiriLabel = useMemo(
+    () => (siriLabel ? () => openLabelTransactions(siriLabel.id) : undefined),
+    [siriLabel, openLabelTransactions],
+  );
 
   // Each sleeve is a route of its own, so arriving from a gold card lands on
   // gold and the sidebar says so.
@@ -530,6 +540,8 @@ function Shell() {
                 onAddLot={(holding) => setLotTarget({ holding, lot: null })}
                 onEditLot={(holding, lot) => setLotTarget({ holding, lot })}
               />
+            ) : route === 'siri' ? (
+              <Siri onShowInLedger={openSiriLabel} onOpenTransaction={openTransactionById} />
             ) : route === 'categories' ? (
               <Categories onOpenCategory={openCategoryTransactions} />
             ) : route === 'labels' ? (

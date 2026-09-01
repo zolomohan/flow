@@ -2,6 +2,8 @@ import { invoke } from '@tauri-apps/api/core';
 import type {
   Account,
   AccountInput,
+  Capture,
+  CaptureSync,
   CardsOverview,
   Category,
   CategoryInput,
@@ -59,6 +61,7 @@ export const api = {
 
   listCategories: () => call<Category[]>('list_categories'),
   saveCategory: (input: CategoryInput) => call<Category>('save_category', { input }),
+  reorderCategories: (ids: string[]) => call<void>('reorder_categories', { ids }),
   categoryUsage: () => call<Record<string, number>>('category_usage'),
   reassignCategory: (from: string, to: string, includeChildren: boolean) =>
     call<number>('reassign_category', { from, to, includeChildren }),
@@ -111,6 +114,23 @@ export const api = {
   deleteLabel: (id: string) => call<void>('delete_label', { id }),
   /** "Filed right": clears Triage and teaches the importer the filing. */
   confirmTriage: (ids: string[]) => call<number>('confirm_triage', { ids }),
+
+  /** Reads whatever has been dictated into the drop file and files what it
+   *  can, writing the phone's word list back out on the way. Safe to call as
+   *  often as you like: a line already read is refused by its own digest. */
+  syncCaptures: () => call<CaptureSync>('sync_captures'),
+  /** The captures still waiting for a person, newest first. */
+  listCaptures: () => call<Capture[]>('list_captures'),
+  /** Everything said out loud that made it into the ledger, newest first.
+   *  Each row reads its figures off the posting it became, so correcting a
+   *  transaction corrects the record of it. */
+  captureHistory: () => call<Capture[]>('capture_history'),
+  /** Writes one waiting capture into the ledger, with whatever the Inbox
+   *  filled in for what could not be worked out. */
+  postCapture: (id: string, input: TransactionInput) =>
+    call<Transaction>('post_capture', { id, input }),
+  /** Takes one off the pile without writing anything. */
+  dismissCapture: (id: string) => call<void>('dismiss_capture', { id }),
 
   /** Every saved template, what you reach for most at the top. */
   listTemplates: () => call<TxTemplate[]>('list_templates'),

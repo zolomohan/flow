@@ -4,7 +4,7 @@ import { Icon } from './Icon';
 import { DateField } from './DateField';
 import { TransactionPicker } from './TransactionPicker';
 import {
-  Button, Confirm, Field, OptionRail, Segmented, Select, Sheet, Switch, TextInput,
+  Button, Confirm, Field, OptionRail, Segmented, Sheet, Switch, TextInput,
   type SegmentOption, type SelectOption,
 } from './ui';
 import { useStore } from '../lib/store';
@@ -21,6 +21,14 @@ const RECORD_WAYS: SegmentOption<RecordWay>[] = [
   { value: 'none', label: 'Not recorded', icon: 'circle-dashed' },
   { value: 'link', label: 'Link a record', icon: 'link' },
   { value: 'write', label: 'Add record', icon: 'plus' },
+];
+
+/** A repayment asks the same question, in the order it is usually answered:
+ *  the money is being posted now unless it is already in the book. */
+const PAYMENT_WAYS: SegmentOption<RecordWay>[] = [
+  { value: 'write', label: 'Add record', icon: 'plus' },
+  { value: 'link', label: 'Link a record', icon: 'link' },
+  { value: 'none', label: 'Not recorded', icon: 'circle-dashed' },
 ];
 
 const DIRECTIONS: SegmentOption<DebtDirection>[] = [
@@ -145,12 +153,16 @@ export function DebtSheet({
         merchant: counterparty.trim(),
         note: note.trim() || null,
         occurredAt: `${openedOn}T12:00`,
+        // The posting carries the debt, the way a split's shares are carried
+        // by the bill — but this is the debt itself, not anyone's share of
+        // it, and it should not be read as one.
         shares: [{
           direction,
           counterparty: counterparty.trim(),
           amount: principal,
           dueOn: dueOn || null,
           note: note.trim() || null,
+          fromSplit: false,
         }],
       });
       toast('Debt added');
@@ -308,7 +320,7 @@ export function DebtSheet({
           {/* The three answers are different heights. The sheet carries the
               change now — its canvas is measured — so this only has to bring
               the new answer in behind it. */}
-          <div>
+          <div className="debt-record-slot">
             <motion.div
               key={recordWay}
               className="debt-record-panel"
@@ -343,17 +355,13 @@ export function DebtSheet({
 
               {recordWay === 'write' && (
                 <>
-                  <Field
-                    label={direction === 'lent' ? 'Paid from' : 'Received into'}
-                    error={writeError}
-                  >
-                    <OptionRail
-                      options={accountOptions}
-                      value={writeAccount}
-                      onChange={(id) => { setWriteAccount(id); setWriteError(null); }}
-                      empty="No open accounts yet."
-                    />
-                  </Field>
+                  <OptionRail
+                    options={accountOptions}
+                    value={writeAccount}
+                    onChange={(id) => { setWriteAccount(id); setWriteError(null); }}
+                    empty="No open accounts yet."
+                  />
+                  {writeError && <p className="field-error">{writeError}</p>}
                   {/* What is about to be written, in the same words the row
                       will read in — so it is checked here rather than found
                       in the ledger afterwards. Only once there is something
@@ -420,6 +428,15 @@ export function DebtPaymentSheet({
   onOpenTransaction?: (id: string) => void;
 }) {
   const { accounts, saveDebtPayment, deleteDebtPayment } = useStore();
+  const live = useMemo(() => accounts.filter((a) => !a.archived && !a.system), [accounts]);
+  const accountOptions: SelectOption[] = live.map((a) => ({
+    value: a.id,
+    label: a.name,
+    hint: a.institution ?? undefined,
+    icon: a.icon,
+    color: a.color,
+  }));
+
   const [amount, setAmount] = useState('');
   const [occurredAt, setOccurredAt] = useState(toLocalInput().slice(0, 10));
   const [note, setNote] = useState('');
@@ -428,7 +445,12 @@ export function DebtPaymentSheet({
   // The account the money moved through, when the repayment should post a
   // transfer of its own rather than name one already in the book.
   const [cashId, setCashId] = useState<string | null>(null);
+  // The same three answers a debt itself is entered with, and a fund
+  // purchase after it: post the money now, name what already recorded it, or
+  // keep the repayment and leave the ledger alone.
+  const [recordWay, setRecordWay] = useState<RecordWay>('write');
   const [error, setError] = useState<string | null>(null);
+  const [writeError, setWriteError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
 
   useEffect(() => {
@@ -441,7 +463,13 @@ export function DebtPaymentSheet({
     setTxId(editing?.transactionId ?? null);
     setTxLabel(editing?.transactionLabel ?? null);
     setCashId(editing?.cashAccountId ?? null);
+    // A repayment opens on the way it was written. A new one opens on posting
+    // the money, since that is what recording one usually means.
+    setRecordWay(
+      editing?.transactionId ? 'link' : editing && !editing.cashAccountId ? 'none' : 'write',
+    );
     setError(null);
+    setWriteError(null);
   }, [open, debt, editing]);
 
   if (!debt) return null;
@@ -449,14 +477,18 @@ export function DebtPaymentSheet({
   const submit = async () => {
     const value = rupeesToPaise(amount);
     if (value <= 0) return setError('Enter an amount.');
+    if (recordWay === 'write' && !cashId)
+      return setWriteError('Which account did the money move through?');
+    if (recordWay === 'link' && !txId)
+      return setWriteError('Which record was this repayment?');
     await saveDebtPayment({
       id: editing?.id ?? null,
       debtId: debt.id,
       amount: value,
       occurredAt,
       note: note.trim() || null,
-      transactionId: txId,
-      cashAccountId: txId ? null : cashId,
+      transactionId: recordWay === 'link' ? txId : null,
+      cashAccountId: recordWay === 'write' ? cashId : null,
     });
     onClose();
   };
@@ -523,50 +555,68 @@ export function DebtPaymentSheet({
           />
         </Field>
 
-        {/* Where the money went, in one of two ways: post a transfer for it
-            now, or name the posting that already recorded it. Both would be
-            the same money twice, so choosing one puts the other away. */}
-        {!txId && (
-          <Field
-            label={debt.direction === 'lent' ? 'Money came into' : 'Money went out of'}
-            hint="optional"
-          >
-            <Select
-              options={accounts
-                .filter((a) => !a.archived)
-                .map((a) => ({
-                  value: a.id,
-                  label: a.name,
-                  hint: a.institution ?? undefined,
-                  icon: a.icon,
-                  color: a.color,
-                }))}
-              value={cashId}
-              onChange={setCashId}
-              placeholder="Nothing posted to the ledger"
-              allowClear
-              searchable
-              searchPlaceholder="Find an account"
-            />
-          </Field>
-        )}
+        {/* Where the money went, asked outright rather than left to be
+            guessed from which of two fields was filled in. Posting it now and
+            naming a record that already did would be the same money twice, so
+            it is one answer of three. */}
+        <div className="debt-record">
+          <span className="field-label">The money itself</span>
+          <Segmented
+            options={PAYMENT_WAYS}
+            value={recordWay}
+            onChange={(next) => { setRecordWay(next); setWriteError(null); }}
+            name="debt-payment-record"
+            size="sm"
+          />
+          <div className="debt-record-slot">
+            <motion.div
+              key={recordWay}
+              className="debt-record-panel"
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.2, delay: 0.04, ease: [0.22, 1, 0.36, 1] }}
+            >
+              {recordWay === 'none' && (
+                <p className="page-note is-quiet">
+                  <Icon name="circle-dashed" size={13} />
+                  The repayment comes off the debt, and nothing goes into the
+                  ledger. For money that changed hands in cash.
+                </p>
+              )}
 
-        {!cashId && (
-          <div>
-            <span className="field-label">
-              Linked record
-              <span className="field-hint">optional</span>
-            </span>
-            <TransactionPicker
-              value={txId}
-              label={txLabel}
-              title="Which record was this repayment?"
-              subtitle={`${debt.counterparty} · search and filter your whole ledger`}
-              onChange={(id, label) => { setTxId(id); setTxLabel(label); }}
-              onOpen={onOpenTransaction}
-            />
+              {recordWay === 'link' && (
+                <>
+                  <TransactionPicker
+                    value={txId}
+                    label={txLabel}
+                    title="Which record was this repayment?"
+                    subtitle={`${debt.counterparty} · search and filter your whole ledger`}
+                    browseLabel="Link record"
+                    onChange={(id, label) => {
+                      setTxId(id);
+                      setTxLabel(label);
+                      setWriteError(null);
+                    }}
+                    onOpen={onOpenTransaction}
+                  />
+                  {writeError && <p className="field-error">{writeError}</p>}
+                </>
+              )}
+
+              {recordWay === 'write' && (
+                <>
+                  <OptionRail
+                    options={accountOptions}
+                    value={cashId}
+                    onChange={(id) => { setCashId(id); setWriteError(null); }}
+                    empty="No open accounts yet."
+                  />
+                  {writeError && <p className="field-error">{writeError}</p>}
+                </>
+              )}
+            </motion.div>
           </div>
-        )}
+        </div>
       </div>
 
       <Confirm

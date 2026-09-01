@@ -5,7 +5,7 @@ import { BigMoney } from '../components/Money';
 import { Button, Card, CardHead, Confirm } from '../components/ui';
 import { api } from '../lib/api';
 import { useStore } from '../lib/store';
-import { dayLabel, debtProgress, initials, money } from '../lib/format';
+import { dayLabel, debtProgress, initials, isShareOfBill, money } from '../lib/format';
 import type { Debt, DebtPayment, Transaction } from '../lib/types';
 
 /** Days between now and a date, said the way you would say it. */
@@ -34,11 +34,14 @@ export function DebtDetail({
   onEditPayment: (payment: DebtPayment) => void;
   onOpenTransaction: (tx: Transaction) => void;
 }) {
-  const { revision, deleteDebt } = useStore();
+  const { revision, deleteDebt, saveDebt } = useStore();
   const [entries, setEntries] = useState<Transaction[] | null>(null);
   // Getting rid of the debt belongs where the debt is, beside the way in to
   // changing it — not buried at the foot of the form for editing it.
   const [confirming, setConfirming] = useState(false);
+  // Closing a debt nobody is going to settle. It is the same flag as settling
+  // one, read differently: what is left unpaid becomes what was given up.
+  const [forgiving, setForgiving] = useState(false);
 
   // What the debt is actually made of — the posting that opened it, the ones
   // that repaid it, and whatever else was filed against it. Asked for by the
@@ -58,6 +61,7 @@ export function DebtDetail({
 
   const lent = debt.direction === 'lent';
   const bar = debtProgress(debt);
+  const share = isShareOfBill(debt);
 
   // A repayment and the posting that made it are one thing, not two: the row
   // stands for the repayment, and the posting behind it is a click away
@@ -96,6 +100,24 @@ export function DebtDetail({
   ].sort((a, b) => b.day.localeCompare(a.day));
   const overdue =
     !debt.settled && !!debt.dueOn && debt.dueOn < new Date().toISOString().slice(0, 10);
+  // Only worth offering while something is still outstanding: a debt paid to
+  // the last rupee has nothing left to forgive.
+  const canForgive = !debt.settled && debt.outstanding > 0;
+
+  const forgive = async () => {
+    setForgiving(false);
+    await saveDebt({
+      id: debt.id,
+      direction: debt.direction,
+      counterparty: debt.counterparty,
+      principal: debt.principal,
+      openedOn: debt.openedOn,
+      dueOn: debt.dueOn,
+      note: debt.note,
+      transactionId: debt.transactionId,
+      settled: true,
+    });
+  };
 
   return (
     <div className="screen" style={{ ['--tint' as any]: lent ? 'var(--green)' : 'var(--amber)' }}>
@@ -114,6 +136,20 @@ export function DebtDetail({
               debt.payments.length === 1 ? 'repayment' : 'repayments'
             } against it. The postings in your ledger stay. This cannot be undone.`
           : `${money(debt.principal)} with ${debt.counterparty}. The postings in your ledger stay. This cannot be undone.`}
+      </Confirm>
+
+      <Confirm
+        open={forgiving}
+        title={lent ? 'Forgive what is left?' : 'Write off what is left?'}
+        confirmLabel={lent ? 'Forgive' : 'Write it off'}
+        icon="heart-handshake"
+        tone="primary"
+        onConfirm={forgive}
+        onCancel={() => setForgiving(false)}
+      >
+        {lent
+          ? `${money(debt.outstanding)} of ${money(debt.principal)} never came back. The debt closes with that much given up rather than repaid, and your ledger is left exactly as it is.`
+          : `${money(debt.outstanding)} of ${money(debt.principal)} is no longer being asked of you. The debt closes with that much written off rather than repaid, and your ledger is left exactly as it is.`}
       </Confirm>
 
       <header className="screen-head detail-head">
@@ -135,6 +171,11 @@ export function DebtDetail({
             Delete
           </Button>
           <Button icon="pencil" onClick={onEdit}>Edit</Button>
+          {canForgive && (
+            <Button icon="heart-handshake" onClick={() => setForgiving(true)}>
+              {lent ? 'Forgive' : 'Write off'}
+            </Button>
+          )}
           {!debt.settled && (
             <Button tone="primary" icon="plus" onClick={onRecordPayment}>
               Repayment
@@ -179,7 +220,7 @@ export function DebtDetail({
               </span>
             )}
             {overdue && <span className="debt-tag is-late">Overdue</span>}
-            {debt.fromSplit && (
+            {share && (
               <span className="debt-tag is-link">
                 <Icon name="split" size={11} />
                 Share of {debt.transactionLabel ?? 'a split bill'}

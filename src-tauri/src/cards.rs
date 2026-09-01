@@ -463,9 +463,14 @@ mod tests {
         id
     }
 
+    /// Two months rather than one, because these tests date their postings
+    /// by counting back from today: a charge "ten days ago" is last month for
+    /// the first ten days of every month, and a one-month window would drop
+    /// it. The window is what the figures are read over, so it has to be wide
+    /// enough to hold what the test wrote whatever day the test is run.
     fn only_card(conn: &Connection) -> CardStat {
         let month = Utc::now().format("%Y-%m").to_string();
-        cards_overview(conn, &month, 1).unwrap().cards.remove(0)
+        cards_overview(conn, &month, 2).unwrap().cards.remove(0)
     }
 
     /// A cycle day the month is too short for falls on the last day it has,
@@ -584,12 +589,16 @@ mod tests {
         let card = account(&conn, "credit", 0, 2, 22);
         let other = account(&conn, "credit", 0, 0, 0);
         let bank = account(&conn, "bank", 0, 0, 0);
-        let now = today();
-        let last_month = now - Duration::days(45);
+        // Anchored to the month rather than counted back from today. This
+        // test asserts on one month exactly, and "three days ago" is last
+        // month for the first three days of every month — which quietly
+        // emptied the figures it checks.
+        let this_month = today().with_day(1).unwrap();
+        let last_month = this_month - Duration::days(15);
 
-        post(&conn, "expense", 1_000_00, &card, None, now - Duration::days(2), None);
-        post(&conn, "expense", 400_00, &other, None, now - Duration::days(3), None);
-        post(&conn, "transfer", 600_00, &bank, Some(&card), now - Duration::days(1), None);
+        post(&conn, "expense", 1_000_00, &card, None, this_month, None);
+        post(&conn, "expense", 400_00, &other, None, this_month, None);
+        post(&conn, "transfer", 600_00, &bank, Some(&card), this_month, None);
         post(&conn, "expense", 250_00, &card, None, last_month, None);
 
         let month = Utc::now().format("%Y-%m").to_string();

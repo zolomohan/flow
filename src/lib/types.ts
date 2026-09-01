@@ -182,6 +182,10 @@ export interface TransactionShareInput {
   amount: Paise;
   dueOn: string | null;
   note: string | null;
+  /** Whether this is one person's part of a bill. A debt entered on the debts
+   *  screen writes its posting the same way but is nobody's share of
+   *  anything. Left off, it is a split — which every share off a bill is. */
+  fromSplit?: boolean;
 }
 
 export interface TransactionInput {
@@ -734,6 +738,64 @@ export interface ImportResult {
   /** What the account's opening balance absorbed so the current balance
    *  stayed put while that history went in. */
   openingAdjustment: Paise;
+}
+
+/* --------------------------------------------------------------- captures */
+
+/**
+ * A sentence said to a phone, waiting to become a posting.
+ *
+ * Everything the resolver worked out is optional, because a capture that
+ * reaches the Inbox is by definition one where something could not be. The
+ * words are never optional: what was actually said is the only thing that can
+ * settle an argument with a bad reading.
+ */
+export interface Capture {
+  id: string;
+  /** The dictated words, exactly as they arrived. */
+  said: string;
+  /** The whole line the phone wrote, JSON and all. Empty on captures read
+   *  before the book started keeping it. */
+  raw: string;
+  /** `siri` for the Shortcut, `text` for a line appended by hand. */
+  source: string;
+  capturedAt: string;
+  /** pending | posted | dismissed. */
+  status: string;
+  /** The posting it became, once it has become one. */
+  transactionId: string | null;
+  kind: TxKind | null;
+  /** Zero when no figure could be read out of the sentence. */
+  amount: Paise;
+  accountId: string | null;
+  accountName: string | null;
+  toAccountId: string | null;
+  toAccountName: string | null;
+  categoryId: string | null;
+  categoryName: string | null;
+  categoryIcon: string | null;
+  categoryColor: string | null;
+  categoryGroupName: string | null;
+  merchant: string;
+  occurredAt: string | null;
+  note: string | null;
+  /** What is missing, in words: "amount", "account", "category". */
+  unresolved: string[];
+}
+
+/** What one read of the drop file did. */
+export interface CaptureSync {
+  /** Captures nobody had seen before this read. */
+  found: number;
+  /** How many went straight into the ledger, wearing Triage. */
+  posted: number;
+  /** How many are waiting for a person. */
+  pending: number;
+  /** Where the drop file is read from, and where the book is written out for
+   *  the phone to read — a Shortcut pointed at the wrong folder looks exactly
+   *  like a book that heard nothing. */
+  inbox: string;
+  book: string;
 }
 
 /* -------------------------------------------------------- planned payments */

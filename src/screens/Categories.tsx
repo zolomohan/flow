@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { motion } from 'motion/react';
+import { AnimatePresence, motion, Reorder, useDragControls } from 'motion/react';
 import { CATEGORY_ICON_GROUPS, Icon } from '../components/Icon';
 import {
   Button, Card, CardHead, Empty, Field, IconButton, Segmented, Select, Sheet, TextInput,
@@ -88,6 +88,9 @@ function CategoriesPanel({ onOpen, onOpenCategory }: {
   const count = (id: string) => categoryUsage[id] ?? 0;
   const filed = mine.reduce((sum, c) => sum + count(c.id), 0);
 
+  // Kept mounted through its own closing animation, like the category sheet.
+  const [ordering, setOrdering] = useState(false);
+
   const newCategory = () => onOpen({ category: null, kind, mode: 'form' });
 
   return (
@@ -101,6 +104,14 @@ function CategoriesPanel({ onOpen, onOpenCategory }: {
         action={
           <div className="cat-head-actions">
             <Segmented options={KINDS} value={kind} onChange={setKind} name="cat-kind-filter" size="sm" />
+            <Button
+              size="sm"
+              icon="arrow-up-down"
+              disabled={mine.length < 2}
+              onClick={() => setOrdering(true)}
+            >
+              Reorder
+            </Button>
             <Button size="sm" tone="primary" icon="plus" onClick={newCategory}>
               New category
             </Button>
@@ -157,6 +168,8 @@ function CategoriesPanel({ onOpen, onOpenCategory }: {
           })}
         </motion.div>
       )}
+
+      <ReorderSheet open={ordering} kind={kind} onClose={() => setOrdering(false)} />
     </Card>
   );
 }
@@ -230,6 +243,242 @@ function CategoryRow({
         />
       </div>
     </div>
+  );
+}
+
+/* ---------------------------------------------------------------- Reorder */
+
+/** Every group of a kind, each followed by its own children, as one list of
+ *  ids — the shape the order is saved in, and the one to compare against to
+ *  know whether anything actually moved. */
+const flatten = (groups: string[], children: Record<string, string[]>) =>
+  groups.flatMap((id) => [id, ...(children[id] ?? [])]);
+
+/**
+ * The order the categories appear in, everywhere: drag the groups into place,
+ * open one to sort what sits under it. A level only ever sorts against
+ * itself, so a sub-category can never be dragged out of its group by
+ * accident — moving one between groups is the form's job, not this.
+ */
+function ReorderSheet({ open, kind, onClose }: {
+  open: boolean;
+  kind: CategoryKind;
+  onClose: () => void;
+}) {
+  const { categories, categoryUsage, reorderCategories } = useStore();
+
+  const byId = useMemo(
+    () => new Map(categories.map((c) => [c.id, c])),
+    [categories],
+  );
+
+  const saved = useMemo(() => {
+    const mine = categories.filter((c) => c.kind === kind);
+    const groups = mine.filter((c) => !c.parentId).map((c) => c.id);
+    const children: Record<string, string[]> = {};
+    for (const id of groups) {
+      children[id] = mine.filter((c) => c.parentId === id).map((c) => c.id);
+    }
+    return { groups, children };
+  }, [categories, kind]);
+
+  const [groups, setGroups] = useState<string[]>([]);
+  const [children, setChildren] = useState<Record<string, string[]>>({});
+  // One group open at a time: the popup stays short enough to drag across.
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setGroups(saved.groups);
+    setChildren(saved.children);
+    setExpanded(null);
+    setBusy(false);
+  }, [open, saved]);
+
+  const moved =
+    flatten(groups, children).join() !== flatten(saved.groups, saved.children).join();
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      await reorderCategories(flatten(groups, children));
+      onClose();
+    } catch {
+      // The store already raised a toast; keep the order on screen to retry.
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Sheet
+      open={open}
+      onClose={onClose}
+      title="Reorder categories"
+      width={440}
+      footer={
+        <>
+          <span />
+          <div className="foot-actions">
+            <Button tone="ghost" onClick={onClose}>Cancel</Button>
+            <Button tone="primary" disabled={!moved || busy} onClick={save}>
+              Save order
+            </Button>
+          </div>
+        </>
+      }
+    >
+      <Reorder.Group
+        as="div"
+        axis="y"
+        className="ro-list"
+        values={groups}
+        onReorder={setGroups}
+      >
+        {groups.map((id) => {
+          const group = byId.get(id);
+          if (!group) return null;
+          const subs = children[id] ?? [];
+          return (
+            <ReorderGroupRow
+              key={id}
+              group={group}
+              subs={subs}
+              byId={byId}
+              usage={categoryUsage}
+              expanded={expanded === id}
+              onToggle={() => setExpanded((current) => (current === id ? null : id))}
+              onReorderSubs={(next) => setChildren((all) => ({ ...all, [id]: next }))}
+            />
+          );
+        })}
+      </Reorder.Group>
+    </Sheet>
+  );
+}
+
+function ReorderGroupRow({
+  group, subs, byId, usage, expanded, onToggle, onReorderSubs,
+}: {
+  group: Category;
+  subs: string[];
+  byId: Map<string, Category>;
+  usage: Record<string, number>;
+  expanded: boolean;
+  onToggle: () => void;
+  onReorderSubs: (next: string[]) => void;
+}) {
+  // Dragging starts at the grip alone, so a click can still open the group —
+  // and so a sub-category being dragged never takes its group with it.
+  const controls = useDragControls();
+
+  return (
+    <Reorder.Item
+      as="div"
+      value={group.id}
+      dragListener={false}
+      dragControls={controls}
+      className={`ro-item ${expanded ? 'is-open' : ''}`}
+      style={{ ['--cat' as any]: group.color }}
+    >
+      <div className="ro-row">
+        <span
+          className="ro-grip"
+          title={`Drag to move ${group.name}`}
+          onPointerDown={(e) => controls.start(e)}
+        >
+          <Icon name="grip-vertical" size={15} />
+        </span>
+        <button
+          className="ro-main"
+          onClick={onToggle}
+          disabled={subs.length === 0}
+          aria-expanded={expanded}
+          title={
+            subs.length
+              ? `${expanded ? 'Hide' : 'Show'} the sub-categories of ${group.name}`
+              : `${group.name} has no sub-categories`
+          }
+        >
+          <span className="ro-glyph">
+            <Icon name={group.icon} size={16} strokeWidth={2.1} />
+          </span>
+          <span className="ro-text">
+            <strong>{group.name}</strong>
+            <span>
+              {subs.length
+                ? `${subs.length} sub-${subs.length === 1 ? 'category' : 'categories'}`
+                : 'no sub-categories'}
+            </span>
+          </span>
+          {subs.length > 0 && (
+            <motion.span
+              className="ro-caret"
+              animate={{ rotate: expanded ? 180 : 0 }}
+              transition={spring}
+            >
+              <Icon name="chevron-down" size={15} />
+            </motion.span>
+          )}
+        </button>
+      </div>
+
+      <AnimatePresence initial={false}>
+        {expanded && subs.length > 0 && (
+          <motion.div
+            className="ro-subs"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={spring}
+          >
+            <Reorder.Group
+              as="div"
+              axis="y"
+              className="ro-sublist"
+              values={subs}
+              onReorder={onReorderSubs}
+            >
+              {subs.map((id) => {
+                const child = byId.get(id);
+                return child ? (
+                  <ReorderSubRow key={id} category={child} count={usage[id] ?? 0} />
+                ) : null;
+              })}
+            </Reorder.Group>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </Reorder.Item>
+  );
+}
+
+function ReorderSubRow({ category, count }: { category: Category; count: number }) {
+  const controls = useDragControls();
+  return (
+    <Reorder.Item
+      as="div"
+      value={category.id}
+      dragListener={false}
+      dragControls={controls}
+      className="ro-row is-sub"
+      style={{ ['--cat' as any]: category.color }}
+    >
+      <span
+        className="ro-grip"
+        title={`Drag to move ${category.name}`}
+        onPointerDown={(e) => controls.start(e)}
+      >
+        <Icon name="grip-vertical" size={14} />
+      </span>
+      <span className="ro-glyph">
+        <Icon name={category.icon} size={13} strokeWidth={2.1} />
+      </span>
+      <span className="ro-text">
+        <strong>{category.name}</strong>
+        <span>{count ? plural(count) : 'nothing filed here yet'}</span>
+      </span>
+    </Reorder.Item>
   );
 }
 

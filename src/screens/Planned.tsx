@@ -1,23 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
+import { motion } from 'motion/react';
 import { Icon } from '../components/Icon';
 import { MerchantLogo } from '../components/MerchantLogo';
 import { PlanCalendar } from '../components/PlanCalendar';
 import { PlanDetail } from './PlanDetail';
-import {
-  Button, Card, CardHead, Empty, Meter, MoreMenu, Segmented, type SegmentOption,
-} from '../components/ui';
+import { Button, Card, Empty, MoreMenu } from '../components/ui';
 import { api } from '../lib/api';
 import { useStore } from '../lib/store';
 import {
-  cadenceLabel, cadenceSuffix, dueLabel, hasRisen, isLive, monthlyTotal,
+  cadenceLabel, cadenceSuffix, dueLabel, isLive, monthlyTotal,
 } from '../lib/plans';
-import { compactMoney, money, monthKey, shiftMonth, shortDayLabel } from '../lib/format';
+import { money, monthKey, shiftMonth, shortDayLabel } from '../lib/format';
 import { itemVariants, listVariants } from '../lib/motion';
 import type { Plan, PlanOccurrence, PlanPosting } from '../lib/types';
 import type { PlanDraft } from '../components/PlanSheet';
-
-type Tab = 'upcoming' | 'calendar' | 'all';
 
 const tint = (plan: Plan) =>
   plan.categoryColor ?? (plan.kind === 'income' ? 'var(--green)' : 'var(--ink-3)');
@@ -31,8 +27,7 @@ export function Planned({
   onLinkPlan: (plan: Plan) => void;
   onOpenTransaction: (transactionId: string) => void;
 }) {
-  const { plans, overview, revision, skipPlan, payPlan, setPlanArchived } = useStore();
-  const [tab, setTab] = useState<Tab>('upcoming');
+  const { plans, revision, skipPlan, payPlan, setPlanArchived } = useStore();
   // Held by id rather than by object, so the open page follows the plan
   // through every write the store makes.
   const [openId, setOpenId] = useState<string | null>(null);
@@ -41,22 +36,14 @@ export function Planned({
 
   const live = useMemo(() => plans.filter(isLive), [plans]);
   const committed = monthlyTotal(plans, 'expense');
-  const incoming = monthlyTotal(plans, 'income');
   const yearly = live
     .filter((p) => p.kind === 'expense')
     .reduce((sum, p) => sum + p.yearlyAmount, 0);
-  const soon = live.filter((p) => p.daysUntil !== null && p.daysUntil <= 7);
-  const soonTotal = soon.reduce((sum, p) => sum + p.amount, 0);
-  const risen = useMemo(() => plans.filter(hasRisen), [plans]);
   const lapsed = plans.filter((p) => p.status === 'lapsed' && !p.archived);
-  const share = overview && overview.income > 0
-    ? Math.round((committed / overview.income) * 100)
-    : null;
 
   // The calendar asks for whatever month it is showing, and again after any
   // write — marking one paid should tick that day off without a reload.
   useEffect(() => {
-    if (tab !== 'calendar') return;
     const [y, m] = month.split('-').map(Number);
     const last = new Date(y, m, 0).getDate();
     let cancelled = false;
@@ -65,13 +52,7 @@ export function Planned({
       .then((rows) => { if (!cancelled) setOccurrences(rows); })
       .catch(() => { if (!cancelled) setOccurrences([]); });
     return () => { cancelled = true; };
-  }, [tab, month, revision]);
-
-  const tabs: SegmentOption<Tab>[] = [
-    { value: 'upcoming', label: 'Upcoming', icon: 'calendar-days' },
-    { value: 'calendar', label: 'Calendar', icon: 'grid-2x2' },
-    { value: 'all', label: `All${plans.length ? ` · ${plans.length}` : ''}`, icon: 'repeat' },
-  ];
+  }, [month, revision]);
 
   const viewing = openId ? plans.find((p) => p.id === openId) ?? null : null;
   if (viewing) {
@@ -93,7 +74,7 @@ export function Planned({
           <h1>Planned</h1>
           <p>
             {live.length
-              ? `${live.length} running · ${money(committed)} a month committed`
+              ? `${live.length} running · ${money(committed)} a month committed · ${money(yearly)} a year`
               : 'Rent, subscriptions, EMIs — the money that comes round again.'}
           </p>
         </div>
@@ -103,44 +84,6 @@ export function Planned({
           </Button>
         </div>
       </header>
-
-      <motion.div className="stat-row" variants={listVariants} initial="initial" animate="animate">
-        <Stat
-          icon="repeat"
-          label="Committed each month"
-          value={money(committed)}
-          hint={
-            share !== null
-              ? `${share}% of what came in this month`
-              : `${live.filter((p) => p.kind === 'expense').length} plans going out`
-          }
-          tone={share !== null && share > 50 ? 'bad' : 'flat'}
-        />
-        <Stat
-          icon="calendar-days"
-          label="Due in the next week"
-          value={money(soonTotal)}
-          hint={soon.length ? `${soon.length} ${soon.length === 1 ? 'payment' : 'payments'}` : 'nothing falls due'}
-          tone={soon.some((p) => (p.daysUntil ?? 0) < 0) ? 'bad' : 'flat'}
-        />
-        <Stat
-          icon="banknote"
-          label="A year of this"
-          value={money(yearly)}
-          hint={incoming > 0 ? `against ${compactMoney(incoming * 12)} planned in` : 'at today’s prices'}
-        />
-        <Stat
-          icon={risen.length ? 'trending-up' : 'shield-check'}
-          label={risen.length ? 'Quietly gone up' : 'Prices holding'}
-          value={risen.length ? String(risen.length) : '—'}
-          hint={
-            risen.length
-              ? `${risen[0].name} is ${money(risen[0].drift)} more`
-              : 'nothing has crept up on you'
-          }
-          tone={risen.length ? 'bad' : 'good'}
-        />
-      </motion.div>
 
       {lapsed.length > 0 && (
         <Card className="plan-nudge">
@@ -157,8 +100,7 @@ export function Planned({
               {lapsed.length === 1 ? 'it' : 'them'}. Putting{' '}
               {lapsed.length === 1 ? 'it' : 'them'} away stops{' '}
               {lapsed.length === 1 ? 'it' : 'them'} counting toward what you
-              owe each month; you’ll still find{' '}
-              {lapsed.length === 1 ? 'it' : 'them'} under All.
+              owe each month.
             </p>
           </div>
           <Button
@@ -185,48 +127,26 @@ export function Planned({
         </Card>
       ) : (
         <>
-          <div className="screen-tabs">
-            <Segmented options={tabs} value={tab} onChange={setTab} name="plan-tab" />
-          </div>
+          <Card padded={false} className="plan-cal-card">
+            <PlanCalendar
+              month={month}
+              onMonthChange={setMonth}
+              occurrences={occurrences}
+              onOpenPlan={setOpenId}
+              onOpenTransaction={onOpenTransaction}
+            />
+          </Card>
 
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.div
-              key={tab}
-              className="tab-panel"
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              transition={{ duration: 0.16 }}
-            >
-              {tab === 'upcoming' && (
-                <Upcoming
-                  plans={plans}
-                  onOpen={setOpenId}
-                  onEdit={onEditPlan}
-                  onLink={onLinkPlan}
-                  onPay={(plan) => payPlan(plan.id)}
-                  onSkip={(plan) => skipPlan(plan.id)}
-                  onArchive={(plan) => setPlanArchived(plan.id, true)}
-                  onOpenTransaction={onOpenTransaction}
-                />
-              )}
-
-              {tab === 'calendar' && (
-                <Card padded={false} className="plan-cal-card">
-                  <PlanCalendar
-                    month={month}
-                    onMonthChange={setMonth}
-                    occurrences={occurrences}
-                    onOpenPlan={setOpenId}
-                    onOpenTransaction={onOpenTransaction}
-                  />
-                </Card>
-              )}
-
-              {tab === 'all' && <AllPlans plans={plans} onOpen={setOpenId} />}
-
-            </motion.div>
-          </AnimatePresence>
+          <Upcoming
+            plans={plans}
+            onOpen={setOpenId}
+            onEdit={onEditPlan}
+            onLink={onLinkPlan}
+            onPay={(plan) => payPlan(plan.id)}
+            onSkip={(plan) => skipPlan(plan.id)}
+            onArchive={(plan) => setPlanArchived(plan.id, true)}
+            onOpenTransaction={onOpenTransaction}
+          />
         </>
       )}
     </div>
@@ -298,7 +218,6 @@ function Upcoming({
             <h2 className="group-title">
               {shelf.name}
               <span>{money(total)}</span>
-              <em>{shelf.plans.length} {shelf.plans.length === 1 ? 'payment' : 'payments'}</em>
             </h2>
             <motion.div
               className="plan-list"
@@ -427,111 +346,3 @@ function PaymentSpark({
   );
 }
 
-/* -------------------------------------------------------------- every plan */
-
-function AllPlans({ plans, onOpen }: { plans: Plan[]; onOpen: (id: string) => void }) {
-  const groups = [
-    { name: 'Going out', kind: 'expense' as const },
-    { name: 'Coming in', kind: 'income' as const },
-    { name: 'Moving between accounts', kind: 'transfer' as const },
-  ];
-  const away = plans.filter((p) => p.archived || p.status === 'ended');
-  const biggest = Math.max(
-    1,
-    ...plans.filter((p) => !p.archived).map((p) => p.monthlyAmount),
-  );
-
-  return (
-    <>
-      {groups.map((group) => {
-        const mine = plans.filter((p) => !p.archived && p.status !== 'ended' && p.kind === group.kind);
-        if (!mine.length) return null;
-        const total = mine.reduce((sum, p) => sum + p.monthlyAmount, 0);
-        return (
-          <Card key={group.kind}>
-            <CardHead
-              title={group.name}
-              hint={`${money(total)} a month across ${mine.length} ${mine.length === 1 ? 'plan' : 'plans'}`}
-            />
-            <motion.ul
-              className="breakdown"
-              variants={listVariants}
-              initial="initial"
-              animate="animate"
-            >
-              {[...mine]
-                .sort((a, b) => b.monthlyAmount - a.monthlyAmount)
-                .map((plan) => (
-                  <motion.li key={plan.id} variants={itemVariants}>
-                    <button className="breakdown-row" onClick={() => onOpen(plan.id)}>
-                      <span className="cat-swatch" style={{ background: tint(plan) }}>
-                        <Icon name={plan.categoryIcon ?? 'repeat'} size={12} strokeWidth={2.3} />
-                      </span>
-                      <div className="breakdown-main">
-                        <div className="breakdown-top">
-                          <span>
-                            {plan.name}
-                            <em className="plan-inline-note">
-                              {' '}{cadenceLabel(plan.cadence, plan.every).toLowerCase()}
-                            </em>
-                          </span>
-                          <strong>{money(plan.monthlyAmount)}<em>/mo</em></strong>
-                        </div>
-                        <Meter value={plan.monthlyAmount / biggest} color={tint(plan)} />
-                      </div>
-                      <span className="breakdown-pct">{money(plan.amount)}</span>
-                    </button>
-                  </motion.li>
-                ))}
-            </motion.ul>
-          </Card>
-        );
-      })}
-
-      {away.length > 0 && (
-        <Card>
-          <CardHead title="Put away" hint="Finished, or no longer counted" />
-          <motion.ul className="breakdown" variants={listVariants} initial="initial" animate="animate">
-            {away.map((plan) => (
-              <motion.li key={plan.id} variants={itemVariants}>
-                <button className="breakdown-row is-quiet" onClick={() => onOpen(plan.id)}>
-                  <span className="cat-swatch" style={{ background: 'var(--ink-4)' }}>
-                    <Icon name="circle-dashed" size={12} strokeWidth={2.3} />
-                  </span>
-                  <div className="breakdown-main">
-                    <div className="breakdown-top">
-                      <span>{plan.name}</span>
-                      <strong>{money(plan.observedTotal)}</strong>
-                    </div>
-                  </div>
-                  <span className="breakdown-pct">{plan.paidCount} paid</span>
-                </button>
-              </motion.li>
-            ))}
-          </motion.ul>
-        </Card>
-      )}
-    </>
-  );
-}
-
-function Stat({
-  label, value, hint, icon, tone = 'flat',
-}: {
-  label: string;
-  value: string;
-  hint: string;
-  icon: string;
-  tone?: 'good' | 'bad' | 'flat';
-}) {
-  return (
-    <motion.div className={`stat stat-${tone}`} variants={itemVariants} whileHover={{ y: -2 }}>
-      <span className="stat-glyph">
-        <Icon name={icon} size={16} />
-      </span>
-      <span className="stat-label">{label}</span>
-      <strong className="stat-value">{value}</strong>
-      <span className="stat-hint">{hint}</span>
-    </motion.div>
-  );
-}

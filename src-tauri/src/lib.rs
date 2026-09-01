@@ -1,3 +1,4 @@
+mod capture;
 mod cards;
 mod db;
 mod demo;
@@ -28,22 +29,41 @@ fn list_accounts(db: State<Db>) -> R<Vec<Account>> {
 
 #[tauri::command]
 fn save_account(db: State<Db>, input: AccountInput) -> R<Account> {
-    with_db(&db, |c| db::save_account(c, input))
+    with_db(&db, |c| {
+        let account = db::save_account(c, input)?;
+        // The phone names accounts by the words in its word list. Rewriting
+        // it here is what makes an account openable and immediately sayable.
+        let _ = capture::write_book(c);
+        Ok(account)
+    })
 }
 
 #[tauri::command]
 fn set_account_archived(db: State<Db>, id: String, archived: bool) -> R<()> {
-    with_db(&db, |c| db::set_account_archived(c, &id, archived))
+    with_db(&db, |c| {
+        db::set_account_archived(c, &id, archived)?;
+        // An archived account can take nothing, so it leaves the word list.
+        let _ = capture::write_book(c);
+        Ok(())
+    })
 }
 
 #[tauri::command]
 fn delete_account(db: State<Db>, id: String) -> R<()> {
-    with_db(&db, |c| db::delete_account(c, &id))
+    with_db(&db, |c| {
+        db::delete_account(c, &id)?;
+        let _ = capture::write_book(c);
+        Ok(())
+    })
 }
 
 #[tauri::command]
 fn reorder_accounts(db: State<Db>, ids: Vec<String>) -> R<()> {
-    with_db(&db, |c| db::reorder_accounts(c, ids))
+    with_db(&db, |c| {
+        db::reorder_accounts(c, ids)?;
+        let _ = capture::write_book(c);
+        Ok(())
+    })
 }
 
 #[tauri::command]
@@ -53,7 +73,22 @@ fn list_categories(db: State<Db>) -> R<Vec<Category>> {
 
 #[tauri::command]
 fn save_category(db: State<Db>, input: CategoryInput) -> R<Category> {
-    with_db(&db, |c| db::save_category(c, input))
+    with_db(&db, |c| {
+        let category = db::save_category(c, input)?;
+        let _ = capture::write_book(c);
+        Ok(category)
+    })
+}
+
+#[tauri::command]
+fn reorder_categories(db: State<Db>, ids: Vec<String>) -> R<()> {
+    with_db(&db, |c| {
+        db::reorder_categories(c, ids)?;
+        // The word list is read in the order it is written, and the order is
+        // yours: what you keep at the top is what the model sees first.
+        let _ = capture::write_book(c);
+        Ok(())
+    })
 }
 
 #[tauri::command]
@@ -78,7 +113,11 @@ fn delete_category(
     reassign_to: Option<String>,
     delete_children: bool,
 ) -> R<()> {
-    with_db(&db, |c| db::delete_category(c, &id, reassign_to, delete_children))
+    with_db(&db, |c| {
+        db::delete_category(c, &id, reassign_to, delete_children)?;
+        let _ = capture::write_book(c);
+        Ok(())
+    })
 }
 
 #[tauri::command]
@@ -237,6 +276,50 @@ fn use_template(db: State<Db>, id: String) -> R<()> {
 #[tauri::command]
 fn confirm_triage(db: State<Db>, ids: Vec<String>) -> R<i64> {
     with_db(&db, |c| db::confirm_triage(c, &ids))
+}
+
+/* --------------------------------------------------------------- captures */
+
+/// Reads whatever the phone has dictated into the drop file, files what it
+/// can, and writes the word list back out. Safe to call as often as you like:
+/// a line already read is refused by its own digest.
+#[tauri::command]
+fn sync_captures(db: State<Db>) -> R<CaptureSync> {
+    with_db(&db, capture::sync)
+}
+
+#[tauri::command]
+fn list_captures(db: State<Db>) -> R<Vec<Capture>> {
+    with_db(&db, capture::pending)
+}
+
+/// Everything said out loud that made it into the ledger, newest first.
+#[tauri::command]
+fn capture_history(db: State<Db>) -> R<Vec<Capture>> {
+    with_db(&db, capture::history)
+}
+
+/// Writes one waiting capture into the ledger, with whatever the Inbox
+/// filled in for what the resolver could not work out.
+#[tauri::command]
+fn post_capture(db: State<Db>, id: String, input: TransactionInput) -> R<Transaction> {
+    with_db(&db, |c| capture::post(c, &id, input))
+}
+
+#[tauri::command]
+fn dismiss_capture(db: State<Db>, id: String) -> R<()> {
+    with_db(&db, |c| capture::dismiss(c, &id))
+}
+
+/// Where the drop file and the word list live, so Settings can say so.
+#[tauri::command]
+fn capture_paths(db: State<Db>) -> R<(String, String)> {
+    with_db(&db, |c| {
+        Ok((
+            capture::inbox_path(c).to_string_lossy().into_owned(),
+            capture::book_text_path(c).to_string_lossy().into_owned(),
+        ))
+    })
 }
 
 /* ------------------------------------------------------- planned payments */
@@ -504,13 +587,21 @@ fn import_book(db: State<Db>, from: String) -> R<String> {
         "midas-replaced-{}.sqlite3",
         chrono::Local::now().format("%Y%m%d-%H%M%S")
     ));
-    with_db(&db, |c| db::import_book(c, &source, &backup))?;
+    with_db(&db, |c| {
+        db::import_book(c, &source, &backup)?;
+        let _ = capture::write_book(c);
+        Ok(())
+    })?;
     Ok(backup.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
 fn reset_all(db: State<Db>) -> R<()> {
-    with_db(&db, db::reset)
+    with_db(&db, |c| {
+        db::reset(c)?;
+        let _ = capture::write_book(c);
+        Ok(())
+    })
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -532,6 +623,11 @@ pub fn run() {
                 db::set_setting(&conn, "seeded", "1").map_err(std::io::Error::other)?;
             }
 
+            // The phone reads this book's accounts and categories out of a
+            // file beside the drop. Written at launch as well as on every
+            // change, so a fresh install has one before the first sentence.
+            let _ = capture::write_book(&conn);
+
             app.manage(Db(Mutex::new(conn)));
             Ok(())
         })
@@ -543,6 +639,7 @@ pub fn run() {
             reorder_accounts,
             list_categories,
             save_category,
+            reorder_categories,
             category_usage,
             reassign_category,
             delete_category,
@@ -567,6 +664,12 @@ pub fn run() {
             save_label,
             delete_label,
             confirm_triage,
+            sync_captures,
+            list_captures,
+            capture_history,
+            post_capture,
+            dismiss_capture,
+            capture_paths,
             list_templates,
             save_template,
             delete_template,

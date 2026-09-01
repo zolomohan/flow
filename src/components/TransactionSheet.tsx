@@ -1754,8 +1754,16 @@ export function TransactionSheet({
                         return (
                           <span className="split-recap-part" key={i}>
                             <i style={{ background: category?.color ?? 'var(--ink-4)' }} />
-                            {category?.name ?? 'Uncategorised'}
-                            <em>{money(part.amount)}</em>
+                            <span className="split-recap-what">
+                              {category?.name ?? 'Uncategorised'}
+                              {/* What the part was for, under what it was
+                                  filed as. On a split bill the note is the
+                                  only thing telling two parts of the same
+                                  category apart, so hiding it here left the
+                                  column saying less than the row does. */}
+                              {part.note && <em>{part.note}</em>}
+                            </span>
+                            <em className="split-recap-amount">{money(part.amount)}</em>
                           </span>
                         );
                       })}

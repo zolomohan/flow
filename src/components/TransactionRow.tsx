@@ -6,7 +6,7 @@ import { Amount } from './Money';
 import { MoreMenu } from './ui';
 import { spring } from '../lib/motion';
 import { initials, money, timeLabel } from '../lib/format';
-import type { Transaction } from '../lib/types';
+import type { Paise, Transaction, TransactionSplit } from '../lib/types';
 
 /** One posting. Transfers borrow the source account's colour; the rest use
  *  their category so the list scans by colour before it scans by text.
@@ -14,6 +14,34 @@ import type { Transaction } from '../lib/types';
  *  A split bill is still one posting and still one row: the parts it was cut
  *  into, and the people who owe some of it, unfold underneath rather than
  *  filling the ledger with entries the bank never saw. */
+/**
+ * The parts of a bill folded by what they were filed under.
+ *
+ * Two lines under one category are one answer to "how was this split", and a
+ * strip that says "Coffee, Coffee" says less than "Coffee ₹150" does. The
+ * parts stay whole inside: each carries a note of its own, and reading those
+ * is what opening the row is for.
+ */
+function byCategory(splits: TransactionSplit[]) {
+  const folded = new Map<string, { key: string; amount: Paise;
+    categoryName: string | null; categoryColor: string | null }>();
+  for (const part of splits) {
+    const key = part.categoryId ?? 'uncategorised';
+    const already = folded.get(key);
+    if (already) {
+      already.amount += part.amount;
+    } else {
+      folded.set(key, {
+        key,
+        amount: part.amount,
+        categoryName: part.categoryName,
+        categoryColor: part.categoryColor,
+      });
+    }
+  }
+  return [...folded.values()];
+}
+
 export function TransactionRow({
   tx, onClick, onSplit, onDebt, onRefund, showDate, selected, onSelect, enterDelay = 0,
 }: {
@@ -232,8 +260,8 @@ export function TransactionRow({
                 find out. The amounts wait inside. */}
             {tx.splits.length > 0 && (
               <span className="tx-bill-parts">
-                {tx.splits.map((part) => (
-                  <span key={part.id} className="tx-bill-part">
+                {byCategory(tx.splits).map((part) => (
+                  <span key={part.key} className="tx-bill-part">
                     <i style={{ background: part.categoryColor ?? 'var(--ink-4)' }} />
                     {part.categoryName ?? 'Uncategorised'}
                     <em>{money(part.amount)}</em>

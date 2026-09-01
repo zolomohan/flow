@@ -211,6 +211,13 @@ pub struct TransactionShareInput {
     pub amount: Paise,
     pub due_on: Option<String>,
     pub note: Option<String>,
+    /// Whether this is one person's part of a bill. A debt entered on the
+    /// debts screen writes its posting through here too — it is carried by
+    /// that posting the same way, but it is nobody's share of anything, and
+    /// saying it is puts "Share of Pooja" under a debt with Pooja. Absent
+    /// means a split, which is what every share from the split editor is.
+    #[serde(default)]
+    pub from_split: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -247,6 +254,67 @@ pub struct LabelInput {
     pub id: Option<String>,
     pub name: String,
     pub color: String,
+}
+
+/* --------------------------------------------------------------- captures */
+
+/// A sentence said to a phone, as the Inbox shows it: the words, and what
+/// the book managed to make of them. Everything the resolver worked out is
+/// optional, because a capture waiting for a person is precisely one where
+/// something could not be worked out.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Capture {
+    pub id: String,
+    /// The dictated words, exactly as they arrived. Never rewritten.
+    pub said: String,
+    /// The whole line the phone wrote, JSON and all. Empty on captures read
+    /// before the book started keeping it.
+    pub raw: String,
+    /// Where it came from — `siri` for the Shortcut, `text` for a bare line
+    /// somebody appended by hand.
+    pub source: String,
+    pub captured_at: String,
+    /// pending | posted | dismissed.
+    pub status: String,
+    /// The posting it became, once it has become one.
+    pub transaction_id: Option<String>,
+    /// income | expense | transfer, guessed from the verb.
+    pub kind: Option<String>,
+    /// Zero when no figure could be read out of the sentence.
+    pub amount: Paise,
+    pub account_id: Option<String>,
+    pub account_name: Option<String>,
+    pub to_account_id: Option<String>,
+    pub to_account_name: Option<String>,
+    pub category_id: Option<String>,
+    pub category_name: Option<String>,
+    pub category_icon: Option<String>,
+    pub category_color: Option<String>,
+    pub category_group_name: Option<String>,
+    pub merchant: String,
+    pub occurred_at: Option<String>,
+    pub note: Option<String>,
+    /// What is missing, in words: "amount", "account", "category". The Inbox
+    /// says what a row is waiting on rather than making you work it out.
+    pub unresolved: Vec<String>,
+}
+
+/// What one read of the drop file did.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureSync {
+    /// Captures nobody had seen before this read.
+    pub found: i64,
+    /// How many of those went straight into the ledger, wearing Triage.
+    pub posted: i64,
+    /// How many are waiting in the Inbox for a person.
+    pub pending: i64,
+    /// Where the drop file is looked for, and where the book is written out
+    /// for the phone to read — a Shortcut pointed at the wrong folder looks
+    /// exactly like a book that heard nothing.
+    pub inbox: String,
+    pub book: String,
 }
 
 /* -------------------------------------------------------------- templates */
@@ -414,7 +482,10 @@ pub struct Overview {
     pub expense: Paise,
     pub prev_income: Paise,
     pub prev_expense: Paise,
-    /// Running balance at the end of each day of the window, for the hero sparkline.
+    /// What the live accounts held, for the hero line: the level the window
+    /// opened at, then one point per day. One longer than the window, so the
+    /// first day's movement is a fall from somewhere rather than the place
+    /// the line happens to start.
     pub balance_series: Vec<Paise>,
     pub daily_flow: Vec<FlowPoint>,
     pub monthly_flow: Vec<FlowPoint>,

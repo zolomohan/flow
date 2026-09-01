@@ -107,7 +107,7 @@ pub fn open(path: &Path) -> Result<Connection> {
     Ok(conn)
 }
 
-fn migrate(conn: &Connection) -> Result<()> {
+pub(crate) fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS accounts (
@@ -406,9 +406,47 @@ fn migrate(conn: &Connection) -> Result<()> {
             category_id TEXT PRIMARY KEY REFERENCES categories(id) ON DELETE CASCADE,
             tag         TEXT NOT NULL
         );
+
+        -- A sentence said out loud, and what the book made of it. The words
+        -- are kept whatever happens to them: a capture that resolved wrongly
+        -- can only be argued with if what was actually said is still here.
+        --
+        -- The digest is the line as it arrived, so re-reading the drop file
+        -- can never write the same capture twice. Everything the resolver
+        -- worked out is nullable, because not knowing is the normal case and
+        -- the Inbox exists to be told.
+        CREATE TABLE IF NOT EXISTS captures (
+            id             TEXT PRIMARY KEY,
+            digest         TEXT NOT NULL UNIQUE,
+            said           TEXT NOT NULL,
+            source         TEXT NOT NULL DEFAULT 'siri',
+            captured_at    TEXT NOT NULL,
+            ingested_at    TEXT NOT NULL,
+            kind           TEXT,
+            amount         INTEGER NOT NULL DEFAULT 0,
+            account_id     TEXT REFERENCES accounts(id) ON DELETE SET NULL,
+            to_account_id  TEXT REFERENCES accounts(id) ON DELETE SET NULL,
+            category_id    TEXT REFERENCES categories(id) ON DELETE SET NULL,
+            merchant       TEXT NOT NULL DEFAULT '',
+            occurred_at    TEXT,
+            note           TEXT,
+            status         TEXT NOT NULL DEFAULT 'pending'
+                           CHECK (status IN ('pending','posted','dismissed')),
+            transaction_id TEXT REFERENCES transactions(id) ON DELETE SET NULL,
+            -- What the resolver could not work out, comma separated: the
+            -- Inbox reads it back to say what a row is waiting on.
+            unresolved     TEXT NOT NULL DEFAULT '',
+            -- The line exactly as the phone wrote it, JSON and all. Kept
+            -- because a reading you disagree with can only be argued with
+            -- against what was actually sent.
+            raw            TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_captures_status ON captures(status, captured_at DESC);
         ",
     )
     .map_err(oops)?;
+    add_column_if_missing(conn, "captures", "raw", "raw TEXT NOT NULL DEFAULT ''")?;
     add_column_if_missing(conn, "categories", "parent_id", "parent_id TEXT")?;
     // What a recurring deposit puts in each cycle. Zero on anything that is
     // not one, and on an RD nobody has told the book about yet.
@@ -521,6 +559,16 @@ fn migrate(conn: &Connection) -> Result<()> {
     // the account itself is named and pinned down on the way past, so the
     // book knows its own from yours.
     debt_account_id(conn)?;
+    // A debt entered on the debts screen writes its own transfer, under the
+    // counterparty's name — and until now was noted as "Share of" that same
+    // name. The note said nothing the debt did not already say, so books
+    // written before the rule have it taken back off.
+    conn.execute(
+        "UPDATE debts SET note = NULL
+         WHERE from_split = 1 AND note = 'Share of ' || counterparty",
+        [],
+    )
+    .map_err(oops)?;
     settle_debt_hand_offs(conn)
 }
 
@@ -1353,6 +1401,20 @@ pub fn save_category(conn: &Connection, input: CategoryInput) -> Result<Category
     .map_err(oops)
 }
 
+/// Writes the order the categories screen was left in. The ids arrive already
+/// flattened — every group followed by its own children — so one running
+/// number is enough: siblings only ever compare against siblings.
+pub fn reorder_categories(conn: &Connection, ids: Vec<String>) -> Result<()> {
+    for (i, id) in ids.iter().enumerate() {
+        conn.execute(
+            "UPDATE categories SET sort_order = ?2 WHERE id = ?1",
+            params![id, i as i64],
+        )
+        .map_err(oops)?;
+    }
+    Ok(())
+}
+
 /// Transactions filed under each category, keyed by category id. Categories
 /// with nothing filed under them are left out entirely.
 pub fn category_usage(conn: &Connection) -> Result<HashMap<String, i64>> {
@@ -1941,7 +2003,13 @@ fn replace_shares(
         if share.direction != "lent" && share.direction != "borrowed" {
             return Err("A share is either lent or borrowed.".into());
         }
-        // A share with no note of its own says what it was for.
+        // The column says the posting carries this debt, which it does either
+        // way. This says whether it is one line of somebody's bill — a debt
+        // entered on the debts screen writes its transfer through here too,
+        // and it is nobody's share of anything.
+        let from_split = share.from_split.unwrap_or(true);
+        // A share with no note of its own says what it was for. A debt that
+        // wrote its own posting is left to stand on its own name.
         let note = share
             .note
             .as_deref()
@@ -1949,6 +2017,9 @@ fn replace_shares(
             .filter(|n| !n.is_empty())
             .map(str::to_string)
             .or_else(|| {
+                if !from_split {
+                    return None;
+                }
                 Some(if merchant.is_empty() {
                     "Share of a split bill".to_string()
                 } else {
@@ -2892,6 +2963,32 @@ fn ensure_label(conn: &Connection, name: &str, color: &str) -> Result<String> {
     )
     .map_err(oops)?;
     Ok(id)
+}
+
+/// The label a spoken posting wears for good — not a queue like Triage, but
+/// a note of where it came from. Confirming a capture clears Triage and
+/// leaves this one on, which is what makes "everything I said out loud"
+/// answerable months later.
+pub const SIRI_LABEL: &str = "Siri";
+const SIRI_COLOR: &str = "#EC4899";
+
+/// Pins a label on a posting, making it if this book has never had one. The
+/// colour is only used for a label that has to be created: one you have made
+/// yourself keeps whatever colour you gave it.
+pub fn pin_label(conn: &Connection, transaction_id: &str, name: &str, color: &str) -> Result<()> {
+    let label_id = ensure_label(conn, name, color)?;
+    conn.execute(
+        "INSERT OR IGNORE INTO transaction_labels (transaction_id, label_id)
+         VALUES (?1, ?2)",
+        params![transaction_id, label_id],
+    )
+    .map_err(oops)?;
+    Ok(())
+}
+
+/// A spoken posting wears Siri, and keeps it.
+pub fn pin_siri(conn: &Connection, transaction_id: &str) -> Result<()> {
+    pin_label(conn, transaction_id, SIRI_LABEL, SIRI_COLOR)
 }
 
 /// Writes one counterparty's filing down as confirmed — what the next
@@ -5617,16 +5714,66 @@ pub(crate) fn shift_month(month: &str, delta: i32) -> Result<String> {
 
 /// Sum of income minus expense across every account within a window. Transfers
 /// are internal movements, so they cancel out and are excluded entirely.
-fn net_flow_before(conn: &Connection, before: &str) -> Result<Paise> {
-    conn.query_row(
-        "SELECT COALESCE(SUM(CASE WHEN kind = 'income' THEN amount
-                                  WHEN kind = 'expense' THEN -amount
-                                  ELSE 0 END), 0)
-         FROM transactions WHERE occurred_at < ?1",
-        params![before],
-        |r| r.get(0),
+/// What the accounts the book still counts gained or lost, day by day.
+///
+/// Every posting is read from the point of view of the set of live accounts:
+/// income into one adds, spending out of one subtracts, and a transfer only
+/// counts when it crosses the edge of the set — money moved between two live
+/// accounts nets to nothing, exactly as it should, while money moved into an
+/// archived account really has left the figure the hero line draws.
+///
+/// The window is open at both ends: pass `None` for everything before a date,
+/// which is how the line knows where it starts.
+fn live_flow(
+    conn: &Connection,
+    live: &[String],
+    from: Option<&str>,
+    to: &str,
+) -> Result<HashMap<String, Paise>> {
+    if live.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let holes = vec!["?"; live.len()].join(",");
+    let window = match from {
+        Some(_) => "occurred_at >= ?a AND occurred_at <= ?b",
+        None => "occurred_at < ?b",
+    };
+    // Two readings of the same ledger, added together: what each live account
+    // did on its own side of a posting, and what arrived in one from outside.
+    let sql = format!(
+        "SELECT day, COALESCE(SUM(delta), 0) FROM (
+            SELECT substr(occurred_at, 1, 10) AS day,
+                   CASE WHEN kind = 'income' THEN amount ELSE -amount END AS delta
+            FROM transactions
+            WHERE account_id IN ({holes}) AND {window}
+            UNION ALL
+            SELECT substr(occurred_at, 1, 10), amount
+            FROM transactions
+            WHERE kind = 'transfer' AND to_account_id IN ({holes}) AND {window}
+         ) GROUP BY day"
     )
-    .map_err(oops)
+    .replace("?a", "?")
+    .replace("?b", "?");
+
+    // The bindings run in the order the holes appear: the accounts and the
+    // dates once for each half of the union.
+    let mut args: Vec<String> = Vec::new();
+    for _ in 0..2 {
+        args.extend(live.iter().cloned());
+        if let Some(from) = from {
+            args.push(from.to_string());
+        }
+        args.push(to.to_string());
+    }
+    let mut stmt = conn.prepare(&sql).map_err(oops)?;
+    let rows = stmt
+        .query_map(params_from_iter(args.iter()), |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Paise>(1)?))
+        })
+        .map_err(oops)?
+        .collect::<rusqlite::Result<HashMap<_, _>>>()
+        .map_err(oops)?;
+    Ok(rows)
 }
 
 /// What came in and what went out over a window, refunds netted off. A
@@ -5829,15 +5976,28 @@ pub fn overview(conn: &Connection, month: &str, span: u32) -> Result<Overview> {
         .collect::<rusqlite::Result<HashMap<_, _>>>()
         .map_err(oops)?;
 
-    let opening_total: Paise = accounts.iter().map(|a| a.opening_balance).sum();
-    let mut running = opening_total + net_flow_before(conn, &start_s)?;
+    // The line follows the accounts the figure above it is made of. An
+    // archived account is out of net worth, so its money must be out of the
+    // line too — otherwise the line ends a long way from the number it sits
+    // under and neither explains the other.
+    let live_ids: Vec<String> = live.iter().map(|a| a.id.clone()).collect();
+    let opening_total: Paise = live.iter().map(|a| a.opening_balance).sum();
+    let mut running: Paise = opening_total
+        + live_flow(conn, &live_ids, None, &start_s)?
+            .values()
+            .sum::<Paise>();
+    let live_per_day = live_flow(conn, &live_ids, Some(&start_s), &end_s)?;
+
     let mut daily_flow = Vec::new();
-    let mut balance_series = Vec::new();
+    // Where the window opens, before anything in it has happened. Without
+    // this the first day's spending is already inside the first point, and a
+    // month whose only movement was on the 1st draws a flat line.
+    let mut balance_series = vec![running];
     let mut day = start;
     while day <= end {
         let key = day.format("%Y-%m-%d").to_string();
-        let (inc, exp, net_inc, net_exp) = per_day.get(&key).copied().unwrap_or((0, 0, 0, 0));
-        running += inc - exp;
+        let (_, _, net_inc, net_exp) = per_day.get(&key).copied().unwrap_or((0, 0, 0, 0));
+        running += live_per_day.get(&key).copied().unwrap_or(0);
         balance_series.push(running);
         daily_flow.push(FlowPoint {
             bucket: key,
@@ -6054,6 +6214,7 @@ pub fn reset(conn: &Connection) -> Result<()> {
          DELETE FROM template_splits; DELETE FROM template_labels;
          DELETE FROM transaction_templates;
          DELETE FROM transaction_splits; DELETE FROM transactions;
+         DELETE FROM captures;
          DELETE FROM accounts; DELETE FROM categories; DELETE FROM settings;",
     )
     .map_err(oops)?;
@@ -6065,6 +6226,48 @@ pub fn reset(conn: &Connection) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The hero line is the figure above it, drawn over time — so it counts
+    /// the accounts that figure counts, and it starts where the window
+    /// starts rather than after the first day has already happened.
+    #[test]
+    fn the_balance_line_opens_before_the_first_day_and_ignores_archived_money() {
+        let conn = book();
+        let live = account(&conn, "HDFC", "bank", 100_000_00);
+        let shelved = account(&conn, "Old wallet", "cash", 500_000_00);
+        set_account_archived(&conn, &shelved, true).unwrap();
+
+        let categories = list_categories(&conn).unwrap();
+        let food = categories.iter().find(|c| c.name == "Food & Drink").unwrap();
+        save_transaction(
+            &conn,
+            TransactionInput {
+                id: None,
+                kind: "expense".into(),
+                amount: 30_000_00,
+                account_id: live.clone(),
+                to_account_id: None,
+                category_id: Some(food.id.clone()),
+                merchant: "Big day".into(),
+                note: None,
+                occurred_at: "2026-09-01T10:00".into(),
+                splits: None,
+                shares: None,
+                label_ids: None,
+                refund_of: None,
+            },
+        )
+        .unwrap();
+
+        let over = overview(&conn, "2026-09", 1).unwrap();
+        // A point for the opening level, then one for each of September's days.
+        assert_eq!(over.balance_series.len(), 31);
+        // The archived account's half a lakh is nowhere in it.
+        assert_eq!(over.balance_series[0], 100_000_00);
+        // And the first day is a fall, which is the whole point.
+        assert_eq!(over.balance_series[1], 70_000_00);
+        assert_eq!(*over.balance_series.last().unwrap(), 70_000_00);
+    }
 
     /// The rule every one of these is circling: cash that has already been
     /// posted into an investment account is on the balance sheet once, so a
@@ -7300,6 +7503,7 @@ mod tests {
             amount,
             due_on: None,
             note: None,
+            from_split: None,
         }
     }
 

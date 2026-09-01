@@ -304,6 +304,22 @@ export function accountWorth(account: Account): Paise {
  * the rest is a way of closing it — so the two together always fill the bar
  * once it is settled, and the part nobody paid is shown for what it is.
  */
+/**
+ * Whether a debt is one line of somebody else's bill, rather than one that
+ * wrote its own transfer. Both are carried by a posting; the difference is
+ * whose name is on it. A debt entered on the debts screen posts under the
+ * counterparty's own name, so a label that matches the person is the debt
+ * itself — calling that "Share of Pooja" under a debt with Pooja says
+ * nothing, and says it twice.
+ */
+export function isShareOfBill(debt: {
+  fromSplit: boolean;
+  counterparty: string;
+  transactionLabel: string | null;
+}) {
+  return debt.fromSplit && debt.transactionLabel?.trim() !== debt.counterparty.trim();
+}
+
 export function debtProgress(debt: {
   principal: Paise;
   paid: Paise;

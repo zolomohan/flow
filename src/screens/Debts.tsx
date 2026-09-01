@@ -4,7 +4,7 @@ import { Icon } from '../components/Icon';
 import { Button, Card, Empty, Segmented, type SegmentOption } from '../components/ui';
 import { useStore } from '../lib/store';
 import { DebtDetail } from './DebtDetail';
-import { dayLabel, debtProgress, initials, money } from '../lib/format';
+import { dayLabel, debtProgress, initials, isShareOfBill, money } from '../lib/format';
 import { itemVariants, listVariants, spring } from '../lib/motion';
 import type { Debt, DebtDirection, DebtPayment, Transaction } from '../lib/types';
 
@@ -313,6 +313,7 @@ function DebtCard({
 }) {
   const bar = debtProgress(debt);
   const lent = debt.direction === 'lent';
+  const share = isShareOfBill(debt);
   const overdue =
     !debt.settled && !!debt.dueOn && debt.dueOn < new Date().toISOString().slice(0, 10);
 
@@ -375,8 +376,8 @@ function DebtCard({
           )}
           {debt.transactionId && (
             <span className="debt-tag is-link">
-              <Icon name={debt.fromSplit ? 'split' : 'arrow-left-right'} size={11} />
-              {debt.fromSplit
+              <Icon name={share ? 'split' : 'arrow-left-right'} size={11} />
+              {share
                 ? `Share of ${debt.transactionLabel ?? 'a split bill'}`
                 : (debt.transactionLabel ?? 'Linked')}
             </span>

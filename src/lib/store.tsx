@@ -14,6 +14,8 @@ import { isDeposit } from './types';
 import type {
   Account,
   BulkResult,
+  Capture,
+  CaptureSync,
   AccountInput,
   Category,
   CategoryDeleteOptions,
@@ -128,6 +130,8 @@ interface Store {
   deleteAccount: (id: string) => Promise<void>;
   setAccountArchived: (id: string, archived: boolean) => Promise<void>;
   saveCategory: (input: CategoryInput) => Promise<Category>;
+  /** Writes a new order for one kind's categories, flattened parent-then-children. */
+  reorderCategories: (ids: string[]) => Promise<void>;
   reassignCategory: (from: string, to: string, includeChildren: boolean) => Promise<number>;
   deleteCategory: (id: string, options?: CategoryDeleteOptions) => Promise<void>;
   saveDebt: (input: DebtInput) => Promise<void>;
@@ -152,6 +156,19 @@ interface Store {
   commitStatementImport: (accountId: string, rows: ImportCommitRow[]) => Promise<ImportResult>;
   /** Marks postings as verified: Triage off, their filing remembered. */
   confirmTriage: (ids: string[]) => Promise<number>;
+  /** What has been said to a phone and is still waiting for a person. */
+  captures: Capture[];
+  /** Everything said out loud that made it into the ledger, newest first. */
+  captureHistory: Capture[];
+  /** What the last read of the drop file did, and where it looked. Null
+   *  until the first read, which happens as the book opens. */
+  lastCaptureSync: CaptureSync | null;
+  /** Reads the drop file again. Resolves either way — a missing folder is
+   *  the ordinary state of a book nobody has dictated to yet. */
+  syncCaptures: () => Promise<void>;
+  /** Writes one waiting capture into the ledger, wearing Triage. */
+  postCapture: (id: string, input: TransactionInput) => Promise<Transaction>;
+  dismissCapture: (id: string) => Promise<void>;
   saveLabel: (input: LabelInput) => Promise<Label>;
   deleteLabel: (id: string) => Promise<void>;
   savePlan: (input: PlanInput) => Promise<Plan>;
@@ -195,6 +212,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [debts, setDebts] = useState<Debt[]>([]);
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [labels, setLabels] = useState<Label[]>([]);
+  const [captures, setCaptures] = useState<Capture[]>([]);
+  const [captureHistory, setCaptureHistory] = useState<Capture[]>([]);
+  const [lastCaptureSync, setLastCaptureSync] = useState<CaptureSync | null>(null);
   const [templates, setTemplates] = useState<TxTemplate[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [pricesRefreshing, setPricesRefreshing] = useState(false);
@@ -238,7 +258,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     async (forMonth: string, forSpan: number) => {
       const [
         nextAccounts, nextCategories, nextUsage, nextDebts, nextHoldings, nextOverview,
-        nextSettings, nextLabels, nextTemplates, nextPlans,
+        nextSettings, nextLabels, nextTemplates, nextPlans, nextCaptures, nextSpoken,
       ] = await Promise.all([
         api.listAccounts(),
         api.listCategories(),
@@ -250,6 +270,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         api.listLabels(),
         api.listTemplates(),
         api.listPlans(),
+        api.listCaptures(),
+        api.captureHistory(),
       ]);
       setAccounts(nextAccounts);
       setCategories(nextCategories);
@@ -261,6 +283,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setLabels(nextLabels);
       setTemplates(nextTemplates);
       setPlans(nextPlans);
+      setCaptures(nextCaptures);
+      setCaptureHistory(nextSpoken);
     },
     [],
   );
@@ -315,6 +339,41 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setPricesRefreshing(false);
     }
   }, [toast]);
+
+  // Reading the drop file writes nothing of yours until a capture resolves
+  // cleanly, and a missing folder is not a failure worth a toast — so this
+  // sits outside `mutate` and stays quiet unless something actually landed.
+  const syncCaptures = useCallback(async () => {
+    try {
+      const result = await api.syncCaptures();
+      setLastCaptureSync(result);
+      if (result.found > 0) {
+        setRevision((r) => r + 1);
+        const posted = result.posted === 1 ? '1 posting written' : `${result.posted} postings written`;
+        toast(
+          result.pending > 0
+            ? `${posted}, ${result.pending} waiting in the Inbox`
+            : posted,
+        );
+      }
+    } catch (err) {
+      // Said once, on the screen that cares: a drop file that cannot be read
+      // is a setup problem, not something to interrupt the day with.
+      setLastCaptureSync(null);
+      console.warn('captures', err);
+    }
+  }, [toast]);
+
+  // What the phone said while you were away. Read as the book opens, and
+  // again whenever you come back to the window — iCloud delivers on its own
+  // schedule, and the moment you look is the moment it matters.
+  useEffect(() => {
+    if (!ready) return;
+    void syncCaptures();
+    const onFocus = () => void syncCaptures();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [ready, syncCaptures]);
 
   // Prices go stale overnight, so top them up once after the book loads. Doing
   // it here rather than inside the screen keeps the Overview's net worth right
@@ -379,6 +438,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           () => api.saveCategory(input),
           input.id ? 'Category updated' : 'Category added',
         ),
+      reorderCategories: (ids) => mutate(() => api.reorderCategories(ids), 'Order saved'),
       reassignCategory: (from, to, includeChildren) =>
         mutate(() => api.reassignCategory(from, to, includeChildren), 'Transactions moved'),
       deleteCategory: (id, options) =>
@@ -421,6 +481,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       commitStatementImport: (accountId, rows) =>
         mutate(() => api.commitStatementImport(accountId, rows)),
       confirmTriage: (ids) => mutate(() => api.confirmTriage(ids)),
+      captures,
+      captureHistory,
+      lastCaptureSync,
+      syncCaptures,
+      postCapture: (id, input) => mutate(() => api.postCapture(id, input), 'Added to the ledger'),
+      dismissCapture: (id) => mutate(() => api.dismissCapture(id), 'Capture dismissed'),
       saveLabel: (input) =>
         mutate(() => api.saveLabel(input), input.id ? 'Label updated' : 'Label added'),
       deleteLabel: (id) => mutate(() => api.deleteLabel(id), 'Label deleted'),
@@ -485,6 +551,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       mutate,
       refreshPrices,
       pricesRefreshing,
+      captures,
+      captureHistory,
+      lastCaptureSync,
+      syncCaptures,
     ],
   );
 

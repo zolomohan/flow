@@ -55,9 +55,6 @@ export function PlanCalendar({
   const out = occurrences
     .filter((o) => o.kind !== 'income' && !o.skipped)
     .reduce((sum, o) => sum + (o.paid ? o.actualAmount : o.amount), 0);
-  const paid = occurrences
-    .filter((o) => o.kind !== 'income' && o.paid)
-    .reduce((sum, o) => sum + o.actualAmount, 0);
   const income = occurrences
     .filter((o) => o.kind === 'income' && !o.skipped)
     .reduce((sum, o) => sum + (o.paid ? o.actualAmount : o.amount), 0);
@@ -86,10 +83,6 @@ export function PlanCalendar({
           <span>
             <em>Going out</em>
             <strong>{money(out)}</strong>
-          </span>
-          <span>
-            <em>Already paid</em>
-            <strong className="is-paid">{money(paid)}</strong>
           </span>
           {income > 0 && (
             <span>
