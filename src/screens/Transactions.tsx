@@ -795,7 +795,6 @@ export function Transactions({
           tone="net"
           signed
         />
-        <Total label="Transferred" value={summary?.transferred ?? 0} tone="moved" />
       </div>}
 
       <Card padded={false} className="ledger">
@@ -836,7 +835,14 @@ export function Transactions({
             />
           </div>
         ) : (
-          <motion.div variants={listing} initial="initial" animate="animate">
+          <motion.div
+            // Rows that can be ticked get a column for their boxes, which the
+            // day heads and the split strips line up with.
+            className={`ledger-days ${picking && !pickMany ? '' : 'is-selectable'}`}
+            variants={listing}
+            initial="initial"
+            animate="animate"
+          >
             {days.map((day) => (
               <section key={day.key} className="day-group">
                 <header className="day-head">

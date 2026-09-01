@@ -49,7 +49,14 @@ export function TransactionRow({
   // the balance still has it, so nothing else would give it away.
   const isRefund = !!tx.refundOf;
   const givenBack = tx.refunded >= tx.amount ? 'all' : tx.refunded > 0 ? 'part' : 'none';
-  const split = tx.splits.length > 0 || tx.shares.length > 0;
+  // The whole of it owed by one person, with nothing filed under anything:
+  // that is not a division of the posting, it is what the posting is. A row
+  // like that says so on its own line rather than hiding the fact behind a
+  // chevron that opens on a single name.
+  const owedTotal = tx.shares.reduce((sum, s) => sum + s.amount, 0);
+  const wholeDebt =
+    tx.shares.length > 0 && tx.splits.length === 0 && owedTotal === tx.amount;
+  const split = tx.splits.length > 0 || (tx.shares.length > 0 && !wholeDebt);
   const tint = isTransfer
     ? tx.accountColor
     : (tx.categoryColor ?? 'var(--ink-3)');
@@ -57,21 +64,37 @@ export function TransactionRow({
     ? 'arrow-left-right'
     : (tx.categoryIcon ?? (tx.kind === 'income' ? 'arrow-down-left' : 'circle-dashed'));
 
-  // A split bill's own category is only one of several, so the parts name
-  // themselves instead of it.
+  // Filed under a sub-category, the row says which shelf it sits on as well:
+  // "Kitchen" on its own is a different bill in Home than it is in Rent, and
+  // the group is what the totals are read against.
+  const filedAs =
+    tx.categoryGroupName && tx.categoryGroupName !== tx.categoryName
+      ? `${tx.categoryGroupName} › ${tx.categoryName}`
+      : tx.categoryName;
+
   const owedTo = tx.shares.map((s) => s.counterparty).join(', ');
+  const owed = tx.shares.reduce((sum, s) => sum + s.outstanding, 0);
+  const lent = tx.shares[0]?.direction === 'lent';
   const subtitle = isRefund
     ? [`Gives back ${tx.refundOfMerchant || 'a transaction'}`, tx.accountName]
         .filter(Boolean)
         .join(' · ')
     : isTransfer
-      ? `${tx.accountName} → ${tx.toAccountName ?? (owedTo || 'owed back')}`
+      // A hand-off names the person on the far side of it, not the account
+      // the book files it against: the money went to them.
+      ? wholeDebt
+        ? lent
+          ? `${tx.accountName} → ${owedTo}`
+          : `${owedTo} → ${tx.toAccountName ?? tx.accountName}`
+        : `${tx.accountName} → ${tx.toAccountName ?? (owedTo || 'owed back')}`
+      // A split bill's own category is only one of several, so the row leaves
+      // the filing to the strip under it — which names every part rather than
+      // counting them. Saying "3 parts" here as well was the same fact told
+      // twice, a line apart.
       : tx.splits.length
-        ? [`${tx.splits.length} parts`, tx.accountName].filter(Boolean).join(' · ')
-        : [tx.categoryName, tx.accountName].filter(Boolean).join(' · ');
+        ? tx.accountName
+        : [filedAs, tx.accountName].filter(Boolean).join(' · ');
 
-  const owed = tx.shares.reduce((sum, s) => sum + s.outstanding, 0);
-  const lent = tx.shares[0]?.direction === 'lent';
 
   return (
     <motion.div
@@ -80,8 +103,9 @@ export function TransactionRow({
       }`}
       layout="position"
     >
-      {/* The box takes the avatar's place rather than sitting beside it: the
-          row keeps its shape whether or not anything is being picked out. */}
+      {/* The box sits in the gutter, tucked under the avatar's left edge. It
+          used to stand in the avatar's place, which took away the logo just
+          as a run of rows was being read to decide which ones to tick. */}
       {onSelect && (
         <button
           type="button"
@@ -90,7 +114,7 @@ export function TransactionRow({
           aria-label={selected ? 'Deselect' : 'Select'}
           onClick={(e) => onSelect(e.shiftKey)}
         >
-          <Icon name="check" size={13} strokeWidth={3} />
+          <Icon name="check" size={12} strokeWidth={3} />
         </button>
       )}
       <motion.button
@@ -101,7 +125,12 @@ export function TransactionRow({
         onClick={onClick}
         whileTap={{ scale: 0.995 }}
       >
-        <MerchantLogo merchant={isTransfer ? null : tx.merchant} icon={glyph} tint={tint} />
+        {/* The category's glyph, never the payee's logo. Down a long ledger
+            the colour and the shape are what a row is found by, and a wall of
+            brand marks reads as a wall of brands rather than as a month of
+            spending. The logos are still here, and still used where a row
+            stands on its own — the plans, the month's top merchants. */}
+        <MerchantLogo merchant={null} icon={glyph} tint={tint} />
         <span className="tx-main">
           <span className="tx-title">
             {tx.merchant || (isTransfer ? 'Transfer' : (tx.categoryName ?? 'Uncategorised'))}
@@ -109,6 +138,14 @@ export function TransactionRow({
               <span className="tx-label is-refund">
                 <Icon name="undo-2" size={11} strokeWidth={2.4} />
                 Refund
+              </span>
+            )}
+            {wholeDebt && owed > 0 && (
+              <span
+                className="tx-label"
+                style={{ ['--tint' as any]: lent ? 'var(--green)' : 'var(--amber)' }}
+              >
+                {lent ? 'owed to you' : 'you owe'}
               </span>
             )}
             {givenBack !== 'none' && (
@@ -163,14 +200,15 @@ export function TransactionRow({
             ...(onDebt
               ? [{
                   icon: 'user-round',
-                  label: 'Owed by someone',
+                  label: 'Mark as debt',
                   hint: 'the whole of it becomes a debt',
                   onClick: onDebt,
                 }]
               : []),
-            // Nothing refunds a transfer, a refund, or a posting already
-            // given back in full: there is nothing left of it to undo.
-            ...(onRefund && !isTransfer && !isRefund && givenBack !== 'all'
+            // Nothing refunds a transfer, a refund, money that came in, or a
+            // posting already given back in full: a refund is what comes back
+            // from something spent, and there has to be something left of it.
+            ...(onRefund && !isTransfer && !isRefund && tx.kind !== 'income' && givenBack !== 'all'
               ? [{
                   icon: 'undo-2',
                   label: 'Refund it',
@@ -188,9 +226,19 @@ export function TransactionRow({
             <motion.span animate={{ rotate: open ? 90 : 0 }} transition={spring}>
               <Icon name="chevron-right" size={13} />
             </motion.span>
+            {/* What it was cut into, named on the strip rather than described
+                by it: the categories are the answer to "how was it split",
+                and a row that says the words instead makes you open it to
+                find out. The amounts wait inside. */}
             {tx.splits.length > 0 && (
-              <span className="tx-bill-count">
-                {tx.splits.length} {tx.splits.length === 1 ? 'part' : 'parts'}
+              <span className="tx-bill-parts">
+                {tx.splits.map((part) => (
+                  <span key={part.id} className="tx-bill-part">
+                    <i style={{ background: part.categoryColor ?? 'var(--ink-4)' }} />
+                    {part.categoryName ?? 'Uncategorised'}
+                    <em>{money(part.amount)}</em>
+                  </span>
+                ))}
               </span>
             )}
             {tx.shares.length > 0 && (

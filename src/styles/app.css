@@ -6,6 +6,25 @@
 *::before,
 *::after { box-sizing: border-box; }
 
+/* Every box in the app that can scroll keeps its scrollbar's width reserved,
+   whether or not there is anything to scroll yet.
+
+   Without it, the moment a list, a form or a menu grows past its box the
+   scrollbar arrives and takes its width out of the content — and everything
+   inside jumps a few pixels left. A page should not move sideways because it
+   got longer. On machines set to overlay scrollbars this costs nothing,
+   since there is no width to reserve. */
+.main-scroll,
+.sheet-body,
+.record-picker-body,
+.filter-pop,
+.select-menu,
+.palette-list,
+.tpl-pop,
+.icon-shelves,
+.scheme-hits,
+.plan-history { scrollbar-gutter: stable; }
+
 html, body, #root { height: 100%; }
 
 body {
@@ -98,9 +117,15 @@ kbd {
 }
 
 
+/* `scroll`, not `auto`: the page keeps its scrollbar's width whether or not
+   there is enough on it to scroll, so a list that grows past the window
+   cannot narrow the column and shove it sideways. `scrollbar-gutter` above
+   says the same thing more politely, but only where the engine listens to
+   it — this holds everywhere. Overlay scrollbars, which is the Mac default,
+   take no width either way and see none of this. */
 .main-scroll {
   height: 100%;
-  overflow-y: auto;
+  overflow-y: scroll;
   overflow-x: hidden;
 }
 
@@ -1053,21 +1078,27 @@ kbd {
   align-items: center;
   gap: 12px;
   width: 100%;
-  padding: 11px 22px;
+  /* The left inset is a variable: a ledger whose rows can be ticked reserves
+     a column for the boxes, and everything that lines up with the avatar —
+     the day head, the split strip, the parts — moves with it. */
+  padding: 11px 22px 11px var(--ledger-pad, 22px);
   text-align: left;
   transition: background var(--fast) var(--ease);
 }
 .tx-row::after {
   content: '';
   position: absolute;
-  left: 62px;
+  left: var(--ledger-indent, 62px);
   right: 22px;
   bottom: 0;
   border-bottom: 1px solid var(--line-soft);
 }
 .tx-bill:last-child .tx-row::after { display: none; }
-/* A split bill draws its own line under the strip instead. */
+/* A split bill draws its own line under the strip instead — and the strip
+   belongs to the row above it, so it sits close under it rather than a full
+   row's padding away. */
 .tx-bill:has(.tx-bill-strip) .tx-row::after { display: none; }
+.tx-bill:has(.tx-bill-strip) .tx-row { padding-bottom: 4px; }
 .tx-row:hover { background: var(--surface-2); }
 .tx-row:hover .tx-chevron { opacity: 1; transform: translateX(0); }
 
@@ -1177,21 +1208,27 @@ kbd {
   opacity: 0.6;
 }
 
-/* The box stands where the avatar is rather than beside it, so the ledger
-   keeps its shape whether or not anything is being picked out. It shows on
-   hover, and stays out once a selection is under way. */
+/* The box has a column of its own to the left of the avatar. Standing over
+   the avatar cost the row its logo and its category glyph, which is what a
+   run of rows is read by when deciding which ones to tick — so the ledger
+   gives the column up instead, and only where rows can be ticked at all.
+   Square, like every other box in the app. */
 .tx-check {
   position: absolute;
-  top: 11px;
-  left: 22px;
+  top: 19px;
+  left: 14px;
   z-index: 2;
   display: grid;
   place-items: center;
-  width: 36px;
-  height: 36px;
-  border-radius: var(--r-md);
+  /* The browser's own button padding pushes the glyph off-centre inside a
+     box this small. */
+  padding: 0;
+  line-height: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--r-xs);
   background: var(--surface);
-  border: 1px solid var(--line-strong);
+  border: 1.5px solid var(--line-strong);
   color: transparent;
   opacity: 0;
   transition: opacity var(--fast) var(--ease), background var(--fast) var(--ease),
@@ -1200,13 +1237,16 @@ kbd {
 .tx-bill:hover .tx-check,
 .tx-list.is-picking .tx-check,
 .tx-check:focus-visible { opacity: 1; }
-.tx-check:hover { border-color: var(--blue); }
+.tx-check:hover { border-color: var(--ink-3); }
 .tx-check.is-on {
   opacity: 1;
-  background: var(--blue);
-  border-color: var(--blue);
-  color: #fff;
+  background: var(--solid);
+  border-color: var(--solid);
+  color: var(--on-solid);
 }
+
+/* The reserved column, on the one ledger whose rows can be picked. */
+.ledger-days.is-selectable { --ledger-pad: 48px; --ledger-indent: 88px; }
 
 /* What to do with them, floating over the ledger rather than sitting in it. */
 .bulk-bar {
@@ -1259,10 +1299,12 @@ kbd {
 /* Sits over the chevron, which is decoration — the whole row is the target. */
 /* What can be done to a row without opening it: one glyph where the chevron
    is, which is decoration — the whole row is still the target. */
+/* Centred on the chevron it stands in for: the row keeps a 22px inset and a
+   16px glyph, so a 28px button sits 16px in and their middles agree. */
 .tx-row-actions {
   position: absolute;
   top: 15px;
-  right: 14px;
+  right: 16px;
 }
 .tx-row-actions .more-menu { opacity: 0; transition: opacity var(--fast) var(--ease); }
 .tx-bill:hover .tx-row-actions .more-menu,
@@ -1274,7 +1316,7 @@ kbd {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 4px 22px 9px 62px;
+  padding: 0 22px 9px var(--ledger-indent, 62px);
   border-bottom: 1px solid var(--line-soft);
   font-size: 11.5px;
   font-weight: 600;
@@ -1285,11 +1327,33 @@ kbd {
 .tx-bill-strip:hover { color: var(--ink-2); }
 .tx-bill-strip > span:first-of-type { display: grid; place-items: center; }
 
-.tx-bill-count {
-  padding: 2px 8px;
-  border-radius: var(--r-full);
-  background: var(--surface-inset);
+/* The parts, on one line under the row they came off. Names first, each
+   with its category's colour; the amounts ride quietly behind them. It
+   scrolls off rather than wrapping — the strip is a preview, and the whole
+   of it is a click away inside. */
+.tx-bill-parts {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  overflow: hidden;
   color: var(--ink-3);
+}
+.tx-bill-part {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tx-bill-part i { width: 6px; height: 6px; flex: none; border-radius: 99px; }
+.tx-bill-part em {
+  font-style: normal;
+  font-weight: 500;
+  color: var(--ink-4);
+  font-variant-numeric: tabular-nums;
 }
 .tx-bill-owed {
   display: inline-flex;
@@ -1309,7 +1373,7 @@ kbd {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 8px 22px 12px 62px;
+  padding: 8px 22px 12px var(--ledger-indent, 62px);
   border-bottom: 1px solid var(--line-soft);
 }
 .tx-part {
@@ -1376,7 +1440,7 @@ kbd {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 9px 22px;
+  padding: 9px 22px 9px var(--ledger-pad, 22px);
   background: color-mix(in srgb, var(--surface) 88%, transparent);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
@@ -2942,7 +3006,9 @@ kbd {
 }
 .filter-clear:hover { color: var(--red); }
 
-.totals-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+/* Three figures, not four: what moved between your own accounts is neither
+   earned nor spent, and a total for it sat beside the two that are. */
+.totals-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .total {
   display: flex;
   flex-direction: column;
