@@ -453,6 +453,16 @@ fn portfolio_value_series(db: State<Db>, days: Option<i64>) -> R<Vec<ValuePoint>
     with_db(&db, |c| db::portfolio_value_series(c, days))
 }
 
+/// The same, for one sleeve of it: funds, gold or deposits.
+#[tauri::command]
+fn sleeve_value_series(
+    db: State<Db>,
+    days: Option<i64>,
+    sleeve: String,
+) -> R<Vec<ValuePoint>> {
+    with_db(&db, |c| db::sleeve_value_series(c, days, Some(&sleeve)))
+}
+
 #[tauri::command]
 async fn search_schemes(query: String) -> R<Vec<Scheme>> {
     prices::search_schemes(&query).await
@@ -591,6 +601,7 @@ pub fn run() {
             gold_value_series,
             gold_rate_series,
             portfolio_value_series,
+            sleeve_value_series,
             search_schemes,
             get_setting,
             list_settings,

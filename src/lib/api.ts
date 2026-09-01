@@ -15,6 +15,7 @@ import type {
   ImportCommitRow,
   ImportPreviewRow,
   ImportResult,
+  InvestmentTab,
   Label,
   LabelInput,
   Overview,
@@ -192,6 +193,10 @@ export const api = {
   /** What everything held has been worth, day by day, as one line. */
   portfolioValueSeries: (days: number | null) =>
     call<ValuePoint[]>('portfolio_value_series', { days }),
+
+  /** The same, for one sleeve of it: 'fund', 'gold' or 'deposit'. */
+  sleeveValueSeries: (sleeve: InvestmentTab, days: number | null) =>
+    call<ValuePoint[]>('sleeve_value_series', { days, sleeve }),
   searchSchemes: (query: string) => call<Scheme[]>('search_schemes', { query }),
 
   getSetting: (key: string) => call<string | null>('get_setting', { key }),

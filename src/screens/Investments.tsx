@@ -352,6 +352,28 @@ export function Investments({
               />
             )}
 
+            {tab === 'fund' && open.length > 0 && (
+              <PriceHistory
+                title="Your funds"
+                hint="what the units you hold have been worth, day by day"
+                tint="var(--violet)"
+                kind="money"
+                load={(days) => api.sleeveValueSeries('fund', days)}
+                footnote="Every fund counted from the day its units were allotted, at that day's NAV — your money rather than the schemes', which ran long before you bought any."
+              />
+            )}
+
+            {tab === 'deposit' && open.length > 0 && (
+              <PriceHistory
+                title="Your deposits"
+                hint="what has been put in, and what it has earned since"
+                tint="var(--blue)"
+                kind="money"
+                load={(days) => api.sleeveValueSeries('deposit', days)}
+                footnote="Each deposit from the day it was funded, compounded quarterly at the rate you were quoted, and stopping at maturity. A curve rather than a market — nothing here is quoted by anyone."
+              />
+            )}
+
             {unpriced > 0 && (
               <Card className="price-warning">
                 <Icon name="alert-circle" size={16} />

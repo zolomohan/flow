@@ -515,7 +515,63 @@ fn migrate(conn: &Connection) -> Result<()> {
     // A group is a heading rather than a place to file things. Books written
     // before that was true still have postings sitting on one, and so does a
     // book where a category grew its first sub-category yesterday.
-    sweep_group_postings(conn)
+    sweep_group_postings(conn)?;
+    // Every debt runs through one account now, repayments and hand-offs
+    // alike. Postings written before that rule are pointed at it here — and
+    // the account itself is named and pinned down on the way past, so the
+    // book knows its own from yours.
+    debt_account_id(conn)?;
+    settle_debt_hand_offs(conn)
+}
+
+/// Debt hand-offs written before there was an account for them to run
+/// through: a transfer with a debt standing against it and nowhere of yours
+/// to go. The whole of it has to be owed, or the posting is describing
+/// something else as well and is left alone; a transfer that already names an
+/// account of yours is left alone too, since that is a movement somebody
+/// meant.
+fn settle_debt_hand_offs(conn: &Connection) -> Result<()> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT t.id, t.account_id, d.direction
+             FROM transactions t
+             JOIN debts d ON d.transaction_id = t.id
+             WHERE t.kind = 'transfer'
+               AND (t.to_account_id IS NULL OR t.to_account_id = '')
+             GROUP BY t.id
+             HAVING SUM(d.principal) = t.amount",
+        )
+        .map_err(oops)?;
+    let orphans: Vec<(String, String, String)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?;
+    drop(stmt);
+    if orphans.is_empty() {
+        return Ok(());
+    }
+    let holding = debt_account(conn)?;
+    for (id, account_id, direction) in orphans {
+        if account_id == holding {
+            continue;
+        }
+        // Lent: out of your account and into what is out with people.
+        // Borrowed: in from it, landing where the money actually arrived.
+        if direction == "borrowed" {
+            conn.execute(
+                "UPDATE transactions SET account_id = ?2, to_account_id = ?3 WHERE id = ?1",
+                params![id, holding, account_id],
+            )
+        } else {
+            conn.execute(
+                "UPDATE transactions SET to_account_id = ?2 WHERE id = ?1",
+                params![id, holding],
+            )
+        }
+        .map_err(oops)?;
+    }
+    Ok(())
 }
 
 /// SQLite has no `ADD COLUMN IF NOT EXISTS`, so check the table first. Books
@@ -973,9 +1029,22 @@ fn cycle_day(kind: &str, day: i64) -> i64 {
     }
 }
 
+/// The book's own account is not yours to change: every debt runs through it,
+/// and a rename, an archive or a delete would take the other side out from
+/// under every hand-off in the ledger.
+fn refuse_the_books_own(conn: &Connection, id: &str) -> Result<()> {
+    if debt_account_id(conn)?.as_deref() == Some(id) {
+        return Err(format!(
+            "{DEBT_ACCOUNT} is the book's own account — every debt runs through it, so it is not yours to change."
+        ));
+    }
+    Ok(())
+}
+
 pub fn save_account(conn: &Connection, input: AccountInput) -> Result<Account> {
     match input.id {
         Some(id) => {
+            refuse_the_books_own(conn, &id)?;
             conn.execute(
                 "UPDATE accounts SET name = ?2, kind = ?3, institution = ?4,
                         opening_balance = ?5, color = ?6, icon = ?7, credit_limit = ?8,
@@ -5161,6 +5230,12 @@ fn lot_quantities(conn: &Connection, holding_id: &str) -> Result<Vec<(NaiveDate,
 
 /// What everything you hold has come to, day by day — one line for the whole
 /// portfolio rather than one per holding.
+pub fn portfolio_value_series(conn: &Connection, days: Option<i64>) -> Result<Vec<ValuePoint>> {
+    sleeve_value_series(conn, days, None)
+}
+
+/// The same line for one sleeve of it: `Some("fund")`, `Some("gold")` or
+/// `Some("deposit")` counts only those, and `None` counts the lot.
 ///
 /// The three kinds are valued three different ways and none of them keep the
 /// same calendar: a NAV is published on business days, a gold rate on the days
@@ -5168,8 +5243,12 @@ fn lot_quantities(conn: &Connection, holding_id: &str) -> Result<Vec<(NaiveDate,
 /// days are taken from whichever markets published one, each price is carried
 /// across the days its own market was shut, and the deposits are worked out on
 /// those same days. Nothing counts before the day it was yours, and the line
-/// starts where the portfolio does rather than at a run of zeros.
-pub fn portfolio_value_series(conn: &Connection, days: Option<i64>) -> Result<Vec<ValuePoint>> {
+/// starts where the sleeve does rather than at a run of zeros.
+pub fn sleeve_value_series(
+    conn: &Connection,
+    days: Option<i64>,
+    sleeve: Option<&str>,
+) -> Result<Vec<ValuePoint>> {
     let since = since_date(days);
     let today = Utc::now().date_naive();
 
@@ -5217,6 +5296,14 @@ pub fn portfolio_value_series(conn: &Connection, days: Option<i64>) -> Result<Ve
     let mut earning: Vec<(Option<Scaled>, Option<String>, Vec<(NaiveDate, Paise)>)> = Vec::new();
 
     for (id, kind, scheme_code, purity_e4, grams_e4, acquired_on, rate_e4, matures_on) in held {
+        // One sleeve's line leaves the others out. Deposits are two kinds
+        // wearing one name, which is how the rest of the screen reads them.
+        if let Some(want) = sleeve {
+            let mine = if want == "deposit" { is_deposit(&kind) } else { kind == want };
+            if !mine {
+                continue;
+            }
+        }
         if is_deposit(&kind) {
             let mut paid = deposit_instalments(conn, &id)?;
             paid.sort_by_key(|(day, _)| *day);
@@ -5470,10 +5557,14 @@ fn holding_marks(conn: &Connection) -> Result<Marks> {
 /// Hangs each account's holdings off the ledger balance already read for it.
 fn apply_marks(conn: &Connection, accounts: &mut [Account]) -> Result<()> {
     let marks = holding_marks(conn)?;
+    // Resolved rather than created: reading a list of accounts is no reason
+    // to write one into the book.
+    let holding = debt_account_id(conn)?;
     for account in accounts.iter_mut() {
         if let Some(mark) = marks.by_account.get(&account.id) {
             account.revaluation = mark.market - mark.posted;
         }
+        account.system = holding.as_deref() == Some(account.id.as_str());
     }
     Ok(())
 }
