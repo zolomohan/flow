@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Sparkline } from '../components/charts';
 import { Icon } from '../components/Icon';
 import { PriceHistory } from '../components/PriceHistory';
-import { Button, Card, Empty, Segmented, type SegmentOption } from '../components/ui';
+import { Button, Card, Empty, Segmented, Sheet, type SegmentOption } from '../components/ui';
 import { api } from '../lib/api';
 import { useStore } from '../lib/store';
 import { dayLabel, money, percent, perUnit, quantity, shortDayLabel, unitPrice } from '../lib/format';
@@ -11,7 +11,7 @@ import { itemVariants, listVariants, spring } from '../lib/motion';
 import { carats, HoldingDetail, splitName, unitOf } from './HoldingDetail';
 import { isDeposit } from '../lib/types';
 import type {
-  Holding, HoldingKind, InvestmentTab, InvestmentLot, PricePoint,
+  Holding, HoldingKind, InvestmentTab, InvestmentLot, ValuePoint,
 } from '../lib/types';
 
 /** How much of each line the cards carry. A year is the read most people
@@ -35,6 +35,13 @@ const BLURBS: Record<InvestmentTab, string> = {
   deposit:
     'Fixed and recurring deposits, earning at the rate you were quoted — compounded quarterly, and stopping at maturity.',
 };
+
+/** Which finenesses the rate can be read at. Jewellery is bought at 22K, so
+ *  that is the rate worth quoting; 24K is what the market itself trades. */
+const RATE_PURITIES: SegmentOption<string>[] = [
+  { value: '9160', label: '22K' },
+  { value: '10000', label: '24K' },
+];
 
 const TINTS: Record<InvestmentTab, string> = {
   fund: 'var(--violet)',
@@ -74,7 +81,7 @@ export function Investments({
   useEffect(() => {
     let live = true;
     api
-      .holdingSeriesAll(CARD_DAYS)
+      .holdingValueSeriesAll(CARD_DAYS)
       .then((lines) => {
         if (!live) return;
         setSeries(lines);
@@ -84,11 +91,26 @@ export function Investments({
           void refreshPrices();
         }
       })
-      .catch(() => {});
+      // Nothing came back, so the cards stop waiting and say so themselves.
+      .catch(() => live && setSeries({}));
     return () => {
       live = false;
     };
   }, [revision, holdings.length, refreshPrices]);
+
+  // The rate behind the gold tile, at whatever fineness it is being read at.
+  // Only the gold tab asks: nothing else on the screen quotes a gram.
+  useEffect(() => {
+    if (tab !== 'gold') return;
+    let live = true;
+    api
+      .goldRateSeries(CARD_DAYS, ratePurity)
+      .then((line) => live && setRateLine(line.map((p) => ({ asOf: p.asOf, value: p.priceE4 }))))
+      .catch(() => live && setRateLine([]));
+    return () => {
+      live = false;
+    };
+  }, [tab, ratePurity, revision]);
 
   const viewing = openId ? holdings.find((h) => h.id === openId) ?? null : null;
   // Everything worth something, across both tabs — the one figure that has to
@@ -125,6 +147,19 @@ export function Investments({
     const any = open.find((h) => h.priceE4 !== null && h.purityE4);
     return any ? Math.round((any.priceE4! * 10_000) / any.purityE4!) : null;
   })();
+  // The tile quotes that rate at the fineness being read. With nothing priced
+  // there is still the line to fall back on — the market has a rate today
+  // whether or not any piece here carries one.
+  const rate =
+    pureRate !== null
+      ? Math.round((pureRate * ratePurity) / 10_000)
+      : rateLine?.length
+        ? rateLine[rateLine.length - 1].value
+        : null;
+  const rateMove =
+    rateLine && rateLine.length > 1
+      ? rateLine[rateLine.length - 1].value - rateLine[0].value
+      : 0;
 
   // Pieces of one fineness can be read on their own, but only where there is
   // more than one to tell apart — a locker of 22K bangles has nothing to
@@ -135,10 +170,12 @@ export function Investments({
   }, [open]);
 
   // The freshest price anything on this tab is carrying, and whether anything
-  // is missing one — an unpriced holding is left out of every total above.
+  // is missing one — an unpriced holding is left out of every total above. A
+  // deposit is computed from its own rate, never quoted, so it is never
+  // waiting on a price.
   const priced = open.map((h) => h.priceAsOf).filter((d): d is string => !!d).sort();
   const asOf = priced.length ? priced[priced.length - 1] : undefined;
-  const unpriced = open.filter((h) => !h.priceE4).length;
+  const unpriced = open.filter((h) => !isDeposit(h.kind) && !h.priceE4).length;
 
   if (viewing) {
     return (
@@ -217,7 +254,13 @@ export function Investments({
                 <div className="holding-total">
                   <span>Market value</span>
                   <strong>{money(value)}</strong>
-                  <small>{asOf ? `priced ${dayLabel(asOf)}` : 'no prices fetched yet'}</small>
+                  <small>
+                    {tab === 'deposit'
+                      ? 'with the interest earned so far'
+                      : asOf
+                        ? `priced ${dayLabel(asOf)}`
+                        : 'no prices fetched yet'}
+                  </small>
                 </div>
                 {tab === 'gold' ? (
                   <>
@@ -228,11 +271,30 @@ export function Investments({
                         across {open.length} {open.length === 1 ? 'piece' : 'pieces'}
                       </small>
                     </div>
-                    <div className="holding-total">
-                      <span>Rate</span>
-                      <strong>{pureRate ? unitPrice(pureRate) : '—'}</strong>
-                      <small>a gram of 24K</small>
-                    </div>
+                    {/* A rate is a fact about the market rather than about
+                        any piece, so the tile carries its own year and opens
+                        the whole line rather than only quoting today. */}
+                    <button
+                      type="button"
+                      className="holding-total is-rate"
+                      onClick={() => setRateOpen(true)}
+                    >
+                      <div className="rate-figure">
+                        <span>Rate</span>
+                        <strong>{rate ? unitPrice(rate) : '—'}</strong>
+                        <small>a gram of {carats(ratePurity)}</small>
+                      </div>
+                      {(rateLine === null || rateLine.length > 1) && (
+                        <div className="rate-line">
+                          <Sparkline
+                            values={rateLine?.map((p) => p.value) ?? []}
+                            height={46}
+                            loading={rateLine === null}
+                            stroke={rateMove >= 0 ? 'var(--green)' : 'var(--red)'}
+                          />
+                        </div>
+                      )}
+                    </button>
                   </>
                 ) : (
                   <>
@@ -329,7 +391,8 @@ export function Investments({
                     key={holding.id}
                     holding={holding}
                     tint={TINTS[tab]}
-                    line={series[holding.id] ?? []}
+                    line={series?.[holding.id] ?? []}
+                    loading={series === null}
                     share={portfolio > 0 ? holding.marketValue / portfolio : 0}
                     onOpen={() => setOpenId(holding.id)}
                   />
@@ -360,7 +423,8 @@ export function Investments({
                             key={holding.id}
                             holding={holding}
                             tint="var(--ink-4)"
-                            line={series[holding.id] ?? []}
+                            line={series?.[holding.id] ?? []}
+                            loading={series === null}
                             share={0}
                             onOpen={() => setOpenId(holding.id)}
                           />
@@ -382,6 +446,38 @@ export function Investments({
           </motion.div>
         </AnimatePresence>
       )}
+
+      {/* The rate on its own, at either fineness — the tile quotes one number
+          and this is the year behind it. */}
+      <Sheet
+        open={rateOpen && tab === 'gold'}
+        onClose={() => setRateOpen(false)}
+        title="Gold rate"
+        subtitle="what a gram has gone for"
+        width={620}
+      >
+        <PriceHistory
+          title={`A gram of ${carats(ratePurity)}`}
+          hint="the rate every piece is valued at"
+          tint="var(--amber)"
+          load={(days) =>
+            api
+              .goldRateSeries(days, ratePurity)
+              .then((line) => line.map((p) => ({ asOf: p.asOf, value: p.priceE4 })))
+          }
+          reloadOn={ratePurity}
+          filter={
+            <Segmented
+              options={RATE_PURITIES}
+              value={String(ratePurity)}
+              onChange={(next) => setRatePurity(Number(next))}
+              size="sm"
+              name="rate-purity"
+            />
+          }
+          footnote="Spot gold, converted at the ECB’s rupee rate and marked up for duty and GST."
+        />
+      </Sheet>
     </div>
   );
 }
@@ -393,12 +489,15 @@ export function Investments({
  * links, the full chart — still lives one click away on its own page.
  */
 function HoldingCard({
-  holding, tint, line, share, onOpen,
+  holding, tint, line, share, onOpen, loading = false,
 }: {
   holding: Holding;
   tint: string;
-  /** The holding's price line over the card window, oldest first. */
-  line: PricePoint[];
+  /** What this holding of yours has been worth over the card window, oldest
+   *  first. */
+  line: ValuePoint[];
+  /** Whether that line is still being read, rather than known to be short. */
+  loading?: boolean;
   /** Its slice of everything held, 0–1. */
   share: number;
   onOpen: () => void;
@@ -415,11 +514,9 @@ function HoldingCard({
   const boughtE4 = buys.reduce((sum, l) => sum + l.quantityE4, 0);
   const avgBuy = boughtE4 ? perUnit(holding.invested, boughtE4) : 0;
 
-  // What the fund's own NAV did over the window. Gold gets none of this on a
-  // card: every piece is valued off one rate, so a line per card would be the
-  // same line drawn over and over — it is plotted once at the top of the tab,
-  // where a purity can be picked for it.
-  const move = line.length > 1 ? line[line.length - 1].priceE4 - line[0].priceE4 : 0;
+  // Which way the holding has gone over the window — what it is worth now
+  // against what it was worth then, instalments and all.
+  const move = line.length > 1 ? line[line.length - 1].value - line[0].value : 0;
   const up = gain >= 0;
 
   // The rate is already under the value on a gold card, so its third figure
@@ -543,10 +640,12 @@ function HoldingCard({
 
         {!isGold && !deposit && (
           <span className="hc-line">
-            {line.length > 1 ? (
+            {loading ? (
+              <Sparkline values={[]} height={56} loading />
+            ) : line.length > 1 ? (
               <>
                 <Sparkline
-                  values={line.map((p) => p.priceE4)}
+                  values={line.map((p) => p.value)}
                   height={56}
                   stroke={move >= 0 ? 'var(--green)' : 'var(--red)'}
                 />

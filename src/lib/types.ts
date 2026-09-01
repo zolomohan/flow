@@ -600,6 +600,13 @@ export interface Holding {
   /** What a deposit will be worth the day it matures. Zero for everything
    *  else, and for a deposit with no maturity date to reach. */
   maturityValue: Paise;
+  /** What a recurring deposit puts in each month. The book keeps a plan for
+   *  it, so it falls due on the Planned screen. Zero on everything else. */
+  instalment: Paise;
+  /** Paid in and not yet allotted: purchases whose units the AMC has still to
+   *  credit. Counted into `marketValue` at cost — the money is real either
+   *  way — and zero once every purchase has its units. */
+  pending: Paise;
   /** Grams for gold, units for a fund. */
   unitsE4: Scaled;
   /** Both are zero for gold: an object you own, not a position you traded. */
@@ -632,6 +639,8 @@ export interface HoldingInput {
   rateE4?: Scaled | null;
   openedOn?: string | null;
   maturesOn?: string | null;
+  /** What a recurring deposit puts in each month. Ignored on anything else. */
+  instalment?: Paise | null;
   note: string | null;
   closed?: boolean | null;
 }

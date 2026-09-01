@@ -410,6 +410,22 @@ fn holding_series_all(
     with_db(&db, |c| db::holding_series_all(c, days))
 }
 
+/// What one holding of yours has been worth, day by day — the units you held
+/// at each day's price, rather than the scheme's own NAV line.
+#[tauri::command]
+fn holding_value_series(db: State<Db>, id: String, days: Option<i64>) -> R<Vec<ValuePoint>> {
+    with_db(&db, |c| db::holding_value_series(c, &id, days))
+}
+
+/// The same, for every holding at once.
+#[tauri::command]
+fn holding_value_series_all(
+    db: State<Db>,
+    days: Option<i64>,
+) -> R<std::collections::HashMap<String, Vec<ValuePoint>>> {
+    with_db(&db, |c| db::holding_value_series_all(c, days))
+}
+
 /// What the gold in the book has been worth, day by day.
 #[tauri::command]
 fn gold_value_series(
@@ -418,6 +434,17 @@ fn gold_value_series(
     purity_e4: Option<i64>,
 ) -> R<Vec<ValuePoint>> {
     with_db(&db, |c| db::gold_value_series(c, days, purity_e4))
+}
+
+/// What a gram of gold has gone for, day by day, at the fineness asked for —
+/// the market behind every piece, rather than what any one locker holds.
+#[tauri::command]
+fn gold_rate_series(
+    db: State<Db>,
+    days: Option<i64>,
+    purity_e4: Option<i64>,
+) -> R<Vec<PricePoint>> {
+    with_db(&db, |c| db::gold_rate_series(c, days, purity_e4))
 }
 
 /// What everything in the book has been worth, day by day, as one line.
@@ -558,8 +585,11 @@ pub fn run() {
             delete_investment_lot,
             refresh_prices,
             holding_series,
+            holding_value_series,
+            holding_value_series_all,
             holding_series_all,
             gold_value_series,
+            gold_rate_series,
             portfolio_value_series,
             search_schemes,
             get_setting,

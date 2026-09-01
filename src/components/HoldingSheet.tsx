@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './Icon';
-import { DateField, dateFieldLabel } from './DateField';
+import { DateField } from './DateField';
 import { TransactionPicker } from './TransactionPicker';
 import {
-  Button, Field, Segmented, Select, Sheet, TextInput,
+  Button, Confirm, Field, Segmented, Select, Sheet, Switch, TextInput,
   type SegmentOption, type SelectOption,
 } from './ui';
 import { api } from '../lib/api';
@@ -12,7 +12,7 @@ import {
   amountChars, evaluateAmount, money, paiseToRupeeString, quantity, rupeesToPaise,
   settleAmount, toLocalInput,
 } from '../lib/format';
-import type { InvestmentLot, Transaction } from '../lib/types';
+import type { InvestmentLot } from '../lib/types';
 import { isDeposit } from '../lib/types';
 import type { Holding, HoldingKind, LotKind, Scheme } from '../lib/types';
 
@@ -81,6 +81,9 @@ export function HoldingSheet({
   const [rate, setRate] = useState('');
   const [openedOn, setOpenedOn] = useState('');
   const [maturesOn, setMaturesOn] = useState('');
+  // What a recurring deposit puts in each month. The book keeps a plan for
+  // it, so it falls due on the Planned screen like any standing payment.
+  const [instalment, setInstalment] = useState('');
   const [schemeCode, setSchemeCode] = useState<string | null>(null);
   const [isin, setIsin] = useState<string | null>(null);
   const [accountId, setAccountId] = useState<string | null>(null);
@@ -100,6 +103,7 @@ export function HoldingSheet({
       setRate(editing.rateE4 ? String(editing.rateE4 / 10_000) : '');
       setOpenedOn(editing.openedOn ?? '');
       setMaturesOn(editing.maturesOn ?? '');
+      setInstalment(editing.instalment ? paiseToRupeeString(editing.instalment) : '');
       setSchemeCode(editing.schemeCode);
       setIsin(editing.isin);
       setAccountId(editing.accountId);
@@ -112,6 +116,7 @@ export function HoldingSheet({
       setGrams('');
       setAcquiredOn('');
       setRate('');
+      setInstalment('');
       setOpenedOn('');
       setMaturesOn('');
       setSchemeCode(null);
@@ -165,6 +170,7 @@ export function HoldingSheet({
         rateE4: deposit ? Math.round((evaluateAmount(rate) ?? 0) * 10_000) : null,
         openedOn: deposit && openedOn ? openedOn : null,
         maturesOn: deposit && maturesOn ? maturesOn : null,
+        instalment: kind === 'rd' ? rupeesToPaise(instalment) : null,
         note: note.trim() || null,
         closed,
       });
@@ -198,20 +204,8 @@ export function HoldingSheet({
       footer={
         <>
           {editing ? (
-            <Button
-              tone="danger"
-              icon="trash-2"
-              onClick={async () => {
-                if (!confirming) return setConfirming(true);
-                await deleteHolding(editing.id);
-                onClose();
-              }}
-            >
-              {confirming
-                ? editing.kind === 'gold'
-                  ? 'Delete this holding?'
-                  : 'Delete with its entries?'
-                : 'Delete'}
+            <Button tone="danger" icon="trash-2" onClick={() => setConfirming(true)}>
+              Delete
             </Button>
           ) : (
             <span />
@@ -249,7 +243,7 @@ export function HoldingSheet({
                 onChange={(e) => { setName(e.target.value); setError(null); }}
               />
             </Field>
-            <Field label="Interest rate" hint="what the bank quotes, a year">
+            <Field label="Interest rate">
               <div className="rupee-input is-suffix">
                 <TextInput
                   inputMode="decimal"
@@ -261,6 +255,24 @@ export function HoldingSheet({
                 <span>% a year</span>
               </div>
             </Field>
+            {kind === 'rd' && (
+              <Field
+                label="Instalment">
+                <div className="rupee-input">
+                  <span>₹</span>
+                  <TextInput
+                    inputMode="decimal"
+                    value={instalment}
+                    placeholder="5,000"
+                    onChange={(e) => {
+                      setInstalment(amountChars(e.target.value));
+                      setError(null);
+                    }}
+                    onBlur={() => setInstalment(settleAmount(instalment))}
+                  />
+                </div>
+              </Field>
+            )}
             <div className="tx-meta">
               <Field label="Opened">
                 <DateField
@@ -279,12 +291,6 @@ export function HoldingSheet({
                 />
               </Field>
             </div>
-            <p className="field-note">
-              {kind === 'fd'
-                ? 'Record the deposit itself as an entry below once it is saved — link the transfer your bank already shows, or post a new one.'
-                : 'Each instalment is an entry of its own, so a month you missed is simply a month with no entry.'}
-              {' '}Interest compounds quarterly, the way Indian deposits do, and stops at maturity.
-            </p>
           </>
         ) : kind === 'fund' ? (
           <SchemePicker
@@ -307,7 +313,7 @@ export function HoldingSheet({
                 onChange={(e) => { setName(e.target.value); setError(null); }}
               />
             </Field>
-            <Field label="Weight" hint="what it comes to on the scale">
+            <Field label="Weight">
               <div className="rupee-input is-suffix">
                 <TextInput
                   inputMode="decimal"
@@ -325,7 +331,7 @@ export function HoldingSheet({
             <div className="stack-field">
               <span className="field-label">
                 Purity
-                <span className="field-hint">what the gram price is scaled by</span>
+
               </span>
               <Segmented
                 options={PURITIES}
@@ -336,7 +342,7 @@ export function HoldingSheet({
             </div>
             <Field
               label="Acquired"
-              hint="optional — the value chart counts it from this day on"
+              hint="optional"
             >
               <DateField
                 value={acquiredOn}
@@ -380,21 +386,35 @@ export function HoldingSheet({
         </Field>
 
         {editing && (
-          <button
-            type="button"
-            className={`settle-toggle ${closed ? 'is-on' : ''}`}
-            onClick={() => setClosed((v) => !v)}
-          >
-            <span className="settle-box">{closed && <Icon name="check" size={12} />}</span>
-            Mark this holding closed
-            <small>
-              {editing.unitsE4 > 0
-                ? `${quantity(editing.unitsE4, editing.kind === 'gold' ? 'g' : 'units')} still held — it stays in your net worth either way`
-                : 'nothing left in it'}
-            </small>
-          </button>
+          <Switch
+            on={closed}
+            onChange={setClosed}
+            label="Closed"
+            hint={
+              editing.unitsE4 > 0
+                ? `${quantity(editing.unitsE4, editing.kind === 'gold' ? 'g' : 'units')} still held`
+                : 'nothing left in it'
+            }
+          />
         )}
       </div>
+
+      <Confirm
+        stacked
+        open={confirming}
+        title="Delete this holding?"
+        onConfirm={async () => {
+          if (!editing) return;
+          setConfirming(false);
+          await deleteHolding(editing.id);
+          onClose();
+        }}
+        onCancel={() => setConfirming(false)}
+      >
+        {editing?.kind === 'gold'
+          ? `${editing.name} goes, and what it is worth goes out of your net worth with it. This cannot be undone.`
+          : `${editing?.name ?? 'This holding'} goes, and every entry under it goes with it. The postings behind them stay in your ledger. This cannot be undone.`}
+      </Confirm>
     </Sheet>
   );
 }
@@ -518,16 +538,20 @@ export function LotSheet({
   const [txLabel, setTxLabel] = useState<string | null>(null);
   // Kept so the form can say, before saving, whether attaching this record
   // will move which account it points at.
-  const [linkedTx, setLinkedTx] = useState<Transaction | null>(null);
   const [note, setNote] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  // Whether the AMC has credited the units yet. Off, the purchase is money
+  // out with nothing against it — which is what the days between an order and
+  // its allotment actually look like.
+  const [allotted, setAllotted] = useState(true);
 
   useEffect(() => {
     if (!open || !holding) return;
     if (editing) {
       setKind(editing.kind);
-      setQty(fromScaled(editing.quantityE4));
+      setQty(editing.quantityE4 > 0 ? fromScaled(editing.quantityE4) : '');
+      setAllotted(editing.quantityE4 > 0);
       setAmount(paiseToRupeeString(editing.amount));
       setOccurredAt(editing.occurredAt.slice(0, 10));
       setAllottedAt((editing.allottedAt ?? editing.occurredAt).slice(0, 10));
@@ -538,17 +562,19 @@ export function LotSheet({
       setCashAccountId(editing.ownsTransaction ? editing.cashAccountId : null);
       setTxId(editing.ownsTransaction ? null : editing.transactionId);
       setTxLabel(editing.ownsTransaction ? null : editing.transactionLabel);
-      setLinkedTx(null);
     } else {
       setKind('buy');
       setQty('');
+      // A new fund purchase starts unallotted: the money goes out today and
+      // the units land when the AMC gets round to it. Everything else is
+      // measured the moment it happens.
+      setAllotted(holding?.kind !== 'fund');
       setAmount('');
       setOccurredAt(toLocalInput().slice(0, 10));
       setAllottedAt(toLocalInput().slice(0, 10));
       setNote('');
       setTxId(null);
       setTxLabel(null);
-      setLinkedTx(null);
       // Posting a fresh transfer needs somewhere for it to land; without an
       // investment account the only honest options are linking or nothing.
       setSource(holding.accountId ? 'post' : 'link');
@@ -590,18 +616,6 @@ export function LotSheet({
   // Posting a transfer needs an investment account on the holding to land in.
   const sources = holding.accountId ? SOURCES : SOURCES.filter((s) => s.value !== 'post');
 
-  // Attaching a transfer that currently points elsewhere moves it onto this
-  // holding's account. That edits the ledger, so it is said out loud first.
-  const repoint = (() => {
-    if (linkedTx?.kind !== 'transfer' || !holding.accountId) return null;
-    if (kind === 'buy') {
-      return linkedTx.toAccountId === holding.accountId
-        ? null
-        : linkedTx.toAccountName ?? 'where it goes now';
-    }
-    return linkedTx.accountId === holding.accountId ? null : linkedTx.accountName;
-  })();
-
   const unit = holding.kind === 'gold' ? 'g' : 'units';
   // A payment into a deposit rather than a purchase of units: the money is
   // the whole of the entry, and the sheet says so throughout.
@@ -611,11 +625,20 @@ export function LotSheet({
   // What it works out to per gram or unit, in paise — the number you would
   // check a jeweller's bill or a fund statement against.
   const rate = scaled > 0 && paise > 0 ? Math.round((paise / scaled) * 10_000) : 0;
+  // A fund purchase waiting on its units: the money is down, the allotment
+  // is not. Only a fund, and only a buy — there is nothing to sell that you
+  // do not hold, and gold and deposits are not allotted at all.
+  const canWait = holding.kind === 'fund' && kind === 'buy';
+  const pendingBuy = canWait && !allotted;
 
   const submit = async () => {
     // A deposit has no units to count: what went in is the whole of it.
     if (intoDeposit && paise <= 0) return setError('How much went in?');
-    if (!intoDeposit && scaled <= 0) return setError(`How many ${unit}?`);
+    // A fund purchase may stand with no units yet: the money went out today
+    // and the AMC credits the units days later, at whatever NAV it processed
+    // the order on. What has to be true is that something moved.
+    if (!intoDeposit && !pendingBuy && scaled <= 0) return setError(`How many ${unit}?`);
+    if (pendingBuy && paise <= 0) return setError('How much went in?');
     // Editing a sale shouldn't measure it against a total it is already part
     // of; the backend applies the same rule as the final word.
     const available =
@@ -632,7 +655,7 @@ export function LotSheet({
         holdingId: holding.id,
         kind,
         // Deposits are stamped with a nominal one by the book itself.
-        quantityE4: intoDeposit ? 10_000 : scaled,
+        quantityE4: intoDeposit ? 10_000 : pendingBuy ? 0 : scaled,
         amount: paise,
         occurredAt,
         allottedAt,
@@ -672,20 +695,8 @@ export function LotSheet({
       footer={
         <>
           {editing ? (
-            <Button
-              tone="danger"
-              icon="trash-2"
-              onClick={async () => {
-                if (!confirming) return setConfirming(true);
-                await deleteLot(editing.id);
-                onClose();
-              }}
-            >
-              {confirming
-                ? editing.ownsTransaction
-                  ? 'Delete with its transfer?'
-                  : 'Delete this entry?'
-                : 'Delete'}
+            <Button tone="danger" icon="trash-2" onClick={() => setConfirming(true)}>
+              Delete
             </Button>
           ) : (
             <span />
@@ -722,10 +733,23 @@ export function LotSheet({
           />
         )}
 
-        <div className="tx-meta">
-          {/* A deposit is measured by its money — there are no units in it,
-              so there is nothing to ask for here. */}
-          {!intoDeposit && (
+        {/* A fund order is money today and units some days later, at the NAV
+            of whatever day the AMC processed it. Off, the purchase stands as
+            paid and waiting; on, it says how many landed and when. */}
+        {canWait && (
+          <Switch
+            on={allotted}
+            onChange={(next) => { setAllotted(next); setError(null); }}
+            label="Units allotted"
+            hint={allotted ? undefined : 'paid, waiting on the AMC'}
+          />
+        )}
+
+        {/* What landed, and the day it was priced at. Both about the units,
+            so they sit together; the money has its own row below, beside the
+            account it moved through. */}
+        {!intoDeposit && !pendingBuy && (
+          <div className="lot-row is-pair">
             <Field label={holding.kind === 'gold' ? 'Grams' : 'Units'} error={error}>
               <div className="rupee-input is-suffix">
                 <TextInput
@@ -742,63 +766,29 @@ export function LotSheet({
                 <span>{unit}</span>
               </div>
             </Field>
-          )}
-          <Field
-            label={intoDeposit ? 'Amount' : kind === 'buy' ? 'Paid' : 'Received'}
-            error={intoDeposit ? error : undefined}
-          >
-            <div className="rupee-input">
-              <span>₹</span>
-              <TextInput
-                inputMode="decimal"
-                value={amount}
-                placeholder="0"
-                onChange={(e) => setAmount(amountChars(e.target.value))}
-                onBlur={() => setAmount(settleAmount(amount))}
-              />
-            </div>
-          </Field>
-        </div>
+            {holding.kind === 'fund' && (
+              <Field label={kind === 'buy' ? 'Allotted on' : 'Redeemed on'}>
+                <DateField value={allottedAt} onChange={setAllottedAt} />
+              </Field>
+            )}
+          </div>
+        )}
 
         {rate > 0 && (
           <p className="lot-rate">
-            That is {money(rate, { paise: true })} a {unit === 'g' ? 'gram' : 'unit'}
-            {allottedAt !== occurredAt ? `, the NAV on ${dateFieldLabel(allottedAt)}` : ''}
+            {money(rate, { paise: true })} a {unit === 'g' ? 'gram' : 'unit'}
             {holding.priceE4
               ? ` · ${money((holding.priceE4 / 10_000) * 100, { paise: true })} today`
               : ''}
           </p>
         )}
 
-        <div className="date-pair">
-          <Field
-            label={kind === 'buy' ? 'Money paid' : 'Money received'}
-            hint={holding.kind === 'fund' ? 'what your ledger uses' : undefined}
-          >
-            <DateField value={occurredAt} onChange={setPaidOn} />
-          </Field>
-          {holding.kind === 'fund' && (
-            <Field
-              label={kind === 'buy' ? 'Units allotted' : 'Units redeemed'}
-              hint="the NAV date"
-            >
-              <DateField value={allottedAt} onChange={setAllottedAt} />
-            </Field>
-          )}
-        </div>
-
-        <div className="stack-field">
-          <span className="field-label">
-            In your ledger
-            <span className="field-hint">how this shows up in your accounts</span>
-          </span>
-          <Segmented
-            options={sources}
-            value={source}
-            onChange={(next) => { setSource(next); setError(null); }}
-            name="lot-source"
-          />
-        </div>
+        <Segmented
+          options={sources}
+          value={source}
+          onChange={(next) => { setSource(next); setError(null); }}
+          name="lot-source"
+        />
 
         {source === 'post' && (
           <Field label={kind === 'buy' ? 'Paid from' : 'Received into'}>
@@ -811,6 +801,32 @@ export function LotSheet({
           </Field>
         )}
 
+        {/* How much moved and when. Not asked at all where the entry points
+            at a record already in the book: that posting says both, and two
+            answers to one question is one answer too many. */}
+        {source !== 'link' && (
+          <div className="lot-row is-pair">
+            <Field
+              label={intoDeposit ? 'Amount' : kind === 'buy' ? 'Paid' : 'Received'}
+              error={intoDeposit || pendingBuy ? error : undefined}
+            >
+              <div className="rupee-input">
+                <span>₹</span>
+                <TextInput
+                  inputMode="decimal"
+                  value={amount}
+                  placeholder="0"
+                  onChange={(e) => setAmount(amountChars(e.target.value))}
+                  onBlur={() => setAmount(settleAmount(amount))}
+                />
+              </div>
+            </Field>
+            <Field label="Date">
+              <DateField value={occurredAt} onChange={setPaidOn} />
+            </Field>
+          </div>
+        )}
+
         {source === 'link' && (
           <div className="stack-field">
             <TransactionPicker
@@ -821,7 +837,6 @@ export function LotSheet({
               onChange={(id, label, tx) => {
                 setTxId(id);
                 setTxLabel(label);
-                setLinkedTx(tx ?? null);
                 setError(null);
                 // Take the amount and date off the record being described, so
                 // the two cannot drift apart by a typo.
@@ -834,19 +849,6 @@ export function LotSheet({
           </div>
         )}
 
-        <p className="lot-hint">
-          {source === 'post' &&
-            (cashAccountId
-              ? `A transfer of ${money(paise)} ${kind === 'buy' ? `into ${holding.accountName}` : `back out of ${holding.accountName}`} is added to your ledger, so your net worth counts this once.`
-              : 'Pick the account the money moves through.')}
-          {source === 'link' &&
-            (repoint
-              ? `${holding.accountName} becomes the ${kind === 'buy' ? 'destination' : 'source'} of that transfer, in place of ${repoint}. Nothing else about it changes, and the cost is counted once.`
-              : `This entry describes a posting already in your book — nothing new is written, and ${holding.accountName ?? 'the holding'} keeps the cost it already carries.`)}
-          {source === 'none' &&
-            'Nothing is posted to your accounts — for anything bought before you started keeping the book.'}
-        </p>
-
         <Field label="Note" hint="optional">
           <TextInput
             value={note}
@@ -855,6 +857,23 @@ export function LotSheet({
           />
         </Field>
       </div>
+
+      <Confirm
+        stacked
+        open={confirming}
+        title="Delete this entry?"
+        onConfirm={async () => {
+          if (!editing) return;
+          setConfirming(false);
+          await deleteLot(editing.id);
+          onClose();
+        }}
+        onCancel={() => setConfirming(false)}
+      >
+        {editing?.ownsTransaction
+          ? 'The transfer that paid for it goes too, and the money returns to the account it left. This cannot be undone.'
+          : 'The entry goes; anything in your ledger that paid for it stays. This cannot be undone.'}
+      </Confirm>
     </Sheet>
   );
 }

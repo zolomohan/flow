@@ -1,6 +1,6 @@
 import { useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { compactMoney, money, shortDayLabel, unitPrice } from '../lib/format';
+import { compactMoney, dayLabel, money, shortDayLabel, unitPrice } from '../lib/format';
 import { spring } from '../lib/motion';
 import type { FlowPoint, Paise, ValuePoint } from '../lib/types';
 
@@ -82,13 +82,41 @@ function resample(values: number[], count: number) {
 
 /* --------------------------------------------------------------- Sparkline */
 
+/* ------------------------------------------------------------- Skeleton */
+
+/** A placeholder wave, in the same proportions any line here ends up. */
+const SKELETON_PATH = 'M 0 30 C 10 14, 18 33, 30 23 S 48 6, 62 17 S 82 7, 100 12';
+
+/**
+ * What a chart shows while its numbers are still on their way. A chart that
+ * is only waiting used to print the line it keeps for having nothing to draw
+ * — "not enough history yet" — which reads as an answer rather than a pause.
+ * The trace runs until the real one replaces it.
+ */
+export function ChartSkeleton({ height = 240 }: { height?: number }) {
+  return (
+    <div className="chart-skeleton" style={{ height }} aria-hidden>
+      <svg viewBox="0 0 100 40" preserveAspectRatio="none">
+        {/* `pathLength` normalises the dash to the path itself, so the trace
+            runs at the same pace whatever the chart is stretched to. */}
+        <path d={SKELETON_PATH} pathLength={100} />
+      </svg>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ Sparkline */
+
 export function Sparkline({
-  values, height = 88, stroke = 'var(--blue)', fill = true, morph = false,
+  values, height = 88, stroke = 'var(--blue)', fill = true, morph = false, loading = false,
 }: {
   values: number[];
   height?: number;
   stroke?: string;
   fill?: boolean;
+  /** Whether the numbers are still coming, which is a different silence from
+   *  having none: one traces, the other draws nothing. */
+  loading?: boolean;
   /**
    * Whether a new series bends the line it finds into shape rather than
    * replacing it. Off by default: it costs the line its own readings, which
@@ -140,7 +168,8 @@ export function Sparkline({
 
   return (
     <div ref={host} className="sparkline-host" style={{ height }}>
-      {path.line && (
+      {loading && <ChartSkeleton height={height} />}
+      {!loading && path.line && (
         <svg className="sparkline" width={width} height={height}>
           <defs>
             <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
@@ -196,6 +225,7 @@ export function Sparkline({
  */
 export function PriceChart({
   points, height = 240, stroke = 'var(--violet)', kind = 'price', reference, referenceLabel,
+  loading = false,
 }: {
   points: ValuePoint[];
   height?: number;
@@ -205,6 +235,8 @@ export function PriceChart({
    *  fund's average cost against its NAV. */
   reference?: number | null;
   referenceLabel?: string;
+  /** Whether the series is still being read, rather than known to be short. */
+  loading?: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
@@ -221,7 +253,7 @@ export function PriceChart({
   const ready = width > 0 && points.length > 1;
   return (
     <div
-      className={`price-chart ${ready ? '' : 'is-empty'}`}
+      className={`price-chart ${ready ? '' : loading ? 'is-waiting' : 'is-empty'}`}
       ref={host}
       style={{ height }}
     >
@@ -235,6 +267,8 @@ export function PriceChart({
           reference={reference}
           referenceLabel={referenceLabel}
         />
+      ) : loading ? (
+        <ChartSkeleton height={height} />
       ) : (
         width > 0 && (
           <span className="price-chart-empty">
@@ -680,22 +714,49 @@ export function DailyBars({
 }: {
   points: FlowPoint[];
   height?: number;
-  /** How a bucket reads in the tooltip. Days speak for themselves. */
+  /** How a bucket reads in the readout. Days speak for themselves. */
   labelOf?: (bucket: string) => string;
 }) {
+  const [hover, setHover] = useState<number | null>(null);
   const peak = Math.max(1, ...points.map((p) => p.expense));
   const today = new Date().toISOString().slice(0, 10);
+  const read = (bucket: string) => (labelOf ? labelOf(bucket) : dayLabel(bucket));
   return (
     <div className="daily" style={{ height }}>
       {points.map((point, i) => (
-        <motion.span
+        // The whole column takes the pointer, not the bar: on a quiet day the
+        // bar is two pixels tall, and nobody can hover that.
+        <div
           key={point.bucket}
-          className={`daily-bar ${point.bucket === today ? 'is-today' : ''}`}
-          title={`${labelOf ? labelOf(point.bucket) : point.bucket} · ${money(point.expense)}`}
-          initial={{ height: 2 }}
-          animate={{ height: `${Math.max(2, (point.expense / peak) * 100)}%` }}
-          transition={{ duration: 0.5, delay: 0.008 * i, ease: [0.06, 0.94, 0.67, 1.01] }}
-        />
+          className={`daily-col ${hover === i ? 'is-hover' : ''}`}
+          onMouseEnter={() => setHover(i)}
+          onMouseLeave={() => setHover(null)}
+        >
+          <motion.span
+            className={`daily-bar ${point.bucket === today ? 'is-today' : ''}`}
+            initial={{ height: 2 }}
+            animate={{ height: `${Math.max(2, (point.expense / peak) * 100)}%` }}
+            transition={{ duration: 0.5, delay: 0.008 * i, ease: [0.06, 0.94, 0.67, 1.01] }}
+          />
+          <AnimatePresence>
+            {hover === i && (
+              // The readout is centred on its column, except at the ends,
+              // where it would hang off the card and be clipped by it.
+              <motion.div
+                className={`flow-tip daily-tip ${
+                  i < 2 ? 'is-start' : i > points.length - 3 ? 'is-end' : ''
+                }`}
+                initial={{ opacity: 0, y: 6, scale: 0.96 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 4, scale: 0.97 }}
+                transition={spring}
+              >
+                <strong>{read(point.bucket)}</strong>
+                <span className="tip-figure">{money(point.expense)}</span>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
       ))}
     </div>
   );

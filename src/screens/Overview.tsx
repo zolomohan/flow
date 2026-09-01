@@ -85,7 +85,7 @@ export function Overview({
     listTransactions, revision,
   } = useStore();
   const [recent, setRecent] = useState<Transaction[]>([]);
-  const [portfolioLine, setPortfolioLine] = useState<Paise[]>([]);
+  const [portfolioLine, setPortfolioLine] = useState<Paise[] | null>(null);
 
   useEffect(() => {
     listTransactions({ limit: 6 }).then(setRecent).catch(() => setRecent([]));
@@ -400,12 +400,13 @@ export function Overview({
                     </span>
                   )}
                 </div>
-                {portfolioLine.length > 1 && (
+                {(portfolioLine === null || portfolioLine.length > 1) && (
                   <div className="wealth-chart">
                     <span>Last 12 months</span>
                     <Sparkline
-                      values={portfolioLine}
+                      values={portfolioLine ?? []}
                       height={72}
+                      loading={portfolioLine === null}
                       stroke={portfolio.gain >= 0 ? 'var(--green)' : 'var(--red)'}
                       morph
                     />

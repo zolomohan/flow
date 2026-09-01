@@ -53,6 +53,11 @@ export function PriceHistory({
   const [range, setRange] = useState<Range>(initialRange);
   const [points, setPoints] = useState<ValuePoint[] | null>(null);
 
+  // A new window or filter is a new question, so the chart waits again for
+  // it. A write elsewhere in the book is not: the line refetches underneath
+  // rather than blanking every time something is saved.
+  useEffect(() => setPoints(null), [range, reloadOn]);
+
   useEffect(() => {
     let live = true;
     load(DAYS[range])
@@ -67,6 +72,9 @@ export function PriceHistory({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [range, revision, reloadOn]);
 
+  // Null is "still reading", which is a different thing from a line with
+  // nothing on it: one waits, the other says so.
+  const loading = points === null;
   const line = points ?? [];
   const first = line[0];
   const last = line[line.length - 1];
@@ -122,7 +130,7 @@ export function PriceHistory({
 
       <AnimatePresence mode="wait" initial={false}>
         <motion.div
-          key={`${range}-${reloadOn ?? ''}`}
+          key={`${range}-${reloadOn ?? ''}-${loading ? 'wait' : 'line'}`}
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -130,6 +138,7 @@ export function PriceHistory({
         >
           <PriceChart
             points={line}
+            loading={loading}
             kind={kind}
             stroke={change >= 0 ? 'var(--green)' : 'var(--red)'}
             reference={reference}
@@ -140,9 +149,11 @@ export function PriceHistory({
 
       <div className="price-chart-foot">
         <span style={{ ['--tint' as any]: tint }} className="price-chart-dot" />
-        {line.length > 1
-          ? `${line.length} ${kind === 'money' ? 'days' : 'trading days'} · latest ${dayLabel(last.asOf)}`
-          : 'Refresh prices to start building this line.'}
+        {loading
+          ? 'Reading the line…'
+          : line.length > 1
+            ? `${line.length} ${kind === 'money' ? 'days' : 'trading days'} · latest ${dayLabel(last.asOf)}`
+            : 'Refresh prices to start building this line.'}
         {footnote && <em>{footnote}</em>}
       </div>
     </Card>

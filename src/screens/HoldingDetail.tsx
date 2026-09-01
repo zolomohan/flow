@@ -251,29 +251,54 @@ export function HoldingDetail({
         </div>
       </Card>
 
-      <PriceHistory
-        title={isGold ? 'Gold rate' : 'NAV'}
-        hint={
-          isGold
-            ? `rupees a gram of ${carats(holding.purityE4)}, day by day`
-            : 'what one unit has been worth, day by day'
-        }
-        tint={isGold ? 'var(--amber)' : 'var(--violet)'}
-        load={(days) =>
-          api
-            .holdingSeries(holding.id, days)
-            .then((line) => line.map((p) => ({ asOf: p.asOf, value: p.priceE4 })))
-        }
-        reference={!isGold && avgBuy ? avgBuy * 100 : null}
-        referenceLabel={
-          !isGold && avgBuy ? `your average cost · ${money(avgBuy, { paise: true })}` : undefined
-        }
-        footnote={
-          isGold
-            ? "London's daily fix, converted at the ECB's rupee rate and marked up for duty and GST."
-            : 'AMFI publishes a scheme’s NAV once a day, after the market closes.'
-        }
-      />
+      {/* Money down, units not landed. Said on the page rather than left to
+          be worked out from a row that looks short of a figure. */}
+      {holding.pending > 0 && (
+        <p className="page-note">
+          <Icon name="clock" size={13} />
+          {money(holding.pending)} paid in and not allotted yet. It is counted at
+          what it cost until the units land — open the entry and put them in when
+          your statement shows them.
+        </p>
+      )}
+
+      {/* What your own holding has been worth, which is a different question
+          from what the fund has been worth: this line starts at your first
+          purchase, steps up as instalments land, and is the one your money
+          is actually riding on. The scheme's NAV follows it below. */}
+      {!deposit && (
+        <PriceHistory
+          title="What it's worth"
+          hint={isGold ? 'your gold, day by day' : 'your units at each day’s NAV'}
+          tint={isGold ? 'var(--amber)' : 'var(--violet)'}
+          kind="money"
+          load={(days) => api.holdingValueSeries(holding.id, days)}
+        />
+      )}
+
+      {/* The scheme's own NAV, under the line that is actually yours. Gold
+          has no second line to draw here: every piece rides one rate, so the
+          rate is plotted once at the top of the gold tab, where a fineness
+          can be picked for it. A deposit has none at all — it earns at the
+          rate written into its terms, and what it is worth on a day is
+          arithmetic rather than a quote. */}
+      {!deposit && !isGold && (
+        <PriceHistory
+          title="NAV"
+          hint="what one unit has been worth, day by day"
+          tint="var(--violet)"
+          load={(days) =>
+            api
+              .holdingSeries(holding.id, days)
+              .then((line) => line.map((p) => ({ asOf: p.asOf, value: p.priceE4 })))
+          }
+          reference={avgBuy ? avgBuy * 100 : null}
+          referenceLabel={
+            avgBuy ? `your average cost · ${money(avgBuy, { paise: true })}` : undefined
+          }
+          footnote="AMFI publishes a scheme’s NAV once a day, after the market closes."
+        />
+      )}
 
       <div className={`detail-grid ${isGold ? 'is-single' : ''}`}>
         {!isGold && (
@@ -309,7 +334,13 @@ export function HoldingDetail({
                         />
                       </span>
                       <span className="detail-lot-when">
-                        <strong>{lot.kind === 'buy' ? 'Bought' : 'Sold'}</strong>
+                        <strong>
+                          {lot.quantityE4 <= 0
+                            ? 'Paid'
+                            : lot.kind === 'buy'
+                              ? 'Bought'
+                              : 'Sold'}
+                        </strong>
                         <span>
                           {dayLabel(lot.allottedAt ?? lot.occurredAt)}
                           {lot.allottedAt
@@ -317,9 +348,22 @@ export function HoldingDetail({
                             : ''}
                         </span>
                       </span>
+                      {/* Money down, units still to land. Saying "0 units at
+                          ₹0" would read as a mistake rather than as a wait. */}
                       <span className="detail-lot-qty">
-                        <strong>{quantity(lot.quantityE4, unit)}</strong>
-                        <span>at {money(perUnit(lot.amount, lot.quantityE4), { paise: true })}</span>
+                        {lot.quantityE4 > 0 ? (
+                          <>
+                            <strong>{quantity(lot.quantityE4, unit)}</strong>
+                            <span>
+                              at {money(perUnit(lot.amount, lot.quantityE4), { paise: true })}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <strong className="is-waiting">Awaiting units</strong>
+                            <span>put them in when the statement shows them</span>
+                          </>
+                        )}
                       </span>
                       <span className="detail-lot-amount">
                         <strong className={lot.kind === 'sell' ? 'is-up' : undefined}>

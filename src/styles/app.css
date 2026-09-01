@@ -868,6 +868,38 @@ kbd {
 .sparkline-host { width: 100%; overflow: hidden; }
 .sparkline { display: block; }
 
+/* What a chart shows while its numbers are on their way. It holds the height
+   the real chart will take, so nothing under it moves when the line lands. */
+.chart-skeleton { width: 100%; }
+.chart-skeleton svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.chart-skeleton path {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 2;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+  /* `pathLength` is normalised to 100 on the element, so a dash chasing from
+     130 to 0 crosses the whole line whatever width it is stretched to. */
+  stroke-dasharray: 30 100;
+  animation: chart-trace 1.6s var(--ease) infinite;
+}
+@keyframes chart-trace {
+  from { stroke-dashoffset: 130; }
+  to { stroke-dashoffset: 0; }
+}
+
+/* Waiting is not the same as having nothing: the dashed frame is what a
+   chart wears when its line is genuinely too short to draw. */
+.price-chart.is-waiting { display: grid; place-items: center; }
+
+@media (prefers-reduced-motion: reduce) {
+  .chart-skeleton path { animation-duration: 3.2s; }
+}
+
 .donut { position: relative; flex-shrink: 0; }
 .donut-center {
   position: absolute;
@@ -3735,6 +3767,29 @@ kbd {
 .holding-total.is-up strong { color: var(--green); }
 .holding-total.is-down strong { color: var(--red); }
 
+/* The gold rate reads as one of the totals but behaves like a way in: the
+   figure sits beside the year that produced it, and the whole tile opens the
+   line at either fineness. */
+.holding-total.is-rate {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+.holding-total.is-rate:hover {
+  border-color: var(--line);
+  box-shadow: var(--shadow-sm);
+}
+.rate-figure { display: grid; gap: 2px; min-width: 0; }
+/* Enough width to show a direction, never enough to crowd the figure. */
+.rate-line { flex: none; width: 92px; opacity: 0.9; }
+
 /* Rows run edge to edge, so the card has to clip them — a hover otherwise
    paints square corners over the rounded ones. Shared with Accounts. */
 .row-board { overflow: hidden; }
@@ -4089,13 +4144,6 @@ kbd {
 }
 
 .lot-rate,
-.lot-hint {
-  margin: -4px 0 0;
-  font-size: 12.5px;
-  line-height: 1.55;
-  color: var(--ink-3);
-}
-
 .lot-rate { color: var(--ink-2); font-weight: 500; }
 
 /* The scheme search: type a fund's name, pick the AMFI scheme behind it.
@@ -4756,6 +4804,7 @@ kbd {
   /* Side by side the sparkline squeezes the value; stack them instead. */
   .hc-body { flex-direction: column; align-items: stretch; gap: 10px; }
   .hc-line { width: 100%; max-width: none; }
+  .rate-line { width: 120px; }
 }
 
 
@@ -4767,20 +4816,30 @@ kbd {
    itself has two, stacked where it has one. */
 /* One glyph, and a short list behind it. */
 .more-menu { position: relative; }
+/* Square, and square about it: the browser's own button padding pushes a
+   glyph this small off its centre, and a bordered tile floating over a row
+   read as a control that had landed there rather than one belonging to it.
+   It is the same ghost icon button the rest of the app uses. */
 .more-trigger {
   display: grid;
   place-items: center;
+  padding: 0;
+  line-height: 0;
   width: 28px;
   height: 28px;
-  border-radius: var(--r-md);
+  border-radius: var(--r-sm);
   color: var(--ink-4);
-  background: var(--surface);
-  border: 1px solid var(--line);
+  background: transparent;
+  border: 1px solid transparent;
   transition: color var(--fast) var(--ease), border-color var(--fast) var(--ease),
     background var(--fast) var(--ease);
 }
-.more-trigger:hover { color: var(--ink); border-color: var(--line-strong); }
-.more-menu.is-open .more-trigger { color: var(--ink); border-color: var(--blue); }
+.more-trigger:hover { color: var(--ink); background: var(--surface-3); }
+.more-menu.is-open .more-trigger {
+  color: var(--ink);
+  background: var(--surface-3);
+  border-color: var(--line-strong);
+}
 
 .more-pop {
   position: absolute;

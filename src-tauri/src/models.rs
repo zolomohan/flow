@@ -683,6 +683,13 @@ pub struct Holding {
     /// What a deposit will be worth the day it matures — the figure the bank
     /// quotes. Zero for anything that is not a deposit.
     pub maturity_value: Paise,
+    /// What has been paid in and not yet allotted: purchases whose units the
+    /// AMC has still to credit. Counted into `market_value` at cost, since
+    /// the money is real either way.
+    pub pending: Paise,
+    /// What a recurring deposit puts in each month, which its own plan on the
+    /// Planned screen falls due for. Zero on everything else.
+    pub instalment: Paise,
     // Derived.
     /// Grams or units held, scaled by 10^4. Gold carries the grams you typed;
     /// a fund carries what its lots add up to.
@@ -726,6 +733,9 @@ pub struct HoldingInput {
     pub opened_on: Option<String>,
     #[serde(default)]
     pub matures_on: Option<String>,
+    /// What a recurring deposit puts in each month. Ignored on anything else.
+    #[serde(default)]
+    pub instalment: Option<Paise>,
     pub note: Option<String>,
     /// Explicitly close or reopen the position.
     pub closed: Option<bool>,

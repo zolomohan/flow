@@ -410,6 +410,23 @@ fn migrate(conn: &Connection) -> Result<()> {
     )
     .map_err(oops)?;
     add_column_if_missing(conn, "categories", "parent_id", "parent_id TEXT")?;
+    // What a recurring deposit puts in each cycle. Zero on anything that is
+    // not one, and on an RD nobody has told the book about yet.
+    add_column_if_missing(
+        conn,
+        "holdings",
+        "instalment",
+        "instalment INTEGER NOT NULL DEFAULT 0",
+    )?;
+    // The plan a recurring deposit keeps for itself, so its instalment falls
+    // due on the Planned screen like any other standing payment. Null on
+    // every plan you wrote yourself.
+    add_column_if_missing(
+        conn,
+        "plans",
+        "holding_id",
+        "holding_id TEXT REFERENCES holdings(id) ON DELETE CASCADE",
+    )?;
     add_column_if_missing(
         conn,
         "investment_lots",
@@ -479,6 +496,7 @@ fn migrate(conn: &Connection) -> Result<()> {
         drop_column_if_present(conn, "plans", dead)?;
     }
     migrate_gold_to_grams(conn)?;
+    allow_pending_lots(conn)?;
     conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_cat_parent ON categories(parent_id);")
         .map_err(oops)?;
     // Sub-categories wear their group's colour. Books that predate the rule
@@ -585,6 +603,61 @@ fn widen_holding_kinds(conn: &Connection) -> Result<()> {
          FROM holdings;
          DROP TABLE holdings;
          ALTER TABLE holdings_widened RENAME TO holdings;
+         COMMIT;
+         PRAGMA foreign_keys = ON;",
+    )
+    .map_err(oops)?;
+    Ok(())
+}
+
+/// Money goes in on one day and the units land on another — often days later,
+/// at whatever NAV the AMC processed it on. Until then the purchase is real
+/// and the units are not, so a lot has to be able to hold nothing: the old
+/// CHECK insisted on more than zero. SQLite cannot alter a CHECK in place, so
+/// the table is rebuilt around the wider rule with everything copied across.
+fn allow_pending_lots(conn: &Connection) -> Result<()> {
+    let sql: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'investment_lots'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(oops)?
+        .unwrap_or_default();
+    if !sql.contains("quantity_e4    INTEGER NOT NULL CHECK (quantity_e4 > 0)")
+        && !sql.contains("quantity_e4 INTEGER NOT NULL CHECK (quantity_e4 > 0)")
+    {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "PRAGMA foreign_keys = OFF;
+         BEGIN;
+         CREATE TABLE lots_widened (
+            id             TEXT PRIMARY KEY,
+            holding_id     TEXT NOT NULL REFERENCES holdings(id) ON DELETE CASCADE,
+            kind           TEXT NOT NULL CHECK (kind IN ('buy','sell')),
+            -- Zero means the money has gone in and the units have not landed.
+            quantity_e4    INTEGER NOT NULL CHECK (quantity_e4 >= 0),
+            amount         INTEGER NOT NULL CHECK (amount >= 0),
+            occurred_at    TEXT NOT NULL,
+            allotted_at    TEXT,
+            transaction_id TEXT REFERENCES transactions(id) ON DELETE SET NULL,
+            owns_transaction INTEGER NOT NULL DEFAULT 0,
+            note           TEXT,
+            created_at     TEXT NOT NULL
+         );
+         INSERT INTO lots_widened
+            (id, holding_id, kind, quantity_e4, amount, occurred_at, allotted_at,
+             transaction_id, owns_transaction, note, created_at)
+         SELECT id, holding_id, kind, quantity_e4, amount, occurred_at, allotted_at,
+                transaction_id, owns_transaction, note, created_at
+         FROM investment_lots;
+         DROP TABLE investment_lots;
+         ALTER TABLE lots_widened RENAME TO investment_lots;
+         CREATE INDEX IF NOT EXISTS idx_lots_holding ON investment_lots(holding_id);
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_lot_tx
+            ON investment_lots(transaction_id) WHERE transaction_id IS NOT NULL;
          COMMIT;
          PRAGMA foreign_keys = ON;",
     )
@@ -3880,7 +3953,10 @@ pub fn list_holdings(conn: &Connection) -> Result<Vec<Holding>> {
                               WHERE l.holding_id = h.id AND l.kind = 'buy'), 0),
                     COALESCE((SELECT SUM(l.amount) FROM investment_lots l
                               WHERE l.holding_id = h.id AND l.kind = 'sell'), 0),
-                    h.rate_e4, h.opened_on, h.matures_on
+                    h.rate_e4, h.opened_on, h.matures_on, h.instalment,
+                    COALESCE((SELECT SUM(l.amount) FROM investment_lots l
+                              WHERE l.holding_id = h.id AND l.kind = 'buy'
+                                AND l.quantity_e4 = 0), 0)
              FROM holdings h
              LEFT JOIN accounts a ON a.id = h.account_id
              ORDER BY h.closed_at IS NOT NULL, h.kind, h.created_at DESC",
@@ -3902,12 +3978,17 @@ pub fn list_holdings(conn: &Connection) -> Result<Vec<Holding>> {
             let opened_on: Option<String> = r.get(16)?;
             let matures_on: Option<String> = r.get(17)?;
             let priced = book.price_for(&kind, scheme_code.as_deref(), purity_e4);
+            // Money in, units not landed yet. It is worth what was paid until
+            // the AMC says otherwise — anything else would have a week's
+            // savings disappear from your net worth between the debit and the
+            // allotment, which is the one thing that certainly did not happen.
+            let pending: Paise = r.get(19)?;
             // A deposit has no price to look up: it is worth what it has
             // earned, which is filled in below where the connection is at
             // hand to read its instalments.
             let market_value = priced
                 .as_ref()
-                .map(|(price, _)| market_value_paise(units_e4.max(0), *price))
+                .map(|(price, _)| market_value_paise(units_e4.max(0), *price) + pending)
                 .unwrap_or(0);
             Ok(Holding {
                 id: r.get(0)?,
@@ -3938,6 +4019,8 @@ pub fn list_holdings(conn: &Connection) -> Result<Vec<Holding>> {
                 opened_on,
                 matures_on,
                 maturity_value: 0,
+                instalment: r.get(18)?,
+                pending,
                 lots: Vec::new(),
             })
         })
@@ -4050,6 +4133,18 @@ pub fn save_holding(conn: &Connection, input: HoldingInput) -> Result<()> {
         (None, None, None)
     };
 
+    // What a recurring deposit puts in each month. Only an RD has one; a
+    // fixed deposit is paid once, at the start.
+    let instalment = if input.kind == "rd" {
+        let amount = input.instalment.unwrap_or(0);
+        if amount < 0 {
+            return Err("An instalment can't be less than nothing.".into());
+        }
+        amount
+    } else {
+        0
+    };
+
     // Each kind carries only its own fields, so changing a holding's kind can
     // never leave a scheme code on a gold bar. Account credit limits are kept
     // tidy the same way.
@@ -4102,7 +4197,11 @@ pub fn save_holding(conn: &Connection, input: HoldingInput) -> Result<()> {
         }
     }
 
-    match input.id {
+    // The id either way, so what the holding keeps beside it — the plan an RD
+    // falls due on — can be hung off it whether it was written now or before.
+    let holding_id = input.id.clone().unwrap_or_else(new_id);
+
+    match input.id.clone() {
         Some(id) => {
             // A fund's entries have nowhere to go once it becomes gold, and
             // silently dropping them would take their postings' basis with
@@ -4140,7 +4239,8 @@ pub fn save_holding(conn: &Connection, input: HoldingInput) -> Result<()> {
             conn.execute(
                 "UPDATE holdings SET kind = ?2, name = ?3, account_id = ?4, scheme_code = ?5,
                         isin = ?6, purity_e4 = ?7, grams_e4 = ?8, note = ?9, closed_at = ?10,
-                        acquired_on = ?11, rate_e4 = ?12, opened_on = ?13, matures_on = ?14
+                        acquired_on = ?11, rate_e4 = ?12, opened_on = ?13, matures_on = ?14,
+                        instalment = ?15
                  WHERE id = ?1",
                 params![
                     id,
@@ -4156,17 +4256,18 @@ pub fn save_holding(conn: &Connection, input: HoldingInput) -> Result<()> {
                     acquired_on,
                     rate_e4,
                     opened_on,
-                    matures_on
+                    matures_on,
+                    instalment
                 ],
             )
         }
         None => conn.execute(
             "INSERT INTO holdings (id, kind, name, account_id, scheme_code, isin,
                                    purity_e4, grams_e4, note, closed_at, created_at,
-                                   acquired_on, rate_e4, opened_on, matures_on)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                                   acquired_on, rate_e4, opened_on, matures_on, instalment)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
-                new_id(),
+                holding_id,
                 input.kind,
                 input.name.trim(),
                 account_id,
@@ -4798,6 +4899,109 @@ pub fn holding_series(conn: &Connection, id: &str, days: Option<i64>) -> Result<
     }
 }
 
+/// What one holding has been worth, day by day: the units held on each day at
+/// that day's price. Not the same line as the scheme's NAV, which is a fact
+/// about the fund rather than about you — it runs from the fund's inception,
+/// it rises where you held nothing, and it says nothing about the ten
+/// instalments you put in along the way.
+pub fn holding_value_series(
+    conn: &Connection,
+    id: &str,
+    days: Option<i64>,
+) -> Result<Vec<ValuePoint>> {
+    let line = holding_series(conn, id, days)?;
+    if line.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Gold is weighed rather than traded, so the whole of it is held from the
+    // day it was acquired; a fund is however much its lots have added up to
+    // by the day being drawn.
+    let (kind, grams_e4, acquired_on): (String, Scaled, Option<String>) = conn
+        .query_row(
+            "SELECT kind, grams_e4, acquired_on FROM holdings WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .map_err(oops)?;
+
+    if kind == "gold" {
+        return Ok(line
+            .iter()
+            .filter(|p| acquired_on.as_deref().is_none_or(|day| p.as_of.as_str() >= day))
+            .map(|p| ValuePoint {
+                as_of: p.as_of.clone(),
+                value: market_value_paise(grams_e4, p.price_e4),
+            })
+            .collect());
+    }
+
+    // Every lot, oldest first, dated by the day its units landed — which is
+    // what decides the day they start counting.
+    let mut stmt = conn
+        .prepare(
+            "SELECT SUBSTR(COALESCE(allotted_at, occurred_at), 1, 10),
+                    CASE WHEN kind = 'buy' THEN quantity_e4 ELSE -quantity_e4 END
+             FROM investment_lots WHERE holding_id = ?1
+             ORDER BY COALESCE(allotted_at, occurred_at)",
+        )
+        .map_err(oops)?;
+    let lots: Vec<(String, Scaled)> = stmt
+        .query_map(params![id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?;
+    drop(stmt);
+    if lots.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut out = Vec::new();
+    let mut held: Scaled = 0;
+    let mut next = 0;
+    for point in &line {
+        while next < lots.len() && lots[next].0 <= point.as_of {
+            held += lots[next].1;
+            next += 1;
+        }
+        // Before the first unit landed there is nothing of yours to draw.
+        if held <= 0 && out.is_empty() {
+            continue;
+        }
+        out.push(ValuePoint {
+            as_of: point.as_of.clone(),
+            value: market_value_paise(held.max(0), point.price_e4),
+        });
+    }
+    Ok(out)
+}
+
+/// The same line for every holding at once, keyed by holding id — one round
+/// trip behind a screen full of sparklines.
+pub fn holding_value_series_all(
+    conn: &Connection,
+    days: Option<i64>,
+) -> Result<HashMap<String, Vec<ValuePoint>>> {
+    let ids: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT id FROM holdings WHERE kind IN ('gold', 'fund')")
+            .map_err(oops)?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(oops)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(oops)?;
+        rows
+    };
+    let mut out = HashMap::new();
+    for id in ids {
+        let line = holding_value_series(conn, &id, days)?;
+        if !line.is_empty() {
+            out.insert(id, line);
+        }
+    }
+    Ok(out)
+}
+
 /// Every holding's line at once, keyed by holding id — one round trip for a
 /// screen full of sparklines rather than one per card.
 pub fn holding_series_all(conn: &Connection, days: Option<i64>) -> Result<HashMap<String, Vec<PricePoint>>> {
@@ -5149,7 +5353,6 @@ pub fn portfolio_value_series(conn: &Connection, days: Option<i64>) -> Result<Ve
 /// What a gram has gone for, day by day, at whatever purity is asked for —
 /// the rate behind every gold holding, which is a fact about the market rather
 /// than about any one piece. `None` reads it as 24K.
-#[cfg(test)]
 pub fn gold_rate_series(
     conn: &Connection,
     days: Option<i64>,
@@ -5821,6 +6024,7 @@ mod tests {
                 closed: None,
                 rate_e4: None,
                 opened_on: None,
+                instalment: None,
                 matures_on: None,
             },
         )
@@ -5884,6 +6088,7 @@ mod tests {
                 closed: None,
                 rate_e4: None,
                 opened_on: None,
+                instalment: None,
                 matures_on: None,
             },
         )
@@ -6065,6 +6270,7 @@ mod tests {
                 closed: None,
                 rate_e4: None,
                 opened_on: None,
+                instalment: None,
                 matures_on: None,
             },
         )
@@ -6296,6 +6502,7 @@ mod tests {
                     closed: None,
                     rate_e4: None,
                     opened_on: None,
+                    instalment: None,
                     matures_on: None,
                 },
             )
@@ -7298,6 +7505,7 @@ mod tests {
                 closed: None,
                 rate_e4: None,
                 opened_on: None,
+                instalment: None,
                 matures_on: None,
             },
         )
@@ -7343,6 +7551,7 @@ mod tests {
                 closed: None,
                 rate_e4: None,
                 opened_on: None,
+                instalment: None,
                 matures_on: None,
             },
         )
@@ -7477,6 +7686,7 @@ mod tests {
                 closed: None,
                 rate_e4: None,
                 opened_on: None,
+                instalment: None,
                 matures_on: None,
             },
         )
@@ -7513,6 +7723,7 @@ mod tests {
                 closed: None,
                 rate_e4: None,
                 opened_on: None,
+                instalment: None,
                 matures_on: None,
             },
         );

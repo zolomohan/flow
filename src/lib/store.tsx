@@ -10,6 +10,7 @@ import {
 } from 'react';
 import { api } from './api';
 import { monthKey } from './format';
+import { isDeposit } from './types';
 import type {
   Account,
   BulkResult,
@@ -315,7 +316,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!ready || primed.current || !holdings.length) return;
     primed.current = true;
     const today = new Date().toISOString().slice(0, 10);
-    if (holdings.some((h) => !h.priceAsOf || h.priceAsOf < today)) void refreshPrices();
+    // Only what the market prices. A deposit earns at a rate written into its
+    // own terms — it has no NAV to go stale, and asking after one meant every
+    // book holding nothing but deposits went to the network on every launch.
+    const priced = holdings.filter((h) => !isDeposit(h.kind));
+    if (priced.some((h) => !h.priceAsOf || h.priceAsOf < today)) void refreshPrices();
   }, [ready, holdings, refreshPrices]);
 
   const value = useMemo<Store>(

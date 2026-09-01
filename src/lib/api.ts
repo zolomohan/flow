@@ -171,9 +171,23 @@ export const api = {
   /** Every holding's line at once, keyed by holding id. */
   holdingSeriesAll: (days: number | null) =>
     call<Record<string, PricePoint[]>>('holding_series_all', { days }),
+
+  /** What one holding of yours has been worth, day by day: the units you held
+   *  at each day's price, rather than the scheme's own NAV line. */
+  holdingValueSeries: (id: string, days: number | null) =>
+    call<ValuePoint[]>('holding_value_series', { id, days }),
+
+  /** The same, for every holding at once. */
+  holdingValueSeriesAll: (days: number | null) =>
+    call<Record<string, ValuePoint[]>>('holding_value_series_all', { days }),
   /** What the gold held has been worth, day by day. Null counts every piece. */
   goldValueSeries: (days: number | null, purityE4: number | null) =>
     call<ValuePoint[]>('gold_value_series', { days, purityE4 }),
+
+  /** What a gram of gold has gone for, day by day, at a fineness. Null reads
+   *  it as 24K. A fact about the market, not about the pieces you hold. */
+  goldRateSeries: (days: number | null, purityE4: number | null) =>
+    call<PricePoint[]>('gold_rate_series', { days, purityE4 }),
 
   /** What everything held has been worth, day by day, as one line. */
   portfolioValueSeries: (days: number | null) =>
