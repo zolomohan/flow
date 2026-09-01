@@ -62,7 +62,7 @@ export function PlanSheet({
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
 
-  const live = useMemo(() => accounts.filter((a) => !a.archived), [accounts]);
+  const live = useMemo(() => accounts.filter((a) => !a.archived && !a.system), [accounts]);
 
   // Every opening starts from what it is about: the plan being changed, the
   // rhythm being adopted, or an empty form.

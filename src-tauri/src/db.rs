@@ -852,9 +852,11 @@ fn account_from_row(r: &Row) -> rusqlite::Result<Account> {
         credit_limit: r.get(11)?,
         statement_day: r.get(12)?,
         due_day: r.get(13)?,
-        // Filled in by `apply_marks`: the ledger alone knows nothing about
-        // what a holding is worth today.
+        // Both filled in by `apply_marks`: the ledger alone knows nothing
+        // about what a holding is worth today, nor which account is the
+        // book's own.
         revaluation: 0,
+        system: false,
     })
 }
 
@@ -959,6 +961,7 @@ pub fn save_account(conn: &Connection, input: AccountInput) -> Result<Account> {
 }
 
 pub fn set_account_archived(conn: &Connection, id: &str, archived: bool) -> Result<()> {
+    refuse_the_books_own(conn, id)?;
     conn.execute(
         "UPDATE accounts SET archived = ?2 WHERE id = ?1",
         params![id, archived as i64],
@@ -968,6 +971,7 @@ pub fn set_account_archived(conn: &Connection, id: &str, archived: bool) -> Resu
 }
 
 pub fn delete_account(conn: &Connection, id: &str) -> Result<()> {
+    refuse_the_books_own(conn, id)?;
     conn.execute("DELETE FROM accounts WHERE id = ?1", params![id])
         .map_err(oops)?;
     Ok(())
@@ -2007,6 +2011,14 @@ pub fn save_transaction(conn: &Connection, input: TransactionInput) -> Result<Tr
             _ => {}
         }
     }
+    // Which way the debt against this posting runs, if one does — read before
+    // the input is taken apart below.
+    let debt_side = if input.kind == "transfer" {
+        debt_side(conn, &input)?
+    } else {
+        None
+    };
+
     // Transfers move money between your own accounts, so they are never
     // categorised — clear anything the form left behind.
     let category_id = if input.kind == "transfer" {
@@ -2023,10 +2035,39 @@ pub fn save_transaction(conn: &Connection, input: TransactionInput) -> Result<Tr
         input.refund_of.clone(),
     )?;
     let to_account_id = if input.kind == "transfer" {
-        input.to_account_id
+        input.to_account_id.clone().filter(|to| !to.is_empty())
     } else {
         None
     };
+
+    // Every debt runs through one account. Money handed to somebody has not
+    // left your books — it is out with them — so a transfer with a debt
+    // standing against it and nowhere of yours to go lands in the account
+    // that stands for what is out with people, the same one repayments come
+    // back through. Money borrowed runs the other way: in from that account
+    // and into the one it arrived in.
+    //
+    // Filled in here rather than asked for, because there is only ever one
+    // answer, and a posting whose other side is nothing is a posting the
+    // balance sheet cannot read.
+    let mut account_id = input.account_id.clone();
+    let mut to_account_id = to_account_id;
+    if input.kind == "transfer" && to_account_id.is_none() {
+        if let Some(direction) = debt_side {
+            let holding = debt_account(conn)?;
+            if holding == account_id {
+                return Err(format!(
+                    "Pick the account the money actually moved through — {DEBT_ACCOUNT} is the other side of it."
+                ));
+            }
+            if direction == "borrowed" {
+                to_account_id = Some(account_id);
+                account_id = holding;
+            } else {
+                to_account_id = Some(holding);
+            }
+        }
+    }
 
     // One transaction over the whole save: a bill and the parts it was split
     // into are one fact, and half of it landing would leave the two
@@ -2050,7 +2091,7 @@ pub fn save_transaction(conn: &Connection, input: TransactionInput) -> Result<Tr
                     id,
                     input.kind,
                     input.amount,
-                    input.account_id,
+                    account_id,
                     to_account_id,
                     category_id,
                     input.merchant,
@@ -2073,7 +2114,7 @@ pub fn save_transaction(conn: &Connection, input: TransactionInput) -> Result<Tr
                     id,
                     input.kind,
                     input.amount,
-                    input.account_id,
+                    account_id,
                     to_account_id,
                     category_id,
                     input.merchant,
@@ -3365,20 +3406,70 @@ pub fn delete_debt(conn: &Connection, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Which way the debt standing against a posting runs, if one does at all.
+/// What the save is carrying comes first; failing that, what the book already
+/// holds against the posting being edited.
+fn debt_side(conn: &Connection, input: &TransactionInput) -> Result<Option<String>> {
+    if let Some(shares) = input.shares.as_deref() {
+        return Ok(shares.first().map(|s| s.direction.clone()));
+    }
+    let Some(id) = input.id.as_deref() else {
+        return Ok(None);
+    };
+    conn.query_row(
+        "SELECT direction FROM debts WHERE transaction_id = ?1 AND from_split = 1 LIMIT 1",
+        params![id],
+        |r| r.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(oops)
+}
+
 /// The account money out with people sits in: archived, so it never counts
 /// toward net worth — what is owed is counted by the debt itself, and
 /// counting the account as well would count it twice. A transfer against it
 /// is how a hand-off reaches the ledger without reading as income or spending.
-fn debt_account(conn: &Connection) -> Result<String> {
-    if let Some(id) = conn
+/// Which account that is, if the book has one yet. Held by id in the settings
+/// rather than found by name: it is the book's own account, and a name is a
+/// thing that gets changed — by this very migration, once.
+pub fn debt_account_id(conn: &Connection) -> Result<Option<String>> {
+    let held: Option<String> = setting(conn, DEBT_ACCOUNT_KEY)?;
+    if let Some(id) = held {
+        let alive: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM accounts WHERE id = ?1",
+                params![id],
+                |r| r.get::<_, i64>(0),
+            )
+            .map_err(oops)?
+            > 0;
+        if alive {
+            return Ok(Some(id));
+        }
+    }
+    // A book from before the setting existed: the account is there under one
+    // of the two names it has had.
+    let found: Option<String> = conn
         .query_row(
-            "SELECT id FROM accounts WHERE name = ?1",
-            params![DEBT_ACCOUNT],
+            "SELECT id FROM accounts WHERE name IN (?1, ?2) ORDER BY name = ?1 DESC LIMIT 1",
+            params![DEBT_ACCOUNT, DEBT_ACCOUNT_WAS],
             |r| r.get::<_, String>(0),
         )
         .optional()
-        .map_err(oops)?
-    {
+        .map_err(oops)?;
+    if let Some(id) = found.as_deref() {
+        conn.execute(
+            "UPDATE accounts SET name = ?2 WHERE id = ?1",
+            params![id, DEBT_ACCOUNT],
+        )
+        .map_err(oops)?;
+        set_setting(conn, DEBT_ACCOUNT_KEY, id)?;
+    }
+    Ok(found)
+}
+
+fn debt_account(conn: &Connection) -> Result<String> {
+    if let Some(id) = debt_account_id(conn)? {
         return Ok(id);
     }
     let id = new_id();
@@ -3389,10 +3480,14 @@ fn debt_account(conn: &Connection) -> Result<String> {
         params![id, DEBT_ACCOUNT, now()],
     )
     .map_err(oops)?;
+    set_setting(conn, DEBT_ACCOUNT_KEY, &id)?;
     Ok(id)
 }
 
-pub const DEBT_ACCOUNT: &str = "Lent & borrowed";
+pub const DEBT_ACCOUNT: &str = "Debts";
+/// What it was called before, in books that have one already.
+const DEBT_ACCOUNT_WAS: &str = "Lent & borrowed";
+const DEBT_ACCOUNT_KEY: &str = "debt_account";
 
 pub fn save_debt_payment(conn: &Connection, input: DebtPaymentInput) -> Result<()> {
     if input.amount <= 0 {
@@ -4085,7 +4180,89 @@ pub fn save_holding(conn: &Connection, input: HoldingInput) -> Result<()> {
                 acquired_on,
                 rate_e4,
                 opened_on,
-                matures_on
+                matures_on,
+                instalment
+            ],
+        ),
+    }
+    .map_err(oops)?;
+    keep_deposit_plan(
+        conn,
+        &input.name,
+        &input.kind,
+        instalment,
+        opened_on.as_deref(),
+        matures_on.as_deref(),
+        account_id.as_deref(),
+        Some(holding_id.as_str()),
+    )?;
+    Ok(())
+}
+
+/// The plan a recurring deposit keeps for itself.
+///
+/// An instalment is a standing payment like any other — it falls due, it can
+/// be late, and it is paid by a posting — so it belongs on the Planned screen
+/// rather than in a second place that only deposits know about. The plan is
+/// the book's, not yours: it follows the deposit's own terms, and it is put
+/// away when the deposit is closed or its instalment is taken off.
+fn keep_deposit_plan(
+    conn: &Connection,
+    name: &str,
+    kind: &str,
+    instalment: Paise,
+    opened_on: Option<&str>,
+    matures_on: Option<&str>,
+    account_id: Option<&str>,
+    holding_id: Option<&str>,
+) -> Result<()> {
+    let Some(holding_id) = holding_id else {
+        return Ok(());
+    };
+    let existing: Option<String> = conn
+        .query_row(
+            "SELECT id FROM plans WHERE holding_id = ?1",
+            params![holding_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(oops)?;
+
+    // Nothing to fall due: not an RD any more, no instalment set, or no day
+    // for it to land on. An existing plan is archived rather than deleted —
+    // whatever has been paid against it is still true.
+    let wanted = kind == "rd" && instalment > 0 && opened_on.is_some();
+    if !wanted {
+        if let Some(id) = existing {
+            conn.execute("UPDATE plans SET archived = 1 WHERE id = ?1", params![id])
+                .map_err(oops)?;
+        }
+        return Ok(());
+    }
+    let anchor = opened_on.unwrap_or_default();
+    match existing {
+        Some(id) => conn.execute(
+            "UPDATE plans SET name = ?2, merchant = ?2, amount = ?3, to_account_id = ?4,
+                    anchor_on = ?5, ends_on = ?6, archived = 0
+             WHERE id = ?1",
+            params![id, name.trim(), instalment, account_id, anchor, matures_on],
+        ),
+        None => conn.execute(
+            "INSERT INTO plans (id, name, kind, amount, account_id, to_account_id,
+                                category_id, merchant, note, cadence, every, anchor_on,
+                                ends_on, archived, created_at, holding_id)
+             VALUES (?1, ?2, 'transfer', ?3, NULL, ?4, NULL, ?2, ?5, 'monthly', 1, ?6,
+                     ?7, 0, ?8, ?9)",
+            params![
+                new_id(),
+                name.trim(),
+                instalment,
+                account_id,
+                "Instalment on a recurring deposit.",
+                anchor,
+                matures_on,
+                now(),
+                holding_id
             ],
         ),
     }
@@ -4119,8 +4296,15 @@ pub fn save_investment_lot(conn: &Connection, mut input: InvestmentLotInput) -> 
             return Err("How much went in? A deposit is measured by its money.".into());
         }
     }
-    if input.quantity_e4 <= 0 {
-        return Err("How much was bought? Enter a quantity above zero.".into());
+    // A purchase whose units have not landed yet. The money moved — that is
+    // the fact being written down — and the units follow when the AMC says
+    // so, which is what the allotment date and this quantity are for. Only a
+    // buy may stand empty: there is nothing to sell that you do not hold.
+    if input.quantity_e4 < 0 || (input.quantity_e4 == 0 && input.kind != "buy") {
+        return Err("How much was sold? Enter a quantity above zero.".into());
+    }
+    if input.quantity_e4 == 0 && input.amount <= 0 {
+        return Err("How much went in? A purchase is money, whether or not the units have landed.".into());
     }
     if input.amount < 0 {
         return Err("An amount cannot be negative.".into());
@@ -7939,6 +8123,7 @@ mod tests {
                 acquired_on: None,
                 rate_e4: Some((rate_pct * 10_000.0) as Scaled),
                 opened_on: Some(opened.into()),
+                instalment: None,
                 matures_on: Some(matures.into()),
                 note: None,
                 closed: None,

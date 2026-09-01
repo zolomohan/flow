@@ -105,7 +105,7 @@ export function Overview({
     };
   }, [revision]);
 
-  const live = useMemo(() => accounts.filter((a) => !a.archived), [accounts]);
+  const live = useMemo(() => accounts.filter((a) => !a.archived && !a.system), [accounts]);
 
   // What money you have, whatever shape it is in. Accounts come first, and
   // then the holdings that answer to no account — gold is kept in a locker

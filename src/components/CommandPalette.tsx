@@ -87,7 +87,7 @@ export function CommandPalette({
       : actions.slice(0, 4);
 
     const accountMatches: Command[] = (term
-      ? accounts.filter((a) => a.name.toLowerCase().includes(term))
+      ? accounts.filter((a) => !a.system && a.name.toLowerCase().includes(term))
       : []
     ).map((a) => ({
       id: `acct-${a.id}`,

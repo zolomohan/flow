@@ -38,6 +38,10 @@ pub struct Account {
     /// holding sits — and the whole market value of gold, which is weighed
     /// rather than bought and so posts nothing to the ledger at all.
     pub revaluation: Paise,
+    /// The book's own account rather than one of yours — the one every debt
+    /// runs through. It cannot be renamed, archived or deleted, and it is not
+    /// shown among your accounts: it is bookkeeping, not a place money sits.
+    pub system: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

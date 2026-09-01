@@ -25,6 +25,9 @@ export interface Account {
    * hand.
    */
   revaluation: Paise;
+  /** The book's own account rather than one of yours — the one every debt
+   *  runs through. Not shown among your accounts, and not editable. */
+  system: boolean;
   /** Credit limit for a card, in paise. Zero means it isn't tracked. */
   creditLimit: Paise;
   /** The day of the month a card's statement closes, 1–31; 0 means the cycle

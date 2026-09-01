@@ -36,8 +36,12 @@ export function Accounts({
   const { accounts } = useStore();
   const [showArchived, setShowArchived] = useState(false);
 
-  const live = useMemo(() => accounts.filter((a) => !a.archived), [accounts]);
-  const archived = useMemo(() => accounts.filter((a) => a.archived), [accounts]);
+  // The book's own account is not one of yours: every debt runs through it,
+  // nothing about it is yours to set, and a row you cannot act on is a row
+  // that only raises the question of why it is there.
+  const mine = useMemo(() => accounts.filter((a) => !a.system), [accounts]);
+  const live = useMemo(() => mine.filter((a) => !a.archived), [mine]);
+  const archived = useMemo(() => mine.filter((a) => a.archived), [mine]);
 
   const netWorth = live.reduce((sum, a) => sum + accountWorth(a), 0);
 
@@ -115,7 +119,15 @@ export function Accounts({
                 style={{ overflow: 'hidden' }}
               >
                 <Card padded={false} className="row-board">
-                  <div className="account-list">
+                  {/* The same variant parent the live groups have: a row is
+                      hidden until its list tells it to arrive, and a plain
+                      div never does — which is why this card opened empty. */}
+                  <motion.div
+                    className="account-list"
+                    variants={listVariants}
+                    initial="initial"
+                    animate="animate"
+                  >
                     {archived.map((account) => (
                       <AccountRow
                         key={account.id}
@@ -123,7 +135,7 @@ export function Accounts({
                         onEdit={() => onEditAccount(account)}
                       />
                     ))}
-                  </div>
+                  </motion.div>
                 </Card>
               </motion.div>
             )}

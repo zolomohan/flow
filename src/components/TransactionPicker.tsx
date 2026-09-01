@@ -10,6 +10,7 @@ import type { Transaction } from '../lib/types';
  */
 export function TransactionPicker({
   value, label, onChange, onOpen, title = 'Link an existing record', subtitle,
+  browseLabel = 'Browse your transactions',
 }: {
   value: string | null;
   label: string | null;
@@ -19,6 +20,10 @@ export function TransactionPicker({
   onOpen?: (id: string) => void;
   title?: string;
   subtitle?: string;
+  /** What the button says before anything is linked, where "browse" is not
+   *  the point of it — a refund is asking which posting, not for a look
+   *  around the ledger. */
+  browseLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -43,7 +48,7 @@ export function TransactionPicker({
       ) : (
         <button type="button" className="link-add" onClick={() => setOpen(true)}>
           <Icon name="search" size={14} />
-          Browse your transactions
+          {browseLabel}
         </button>
       )}
 

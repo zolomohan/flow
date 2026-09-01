@@ -4213,44 +4213,63 @@ kbd {
 
 .head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
-.debt-summary {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
-}
+/* What is done with, folded under the side it happened on. A row rather than
+   a card: shut, it should read as the foot of the list above it.
 
-.debt-total {
-  display: grid;
-  gap: 2px;
-  padding: 15px 18px;
-  border-radius: var(--r-xl);
-  background: var(--surface);
-  border: 1px solid var(--line-soft);
-  box-shadow: var(--shadow-xs);
+   And it reads as a foot in the other sense too: with a short list above it
+   the fold sits at the bottom of the screen rather than halfway up an empty
+   page, and with a long one it travels down with the list. Opening it walks
+   the fold back up to meet the end of the list, which is where the eye is
+   already looking. All of that is one auto margin against a screen tall
+   enough to have a bottom. */
+.debt-screen { min-height: 100%; }
+.debt-screen .tab-panel { flex: 1; }
+/* The space the fold rides on. It grows to fill whatever the list leaves and
+   winds back to nothing as the fold opens; the negative margin cancels the
+   column's gap so that at no height it takes up no room. */
+.debt-past-gap { flex-basis: 0; min-height: 0; margin-top: -18px; }
+/* Level with Settings and the theme toggle across the sidebar: the screen
+   ends on the sidebar's own 16px, and the row is built to the same 36px the
+   foot's nav item stands at, so the two read as one line across the window. */
+.debt-screen { padding-bottom: 16px; }
+.debt-screen .debt-past-head { min-height: 36px; padding: 8px 4px; }
+.debt-past { margin-top: 4px; }
+.debt-screen .debt-past { margin-top: 0; }
+.debt-past-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 11px 4px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 13px;
+  color: var(--ink-3);
+  text-align: left;
+  transition: color var(--fast) var(--ease);
 }
-.debt-total span {
-  font-size: 11px;
+.debt-past-head:hover { color: var(--ink); }
+.debt-past-head > span:first-child { display: grid; place-items: center; color: var(--ink-4); }
+.debt-past-head strong { font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.debt-past-head.is-open strong { color: var(--ink); }
+.debt-past-count {
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  background: var(--surface-inset);
+  font-size: 11.5px;
   font-weight: 600;
-  letter-spacing: var(--wide);
-  text-transform: uppercase;
   color: var(--ink-3);
 }
-.debt-total strong { font-size: 23px; font-weight: 600; letter-spacing: var(--tight); }
-.debt-total small { font-size: 12px; color: var(--ink-4); font-weight: 500; }
-.debt-total.is-lent strong { color: var(--green); }
-.debt-total.is-borrowed strong { color: var(--amber); }
-.debt-total .is-up { color: var(--green); }
-.debt-total .is-down { color: var(--red); }
-
-.group-title em {
+.debt-past-head em {
   margin-left: auto;
   font-style: normal;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
-  letter-spacing: 0;
-  text-transform: none;
   color: var(--ink-4);
 }
+/* The list inside keeps the grid's own gap off the fold. It is always in the
+   page — measured, and held at nothing — so opening it is one number moving. */
+.debt-past-body { overflow: hidden; }
+.debt-past-inner { padding-top: 13px; }
 
 .debt-grid {
   display: grid;
@@ -4535,37 +4554,84 @@ kbd {
 .link-add:hover { border-color: var(--blue); color: var(--blue); }
 
 
-.settle-toggle {
+/* On or off, and which it is readable at a glance. The knob is laid out by
+   the track's own alignment, so the slide is a layout animation rather than a
+   number nudged by hand. */
+.switch {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 11px;
+  text-align: left;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.switch.has-label {
   width: 100%;
   padding: 11px 13px;
   border-radius: var(--r-md);
   background: var(--surface-inset);
   border: 1px solid transparent;
-  font-size: 13px;
-  font-weight: 500;
-  text-align: left;
   transition: border-color var(--fast) var(--ease);
 }
-.settle-toggle:hover { border-color: var(--line-strong); }
-.settle-toggle.is-on { border-color: var(--green); color: var(--green); }
-.settle-toggle small { margin-left: auto; font-size: 11.5px; color: var(--ink-4); }
-.settle-box {
-  display: grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 5px;
-  border: 1.5px solid var(--line-strong);
-  background: var(--surface);
-  flex-shrink: 0;
+.switch.has-label:hover { border-color: var(--line-strong); }
+.switch.is-on.has-label { border-color: color-mix(in srgb, var(--blue) 45%, transparent); }
+.switch:disabled { opacity: 0.45; pointer-events: none; }
+
+.switch-track {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex: none;
+  width: 34px;
+  height: 20px;
+  padding: 2px;
+  border-radius: 99px;
+  background: var(--line-strong);
+  transition: background var(--fast) var(--ease);
 }
-.settle-toggle.is-on .settle-box {
-  background: var(--green);
-  border-color: var(--green);
-  color: #fff;
+.switch.is-on .switch-track { background: var(--blue); justify-content: flex-end; }
+.switch-knob {
+  width: 16px;
+  height: 16px;
+  border-radius: 99px;
+  background: #fff;
+  box-shadow: var(--shadow-xs);
+}
+/* A switch that answers a row of its own, rather than a line inside one. */
+.switch-lg .switch-track { width: 46px; height: 27px; padding: 3px; }
+.switch-lg .switch-knob { width: 21px; height: 21px; box-shadow: var(--shadow-sm); }
+
+.switch-label { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.switch-label small { margin-left: auto; font-size: 11.5px; color: var(--ink-4); }
+.switch.is-on .switch-label { color: var(--ink); }
+
+/* How a debt meets the ledger: one label, one switch, and a panel that says
+   what the answer means. The switch takes the full width — three answers to
+   one question read as a row, not as a pill sitting in a corner. */
+.debt-record { display: flex; flex-direction: column; gap: 10px; }
+.debt-record .segmented { display: flex; width: 100%; }
+.debt-record-panel { display: flex; flex-direction: column; gap: 10px; }
+.debt-record-panel .page-note { margin-top: 0; }
+/* The answer that writes nothing says so quietly — it is where the form
+   rests, not an instruction. */
+.page-note.is-quiet {
+  background: var(--surface-inset);
+  border-color: transparent;
+  color: var(--ink-3);
+}
+.page-note.is-quiet svg { color: var(--ink-4); }
+
+/* The names already in the book, under the field asking for one. It hangs
+   off the field rather than being portalled: a short list on a field near
+   the top of the sheet has nothing to be clipped by. */
+.suggest { position: relative; }
+.select-menu.suggest-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
 }
 
 @media (max-width: 1140px) {
@@ -4573,7 +4639,6 @@ kbd {
 }
 
 @media (max-width: 900px) {
-  .debt-summary { grid-template-columns: 1fr; }
   .detail-lot { grid-template-columns: 24px minmax(0, 1fr) minmax(0, 1fr); }
   .detail-lot-qty { display: none; }
   /* Too narrow for one row of figures; wrap them instead. */

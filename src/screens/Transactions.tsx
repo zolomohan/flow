@@ -483,7 +483,7 @@ export function Transactions({
   // Closed accounts keep their history, and some of it is the only history
   // there is — the Wallet import parks orphaned transfer legs against an
   // archived "Unlinked" account. Leaving them out made those unfindable.
-  const live = accounts.filter((a) => !a.archived);
+  const live = accounts.filter((a) => !a.archived && !a.system);
   const closed = accounts.filter((a) => a.archived);
 
   return (

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { Icon } from '../components/Icon';
 import { BigMoney } from '../components/Money';
-import { Button, Card, CardHead } from '../components/ui';
+import { Button, Card, CardHead, Confirm } from '../components/ui';
 import { api } from '../lib/api';
 import { useStore } from '../lib/store';
 import { dayLabel, debtProgress, initials, money } from '../lib/format';
@@ -34,8 +34,11 @@ export function DebtDetail({
   onEditPayment: (payment: DebtPayment) => void;
   onOpenTransaction: (tx: Transaction) => void;
 }) {
-  const { revision } = useStore();
+  const { revision, deleteDebt } = useStore();
   const [entries, setEntries] = useState<Transaction[] | null>(null);
+  // Getting rid of the debt belongs where the debt is, beside the way in to
+  // changing it — not buried at the foot of the form for editing it.
+  const [confirming, setConfirming] = useState(false);
 
   // What the debt is actually made of — the posting that opened it, the ones
   // that repaid it, and whatever else was filed against it. Asked for by the
@@ -96,6 +99,23 @@ export function DebtDetail({
 
   return (
     <div className="screen" style={{ ['--tint' as any]: lent ? 'var(--green)' : 'var(--amber)' }}>
+      <Confirm
+        open={confirming}
+        title="Delete this debt?"
+        onConfirm={async () => {
+          setConfirming(false);
+          await deleteDebt(debt.id);
+          onBack();
+        }}
+        onCancel={() => setConfirming(false)}
+      >
+        {debt.payments.length > 0
+          ? `${money(debt.principal)} with ${debt.counterparty}, and the ${debt.payments.length} ${
+              debt.payments.length === 1 ? 'repayment' : 'repayments'
+            } against it. The postings in your ledger stay. This cannot be undone.`
+          : `${money(debt.principal)} with ${debt.counterparty}. The postings in your ledger stay. This cannot be undone.`}
+      </Confirm>
+
       <header className="screen-head detail-head">
         <div className="detail-id">
           <button className="detail-back" onClick={onBack} aria-label="Back to debts">
@@ -111,6 +131,9 @@ export function DebtDetail({
           </div>
         </div>
         <div className="head-actions">
+          <Button tone="ghost" icon="trash-2" onClick={() => setConfirming(true)}>
+            Delete
+          </Button>
           <Button icon="pencil" onClick={onEdit}>Edit</Button>
           {!debt.settled && (
             <Button tone="primary" icon="plus" onClick={onRecordPayment}>

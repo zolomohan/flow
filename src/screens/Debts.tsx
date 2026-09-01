@@ -5,11 +5,12 @@ import { Button, Card, Empty, Segmented, type SegmentOption } from '../component
 import { useStore } from '../lib/store';
 import { DebtDetail } from './DebtDetail';
 import { dayLabel, debtProgress, initials, money } from '../lib/format';
-import { itemVariants, listVariants } from '../lib/motion';
+import { itemVariants, listVariants, spring } from '../lib/motion';
 import type { Debt, DebtDirection, DebtPayment, Transaction } from '../lib/types';
 
-/** Who owes whom, and what is done with. */
-type DebtTab = 'lent' | 'borrowed' | 'past';
+/** Which side of the ledger you are looking at. What is done with is not a
+ *  third place to look — it is folded under the side it happened on. */
+type DebtTab = DebtDirection;
 
 export function Debts({
   onNewDebt, onEditDebt, onRecordPayment, onEditPayment, onOpenTransaction,
@@ -42,30 +43,25 @@ export function Debts({
   const borrowed = open.filter((d) => d.direction === 'borrowed');
   const owedToYou = lent.reduce((s, d) => s + d.outstanding, 0);
   const youOwe = borrowed.reduce((s, d) => s + d.outstanding, 0);
-  const net = owedToYou - youOwe;
 
-  // Three ways of asking the same question — who owes whom, and what is done
-  // with. Each is its own list rather than three stacked down one page.
+  // Two sides, two tabs. What is done with is not a third place to look: it
+  // belongs to the side it happened on, folded away under it.
   const tabs: SegmentOption<DebtTab>[] = [
     {
       value: 'lent',
-      label: `Owed to you${lent.length ? ` · ${lent.length}` : ''}`,
+      label: `Lent${lent.length ? ` · ${lent.length}` : ''}`,
       icon: 'arrow-up-right',
       accent: 'var(--green)',
     },
     {
       value: 'borrowed',
-      label: `You owe${borrowed.length ? ` · ${borrowed.length}` : ''}`,
+      label: `Borrowed${borrowed.length ? ` · ${borrowed.length}` : ''}`,
       icon: 'arrow-down-left',
       accent: 'var(--amber)',
     },
-    {
-      value: 'past',
-      label: `Past${settled.length ? ` · ${settled.length}` : ''}`,
-      icon: 'check',
-    },
   ];
-  const showing = tab === 'lent' ? lent : tab === 'borrowed' ? borrowed : settled;
+  const showing = tab === 'lent' ? lent : borrowed;
+  const past = settled.filter((d) => d.direction === tab);
 
   const viewing = openId ? debts.find((d) => d.id === openId) ?? null : null;
   if (viewing) {
@@ -82,13 +78,14 @@ export function Debts({
   }
 
   return (
-    <div className="screen">
+    <div className="screen debt-screen">
       <header className="screen-head">
         <div>
           <h1>Debts</h1>
+          {/* The two figures, in a line. They used to want a card apiece. */}
           <p>
             {open.length
-              ? `${open.length} open · net ${net >= 0 ? 'in your favour' : 'against you'} ${money(Math.abs(net))}`
+              ? `${money(owedToYou)} owed to you · ${money(youOwe)} you owe`
               : 'Money you have lent out, and money you owe.'}
           </p>
         </div>
@@ -101,26 +98,6 @@ export function Debts({
           </Button>
         </div>
       </header>
-
-      <div className="debt-summary">
-        <div className="debt-total is-lent">
-          <span>Owed to you</span>
-          <strong>{money(owedToYou)}</strong>
-          <small>{lent.length} {lent.length === 1 ? 'person' : 'debts'}</small>
-        </div>
-        <div className="debt-total is-borrowed">
-          <span>You owe</span>
-          <strong>{money(youOwe)}</strong>
-          <small>{borrowed.length} {borrowed.length === 1 ? 'person' : 'debts'}</small>
-        </div>
-        <div className="debt-total">
-          <span>Net position</span>
-          <strong className={net >= 0 ? 'is-up' : 'is-down'}>
-            {money(net, { sign: net > 0 })}
-          </strong>
-          <small>folded into your net worth</small>
-        </div>
-      </div>
 
       {debts.length === 0 ? (
         <Card>
@@ -158,50 +135,24 @@ export function Debts({
               {showing.length === 0 ? (
                 <Card>
                   <Empty
-                    icon={tab === 'past' ? 'check' : 'arrow-left-right'}
+                    icon="arrow-left-right"
                     title={
                       tab === 'lent'
                         ? 'Nobody owes you anything'
-                        : tab === 'borrowed'
-                          ? 'You owe nobody anything'
-                          : 'Nothing settled yet'
+                        : 'You owe nobody anything'
                     }
-                    body={
-                      tab === 'past'
-                        ? 'A debt lands here once it has been repaid in full, or written off.'
-                        : 'Record one and it will stand here until it is squared up.'
-                    }
+                    body="Record one and it will stand here until it is squared up."
                     action={
-                      tab === 'past' ? undefined : (
-                        <Button
-                          tone="primary"
-                          icon={tab === 'lent' ? 'arrow-up-right' : 'arrow-down-left'}
-                          onClick={() => onNewDebt(tab === 'lent' ? 'lent' : 'borrowed')}
-                        >
-                          {tab === 'lent' ? 'I lent someone' : 'I borrowed'}
-                        </Button>
-                      )
+                      <Button
+                        tone="primary"
+                        icon={tab === 'lent' ? 'arrow-up-right' : 'arrow-down-left'}
+                        onClick={() => onNewDebt(tab)}
+                      >
+                        {tab === 'lent' ? 'I lent someone' : 'I borrowed'}
+                      </Button>
                     }
                   />
                 </Card>
-              ) : tab === 'past' ? (
-                // What is done with runs both ways, and the two do not belong
-                // in one list: one is money that came home, the other money
-                // that was owed and isn't any more.
-                <>
-                  <SettledGroup
-                    title="You lent"
-                    debts={showing.filter((d) => d.direction === 'lent')}
-                    onOpen={setOpenId}
-                    onRecordPayment={onRecordPayment}
-                  />
-                  <SettledGroup
-                    title="You borrowed"
-                    debts={showing.filter((d) => d.direction === 'borrowed')}
-                    onOpen={setOpenId}
-                    onRecordPayment={onRecordPayment}
-                  />
-                </>
               ) : (
                 <motion.div
                   className="debt-grid"
@@ -219,6 +170,16 @@ export function Debts({
                   ))}
                 </motion.div>
               )}
+
+              {/* What is done with, on the side it happened on. Shut, because
+                  a debt that is squared up is a debt you have stopped
+                  thinking about — but there, because it is the only place the
+                  history of this side can be read. */}
+              <SettledSection
+                debts={past}
+                onOpen={setOpenId}
+                onRecordPayment={onRecordPayment}
+              />
             </motion.div>
           </AnimatePresence>
         </>
@@ -228,46 +189,91 @@ export function Debts({
 }
 
 /**
- * One side of the past: what it came to, how much of it came back, and how
- * much was let go — then the debts themselves.
+ * The side's own history, folded away. What it all came to, how much was let
+ * go, and the debts themselves — opened only when somebody asks for them.
  */
-function SettledGroup({
-  title, debts, onOpen, onRecordPayment,
+function SettledSection({
+  debts, onOpen, onRecordPayment,
 }: {
-  title: string;
   debts: Debt[];
   onOpen: (id: string) => void;
   onRecordPayment: (debt: Debt) => void;
 }) {
+  const [open, setOpen] = useState(false);
+
   if (!debts.length) return null;
   const principal = debts.reduce((sum, d) => sum + d.principal, 0);
   const forgiven = debts.reduce((sum, d) => sum + debtProgress(d).forgivenAmount, 0);
+
   return (
-    <section className="account-group">
-      <h2 className="group-title">
-        {title}
-        <span>{money(principal)}</span>
-        <em>
-          {debts.length} {debts.length === 1 ? 'debt' : 'debts'}
-          {forgiven > 0 ? ` · ${money(forgiven)} forgiven` : ' · all of it back'}
-        </em>
-      </h2>
+    <>
+      {/* The empty page between the list and the fold, held as a flex item of
+          its own rather than as an auto margin. Shut, it takes whatever space
+          is going and holds the fold at the foot of the screen; opening winds
+          it back to nothing, which walks the row up to the end of the list
+          above. The negative margin pays back the column's own gap, so a
+          spacer at no height leaves no trace of itself. */}
       <motion.div
-        className="debt-grid"
-        variants={listVariants}
-        initial="initial"
-        animate="animate"
-      >
-        {debts.map((debt) => (
-          <DebtCard
-            key={debt.id}
-            debt={debt}
-            onOpen={() => onOpen(debt.id)}
-            onRecordPayment={() => onRecordPayment(debt)}
-          />
-        ))}
-      </motion.div>
-    </section>
+        className="debt-past-gap"
+        initial={false}
+        animate={{ flexGrow: open ? 0 : 1 }}
+        transition={{ duration: 0.42, ease: [0.22, 1, 0.36, 1] }}
+        aria-hidden
+      />
+
+      <section className="debt-past">
+        <button
+          type="button"
+          className={`debt-past-head ${open ? 'is-open' : ''}`}
+          onClick={() => setOpen((was) => !was)}
+          aria-expanded={open}
+        >
+          <motion.span animate={{ rotate: open ? 90 : 0 }} transition={spring}>
+            <Icon name="chevron-right" size={15} />
+          </motion.span>
+          <strong>Settled</strong>
+          <span className="debt-past-count">
+            {debts.length} {debts.length === 1 ? 'debt' : 'debts'}
+          </span>
+          <em>
+            {money(principal)}
+            {forgiven > 0 ? ` · ${money(forgiven)} forgiven` : ' · all of it back'}
+          </em>
+        </button>
+
+        <motion.div
+          className="debt-past-body"
+          initial={false}
+          // The list is in the page either way, so `auto` is a height that
+          // can actually be measured when the fold is asked to open.
+          animate={{ height: open ? 'auto' : 0 }}
+          transition={{ duration: 0.42, ease: [0.22, 1, 0.36, 1] }}
+          // Shut, it is still in the page: nothing inside it should answer a
+          // Tab or be read out to anyone.
+          aria-hidden={!open}
+          inert={!open}
+        >
+          <div className="debt-past-inner">
+            {/* Each card is told when to arrive rather than inheriting it
+                from the list: these ones are mounted the whole time, and a
+                variant handed down a tree that never remounts is a variant
+                nothing acts on. */}
+            <div className="debt-grid">
+              {debts.map((debt, i) => (
+                <DebtCard
+                  key={debt.id}
+                  debt={debt}
+                  reveal={open}
+                  delay={0.08 + i * 0.05}
+                  onOpen={() => onOpen(debt.id)}
+                  onRecordPayment={() => onRecordPayment(debt)}
+                />
+              ))}
+            </div>
+          </div>
+        </motion.div>
+      </section>
+    </>
   );
 }
 
@@ -295,8 +301,16 @@ function DebtBar({ bar }: { bar: ReturnType<typeof debtProgress> }) {
 }
 
 function DebtCard({
-  debt, onOpen, onRecordPayment,
-}: { debt: Debt; onOpen: () => void; onRecordPayment: () => void }) {
+  debt, onOpen, onRecordPayment, reveal, delay = 0,
+}: {
+  debt: Debt;
+  onOpen: () => void;
+  onRecordPayment: () => void;
+  /** Set inside a fold, which says when the card is on show. Left off in a
+   *  plain list, where the list itself brings its cards in. */
+  reveal?: boolean;
+  delay?: number;
+}) {
   const bar = debtProgress(debt);
   const lent = debt.direction === 'lent';
   const overdue =
@@ -305,7 +319,17 @@ function DebtCard({
   return (
     <motion.article
       className={`debt-card ${debt.settled ? 'is-settled' : ''}`}
-      variants={itemVariants}
+      {...(reveal === undefined
+        ? { variants: itemVariants }
+        : {
+            initial: false,
+            animate: reveal ? { opacity: 1, y: 0 } : { opacity: 0, y: 12 },
+            transition: {
+              duration: 0.34,
+              delay: reveal ? delay : 0,
+              ease: [0.22, 1, 0.36, 1] as const,
+            },
+          })}
       style={{ ['--tint' as any]: lent ? 'var(--green)' : 'var(--amber)' }}
     >
       {/* The card says where it stands; the page behind it says how it got

@@ -57,7 +57,7 @@ export function ImportSheet({ open: isOpen, onClose }: { open: boolean; onClose:
   const [editing, setEditing] = useState<number | null>(null);
   const [busy, setBusy] = useState<'parsing' | 'importing' | null>(null);
 
-  const banks = useMemo(() => accounts.filter((a) => !a.archived), [accounts]);
+  const banks = useMemo(() => accounts.filter((a) => !a.archived && !a.system), [accounts]);
 
   const reset = () => {
     setFileName(null);
