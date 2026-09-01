@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Sidebar, type Route } from './components/Sidebar';
+import { INVESTMENT_TABS, Sidebar, isInvestmentRoute, type Route } from './components/Sidebar';
 import { api } from './lib/api';
 import { CommandPalette } from './components/CommandPalette';
 import {
@@ -51,14 +51,56 @@ const ROUTE_KEYS: Route[] = [
   'cards',
   'taxes',
   'debts',
-  'investments',
+  'funds',
   'insights',
   'settings',
 ];
 
+/** How far back the trail is kept. Long enough that nobody reaches the end
+    of it in a session, short enough that nothing grows without bound. */
+const HISTORY_MAX = 60;
+
+/**
+ * Where you have been, and where you were before you came back. The trail is
+ * a list of screens with a finger on the one being looked at: going somewhere
+ * new cuts off whatever was ahead, which is what forward means once you have
+ * taken a different turn.
+ */
+function useHistory(initial: Route) {
+  const [trail, setTrail] = useState<{ stack: Route[]; at: number }>({
+    stack: [initial],
+    at: 0,
+  });
+
+  const navigate = useCallback((next: Route) => {
+    setTrail((t) => {
+      if (t.stack[t.at] === next) return t;
+      const stack = [...t.stack.slice(0, t.at + 1), next].slice(-HISTORY_MAX);
+      return { stack, at: stack.length - 1 };
+    });
+  }, []);
+
+  const back = useCallback(() => {
+    setTrail((t) => (t.at > 0 ? { ...t, at: t.at - 1 } : t));
+  }, []);
+
+  const forward = useCallback(() => {
+    setTrail((t) => (t.at < t.stack.length - 1 ? { ...t, at: t.at + 1 } : t));
+  }, []);
+
+  return {
+    route: trail.stack[trail.at],
+    navigate,
+    back,
+    forward,
+    canBack: trail.at > 0,
+    canForward: trail.at < trail.stack.length - 1,
+  };
+}
+
 function Shell() {
   const { ready, fatal, accounts } = useStore();
-  const [route, setRoute] = useState<Route>('overview');
+  const { route, navigate: setRoute, back, forward, canBack, canForward } = useHistory('overview');
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [txOpen, setTxOpen] = useState(false);
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
@@ -82,10 +124,6 @@ function Shell() {
   const [holdingOpen, setHoldingOpen] = useState(false);
   const [editingHolding, setEditingHolding] = useState<Holding | null>(null);
   const [holdingKind, setHoldingKind] = useState<HoldingKind>('fund');
-  // Which tab Investments opens on. The screen remounts with the route, so
-  // arriving from a gold card lands on gold rather than on whatever was last
-  // looked at.
-  const [investmentTab, setInvestmentTab] = useState<InvestmentTab>('fund');
   // One target for both paths: the holding a new entry belongs to, and the
   // existing entry when one is being corrected.
   const [lotTarget, setLotTarget] = useState<{
@@ -187,22 +225,26 @@ function Shell() {
   const openAccountTransactions = useCallback((accountId: string) => {
     setAccountFocus((f) => ({ ids: [accountId], token: f.token + 1 }));
     setRoute('transactions');
-  }, []);
+  }, [setRoute]);
 
   const openCategoryTransactions = useCallback((categoryId: string, span?: number) => {
     setCategoryFocus((f) => ({ ids: [categoryId], token: f.token + 1, span }));
     setRoute('transactions');
-  }, []);
+  }, [setRoute]);
 
   const openLabelTransactions = useCallback((labelId: string) => {
     setLabelFocus((f) => ({ ids: [labelId], token: f.token + 1 }));
     setRoute('transactions');
-  }, []);
+  }, [setRoute]);
 
-  const openInvestments = useCallback((kind: InvestmentTab) => {
-    setInvestmentTab(kind);
-    setRoute('investments');
-  }, []);
+  // Each sleeve is a route of its own, so arriving from a gold card lands on
+  // gold and the sidebar says so.
+  const openInvestments = useCallback(
+    (kind: InvestmentTab) => {
+      setRoute(kind === 'gold' ? 'gold' : kind === 'deposit' ? 'deposits' : 'funds');
+    },
+    [setRoute],
+  );
 
   const newDebt = useCallback((direction: DebtDirection) => {
     setEditingDebt(null);
@@ -257,6 +299,17 @@ function Shell() {
         setPaletteOpen((open) => !open);
         return;
       }
+      // ⌘[ and ⌘] , and the arrows Safari and Finder answer to as well.
+      if ((e.metaKey || e.ctrlKey) && (e.key === '[' || e.key === 'ArrowLeft')) {
+        e.preventDefault();
+        back();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && (e.key === ']' || e.key === 'ArrowRight')) {
+        e.preventDefault();
+        forward();
+        return;
+      }
       if ((e.metaKey || e.ctrlKey) && /^[1-9]$/.test(e.key)) {
         e.preventDefault();
         setRoute(ROUTE_KEYS[Number(e.key) - 1]);
@@ -270,7 +323,7 @@ function Shell() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [newTransaction]);
+  }, [newTransaction, setRoute, back, forward]);
 
   if (!ready) {
     return (
@@ -302,6 +355,10 @@ function Shell() {
       <Sidebar
         route={route}
         onNavigate={setRoute}
+        onBack={back}
+        onForward={forward}
+        canBack={canBack}
+        canForward={canForward}
         onAdd={() => newTransaction()}
         onSearch={() => setPaletteOpen(true)}
       />
@@ -384,9 +441,9 @@ function Shell() {
                 onEditPayment={(debt, payment) => setPaying({ debt, payment })}
                 onOpenTransaction={openTransaction}
               />
-            ) : route === 'investments' ? (
+            ) : isInvestmentRoute(route) ? (
               <Investments
-                initialTab={investmentTab}
+                tab={INVESTMENT_TABS[route]}
                 onNewHolding={newHolding}
                 onEditHolding={editHolding}
                 onAddLot={(holding) => setLotTarget({ holding, lot: null })}

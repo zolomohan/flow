@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from '../components/Icon';
-import { Button, Card, CardHead, Segmented, type SegmentOption } from '../components/ui';
+import {
+  Button, Card, CardHead, Confirm, Segmented, Switch, TextInput,
+  type SegmentOption,
+} from '../components/ui';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { api } from '../lib/api';
-import { REQUIRE_NOTE, THEMES, useStore } from '../lib/store';
+import { OWNER_FALLBACK, OWNER_NAME, REQUIRE_NOTE, THEMES, useStore } from '../lib/store';
 import { spring } from '../lib/motion';
 
 type Tab = 'preferences' | 'data';
@@ -16,7 +19,7 @@ const TABS: SegmentOption<Tab>[] = [
 
 const BLURBS: Record<Tab, string> = {
   preferences: 'How Midas looks, and what it asks of you while you use it.',
-  data: 'The SQLite file on this Mac, and what you can do to it.',
+  data: 'Your name, the SQLite file on this Mac, and what you can do to it.',
 };
 
 
@@ -49,10 +52,6 @@ export function Settings() {
           {tab === 'data' && <DataPanel />}
         </motion.div>
       </AnimatePresence>
-
-      <p className="colophon">
-        Midas · local-first expense tracking · SQLite + Tauri
-      </p>
     </div>
   );
 }
@@ -88,20 +87,24 @@ function PreferencesPanel() {
       </div>
     </Card>
 
-    <Card>
-      <CardHead
-        title="Entering transactions"
-        hint="A new entry can’t be saved without a note. What is already in the book is left as it is."
-      />
-      <button
-        type="button"
-        className={`settle-toggle ${requireNote ? 'is-on' : ''}`}
-        onClick={() => saveSetting(REQUIRE_NOTE, requireNote ? '0' : '1')}
-      >
-        <span className="settle-box">{requireNote && <Icon name="check" size={12} />}</span>
-        Ask for a note on every new transaction
-        <small>{requireNote ? 'on' : 'off'}</small>
-      </button>
+    <Card className="setting-card">
+      <div className="data-actions">
+        <div className="data-row">
+          <div>
+            <strong>Ask for a note</strong>
+            <p>
+              A new transaction can’t be saved without one. What is already in
+              the book is left as it is.
+            </p>
+          </div>
+          <Switch
+            size="lg"
+            ariaLabel="Ask for a note"
+            on={requireNote}
+            onChange={(next) => saveSetting(REQUIRE_NOTE, next ? '1' : '0')}
+          />
+        </div>
+      </div>
     </Card>
     </>
   );
@@ -109,16 +112,56 @@ function PreferencesPanel() {
 
 /* ------------------------------------------------------------------- Data */
 
+/**
+ * The name the sidebar wears. Held here while it is being typed and written
+ * down once it is done: a book should not take a trip through SQLite for
+ * every letter.
+ */
+function NameCard() {
+  const { settings, saveSetting } = useStore();
+  const saved = settings[OWNER_NAME] ?? '';
+  const [name, setName] = useState(saved);
+
+  // The book is read in after this screen is first drawn, so the field takes
+  // what was stored the moment it arrives.
+  useEffect(() => setName(saved), [saved]);
+
+  const commit = () => {
+    const next = name.trim();
+    setName(next);
+    if (next !== saved) saveSetting(OWNER_NAME, next);
+  };
+
+  return (
+    <Card className="setting-card">
+      <div className="data-actions">
+        <div className="data-row">
+          <div>
+            <strong>Name</strong>
+            <p>What the app calls you.</p>
+          </div>
+          <TextInput
+            className="name-input"
+            value={name}
+            placeholder={OWNER_FALLBACK}
+            maxLength={40}
+            aria-label="Your name"
+            onChange={(e) => setName(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.blur();
+            }}
+          />
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 function DataPanel() {
   const { resetAll, toast } = useStore();
   const [confirmReset, setConfirmReset] = useState(false);
   const [busy, setBusy] = useState<'export' | 'import' | null>(null);
-
-  useEffect(() => {
-    if (!confirmReset) return;
-    const timer = window.setTimeout(() => setConfirmReset(false), 4000);
-    return () => window.clearTimeout(timer);
-  }, [confirmReset]);
 
   const today = new Date().toISOString().slice(0, 10);
 
@@ -162,6 +205,9 @@ function DataPanel() {
   };
 
   return (
+    <>
+    <NameCard />
+
     <Card>
       <CardHead title="Your data" hint="Everything lives in a local SQLite file on this Mac" />
       <div className="data-actions">
@@ -198,16 +244,28 @@ function DataPanel() {
             tone="danger"
             icon="trash-2"
             disabled={busy !== null}
-            onClick={() => {
-              if (!confirmReset) return setConfirmReset(true);
-              resetAll();
-              setConfirmReset(false);
-            }}
+            onClick={() => setConfirmReset(true)}
           >
-            {confirmReset ? 'Tap again to erase' : 'Clear everything'}
+            Clear everything
           </Button>
         </div>
       </div>
+
+      <Confirm
+        open={confirmReset}
+        title="Erase everything in this book?"
+        confirmLabel="Erase it all"
+        onConfirm={() => {
+          setConfirmReset(false);
+          resetAll();
+        }}
+        onCancel={() => setConfirmReset(false)}
+      >
+        Every account, transaction, debt, holding and plan goes, and the book
+        opens empty. This cannot be undone — save a copy first if there is
+        anything in it worth keeping.
+      </Confirm>
     </Card>
+    </>
   );
 }

@@ -49,6 +49,14 @@ import type {
 export const REQUIRE_NOTE = 'require_note';
 
 /**
+ * Whose book this is. The sidebar wears it in place of the app's own name,
+ * and the Data screen is where it is changed. Blank falls back to the app's
+ * name rather than leaving the corner empty.
+ */
+export const OWNER_NAME = 'owner_name';
+export const OWNER_FALLBACK = 'Midas';
+
+/**
  * The account the last transaction was written against, so the next one
  * opens on it. Most people spend from the same account for weeks at a time,
  * and picking it again every entry is the sort of work a book should do for

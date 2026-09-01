@@ -1,15 +1,18 @@
 import { motion } from 'motion/react';
 import { Icon } from './Icon';
-import { useStore } from '../lib/store';
+import { OWNER_FALLBACK, OWNER_NAME, useStore } from '../lib/store';
 import { money } from '../lib/format';
 import { press, spring } from '../lib/motion';
+import type { InvestmentTab } from '../lib/types';
 
 export type Route =
   | 'overview'
   | 'transactions'
   | 'planned'
   | 'debts'
-  | 'investments'
+  | 'funds'
+  | 'gold'
+  | 'deposits'
   | 'insights'
   | 'accounts'
   | 'cards'
@@ -19,13 +22,30 @@ export type Route =
   | 'templates'
   | 'settings';
 
+/**
+ * What each investment route opens the one Investments screen on. The three
+ * sleeves are read differently enough — a fund against what it cost, gold
+ * against what it weighs, a deposit against its own rate — that each gets a
+ * line of its own here rather than a tab strip inside the screen.
+ */
+export const INVESTMENT_TABS = {
+  funds: 'fund',
+  gold: 'gold',
+  deposits: 'deposit',
+} as const satisfies Partial<Record<Route, InvestmentTab>>;
+
+export const isInvestmentRoute = (route: Route): route is keyof typeof INVESTMENT_TABS =>
+  route in INVESTMENT_TABS;
+
 /** The day's work first, then the two lists the rest of it is filed against. */
 const NAV: { id: Route; label: string; icon: string }[] = [
   { id: 'overview', label: 'Overview', icon: 'layout-dashboard' },
   { id: 'transactions', label: 'Transactions', icon: 'list-filter' },
   { id: 'planned', label: 'Planned', icon: 'repeat' },
   { id: 'debts', label: 'Debts', icon: 'arrow-left-right' },
-  { id: 'investments', label: 'Investments', icon: 'coins' },
+  { id: 'funds', label: 'Mutual funds', icon: 'trending-up' },
+  { id: 'gold', label: 'Gold', icon: 'coins' },
+  { id: 'deposits', label: 'Deposits', icon: 'landmark' },
   { id: 'insights', label: 'Insights', icon: 'sparkles' },
   { id: 'accounts', label: 'Accounts', icon: 'wallet-cards' },
   { id: 'cards', label: 'Cards', icon: 'credit-card' },
@@ -36,24 +56,58 @@ const NAV: { id: Route; label: string; icon: string }[] = [
 ];
 
 export function Sidebar({
-  route, onNavigate, onAdd, onSearch,
+  route, onNavigate, onAdd, onSearch, onBack, onForward, canBack, canForward,
 }: {
   route: Route;
   onNavigate: (route: Route) => void;
   onAdd: () => void;
   onSearch: () => void;
+  onBack: () => void;
+  onForward: () => void;
+  canBack: boolean;
+  canForward: boolean;
 }) {
-  const { overview, theme, toggleTheme } = useStore();
+  const { overview, theme, toggleTheme, settings } = useStore();
+  // Whose book this is, as set under Settings › Your data. The mark takes its
+  // letter from the name, so the two never disagree.
+  const owner = settings[OWNER_NAME]?.trim() || OWNER_FALLBACK;
 
   return (
     <aside className="sidebar">
       {/* Keeps the traffic lights clear of the brand mark. */}
       <div className="titlebar-drag" data-tauri-drag-region />
 
+      {/* Back and forward belong in the title bar, on the traffic lights'
+          line, at the far end of the sidebar. */}
+      <div className="titlebar-nav">
+        <motion.button
+          whileTap={canBack ? press : undefined}
+          transition={spring}
+          className="titlebar-nav-btn"
+          onClick={onBack}
+          disabled={!canBack}
+          aria-label="Back"
+          title="Back  ⌘["
+        >
+          <Icon name="chevron-left" size={15} strokeWidth={2.4} />
+        </motion.button>
+        <motion.button
+          whileTap={canForward ? press : undefined}
+          transition={spring}
+          className="titlebar-nav-btn"
+          onClick={onForward}
+          disabled={!canForward}
+          aria-label="Forward"
+          title="Forward  ⌘]"
+        >
+          <Icon name="chevron-right" size={15} strokeWidth={2.4} />
+        </motion.button>
+      </div>
+
       <div className="brand">
-        <span className="brand-mark">M</span>
+        <span className="brand-mark">{owner.charAt(0).toUpperCase()}</span>
         <div className="brand-text">
-          <strong>Midas</strong>
+          <strong>{owner}</strong>
           <span>{overview ? money(overview.netWorth) : '—'}</span>
         </div>
       </div>

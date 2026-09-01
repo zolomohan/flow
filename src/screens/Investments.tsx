@@ -19,15 +19,16 @@ import type {
 const CARD_DAYS = 366;
 
 /**
- * The two kinds are read differently — a fund against what it cost, gold
- * against what it weighs — so they get a tab each rather than being stacked
- * into one scroll where the totals would have to hedge.
+ * The three kinds are read differently — a fund against what it cost, gold
+ * against what it weighs, a deposit against its own rate — so each has a line
+ * of its own in the sidebar rather than being stacked into one scroll where
+ * the totals would have to hedge. This screen draws whichever it is sent.
  */
-const TABS: SegmentOption<InvestmentTab>[] = [
-  { value: 'fund', label: 'Mutual funds', icon: 'trending-up', accent: 'var(--violet)' },
-  { value: 'gold', label: 'Gold', icon: 'coins', accent: 'var(--amber)' },
-  { value: 'deposit', label: 'Deposits', icon: 'landmark', accent: 'var(--blue)' },
-];
+const TITLES: Record<InvestmentTab, string> = {
+  fund: 'Mutual funds',
+  gold: 'Gold',
+  deposit: 'Deposits',
+};
 
 const BLURBS: Record<InvestmentTab, string> = {
   fund: 'Units valued at their latest NAV.',
@@ -50,25 +51,33 @@ const TINTS: Record<InvestmentTab, string> = {
 };
 
 export function Investments({
-  initialTab = 'fund', onNewHolding, onEditHolding, onAddLot, onEditLot,
+  tab, onNewHolding, onEditHolding, onAddLot, onEditLot,
 }: {
-  /** Which tab to open on, for arrivals from elsewhere in the app. */
-  initialTab?: InvestmentTab;
+  /** Which sleeve this is: the route says, and the sidebar shows which. */
+  tab: InvestmentTab;
   onNewHolding: (kind: HoldingKind) => void;
   onEditHolding: (holding: Holding) => void;
   onAddLot: (holding: Holding) => void;
   onEditLot: (holding: Holding, lot: InvestmentLot) => void;
 }) {
   const { holdings, refreshPrices, pricesRefreshing, revision } = useStore();
-  const [tab, setTab] = useState<InvestmentTab>(initialTab);
   const [showClosed, setShowClosed] = useState(false);
-  // Every card's line, fetched in one call rather than one per card. Empty
-  // until prices have been fetched at least once, which the cards say plainly.
-  const [series, setSeries] = useState<Record<string, PricePoint[]>>({});
+  // Every card's line, fetched in one call rather than one per card. What the
+  // holding of yours has been worth, not what the scheme has: a card is about
+  // your money, and a NAV line that ran for years before you bought any says
+  // nothing about it. Empty until prices have been fetched at least once,
+  // which the cards say plainly.
+  const [series, setSeries] = useState<Record<string, ValuePoint[]> | null>(null);
   // Which purity the gold rate is read at. Every piece rides the same market,
   // so the tab plots it once and this says at what fineness.
   // Which pieces the tab's line counts. Null is all of them.
   const [purity, setPurity] = useState<number | null>(null);
+  // The fineness the rate tile quotes, and the line behind it. 22K by
+  // default: it is what a jeweller quotes and what most of a locker is, even
+  // though the market itself trades pure metal.
+  const [ratePurity, setRatePurity] = useState(9_160);
+  const [rateLine, setRateLine] = useState<ValuePoint[] | null>(null);
+  const [rateOpen, setRateOpen] = useState(false);
   // Held by id rather than by object: the store hands back fresh holdings
   // after every write, and the open page should follow them.
   const [openId, setOpenId] = useState<string | null>(null);
@@ -194,11 +203,13 @@ export function Investments({
     <div className="screen">
       <header className="screen-head">
         <div>
-          <h1>Investments</h1>
+          <h1>{TITLES[tab]}</h1>
           <p>
-            {holdings.length
-              ? `Worth ${money(portfolio)} · ${BLURBS[tab]}`
-              : 'Gold and mutual funds, valued at what they would fetch today.'}
+            {holdings.length === 0
+              ? 'Gold and mutual funds, valued at what they would fetch today.'
+              : mine.length
+                ? `Worth ${money(value)} · ${BLURBS[tab]}`
+                : BLURBS[tab]}
           </p>
         </div>
         <div className="head-actions">
@@ -214,12 +225,6 @@ export function Investments({
           </Button>
         </div>
       </header>
-
-      {holdings.length > 0 && (
-        <div className="screen-tabs">
-          <Segmented options={TABS} value={tab} onChange={setTab} name="investment-tab" />
-        </div>
-      )}
 
       {holdings.length === 0 ? (
         <Card>
