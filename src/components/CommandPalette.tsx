@@ -76,7 +76,6 @@ export function CommandPalette({
       { id: 'go-funds', label: 'Go to Mutual funds', icon: 'trending-up', section: 'Navigate', run: () => onNavigate('funds') },
       { id: 'go-gold', label: 'Go to Gold', icon: 'coins', section: 'Navigate', run: () => onNavigate('gold') },
       { id: 'go-deposits', label: 'Go to Deposits', icon: 'landmark', section: 'Navigate', run: () => onNavigate('deposits') },
-      { id: 'go-insights', label: 'Go to Insights', icon: 'sparkles', section: 'Navigate', run: () => onNavigate('insights') },
       { id: 'go-categories', label: 'Go to Categories', icon: 'tags', section: 'Navigate', run: () => onNavigate('categories') },
       { id: 'go-templates', label: 'Go to Templates', icon: 'shapes', section: 'Navigate', run: () => onNavigate('templates') },
       { id: 'go-settings', label: 'Go to Settings', icon: 'settings', section: 'Navigate', run: () => onNavigate('settings') },

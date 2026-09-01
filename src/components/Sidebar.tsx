@@ -13,7 +13,6 @@ export type Route =
   | 'funds'
   | 'gold'
   | 'deposits'
-  | 'insights'
   | 'accounts'
   | 'cards'
   | 'taxes'
@@ -46,7 +45,6 @@ const NAV: { id: Route; label: string; icon: string }[] = [
   { id: 'funds', label: 'Mutual funds', icon: 'trending-up' },
   { id: 'gold', label: 'Gold', icon: 'coins' },
   { id: 'deposits', label: 'Deposits', icon: 'landmark' },
-  { id: 'insights', label: 'Insights', icon: 'sparkles' },
   { id: 'accounts', label: 'Accounts', icon: 'wallet-cards' },
   { id: 'cards', label: 'Cards', icon: 'credit-card' },
   { id: 'taxes', label: 'Taxes', icon: 'scroll-text' },

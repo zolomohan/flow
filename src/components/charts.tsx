@@ -1,6 +1,6 @@
 import { useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { compactMoney, dayLabel, money, shortDayLabel, unitPrice } from '../lib/format';
+import { compactMoney, money, shortDayLabel, unitPrice } from '../lib/format';
 import { spring } from '../lib/motion';
 import type { FlowPoint, Paise, ValuePoint } from '../lib/types';
 
@@ -702,62 +702,6 @@ export function SpendBars({
           </span>
         ))}
       </div>
-    </div>
-  );
-}
-
-/* --------------------------------------------------------------- DailyBars */
-
-/** One slim column per bucket, for the “how spiky was it” read. */
-export function DailyBars({
-  points, height = 64, labelOf,
-}: {
-  points: FlowPoint[];
-  height?: number;
-  /** How a bucket reads in the readout. Days speak for themselves. */
-  labelOf?: (bucket: string) => string;
-}) {
-  const [hover, setHover] = useState<number | null>(null);
-  const peak = Math.max(1, ...points.map((p) => p.expense));
-  const today = new Date().toISOString().slice(0, 10);
-  const read = (bucket: string) => (labelOf ? labelOf(bucket) : dayLabel(bucket));
-  return (
-    <div className="daily" style={{ height }}>
-      {points.map((point, i) => (
-        // The whole column takes the pointer, not the bar: on a quiet day the
-        // bar is two pixels tall, and nobody can hover that.
-        <div
-          key={point.bucket}
-          className={`daily-col ${hover === i ? 'is-hover' : ''}`}
-          onMouseEnter={() => setHover(i)}
-          onMouseLeave={() => setHover(null)}
-        >
-          <motion.span
-            className={`daily-bar ${point.bucket === today ? 'is-today' : ''}`}
-            initial={{ height: 2 }}
-            animate={{ height: `${Math.max(2, (point.expense / peak) * 100)}%` }}
-            transition={{ duration: 0.5, delay: 0.008 * i, ease: [0.06, 0.94, 0.67, 1.01] }}
-          />
-          <AnimatePresence>
-            {hover === i && (
-              // The readout is centred on its column, except at the ends,
-              // where it would hang off the card and be clipped by it.
-              <motion.div
-                className={`flow-tip daily-tip ${
-                  i < 2 ? 'is-start' : i > points.length - 3 ? 'is-end' : ''
-                }`}
-                initial={{ opacity: 0, y: 6, scale: 0.96 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 4, scale: 0.97 }}
-                transition={spring}
-              >
-                <strong>{read(point.bucket)}</strong>
-                <span className="tip-figure">{money(point.expense)}</span>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-      ))}
     </div>
   );
 }

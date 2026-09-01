@@ -24,7 +24,6 @@ import { Cards } from './screens/Cards';
 import { Taxes } from './screens/Taxes';
 import { Debts } from './screens/Debts';
 import { Investments } from './screens/Investments';
-import { Insights } from './screens/Insights';
 import { Categories } from './screens/Categories';
 import { Labels } from './screens/Labels';
 import { Templates } from './screens/Templates';
@@ -55,7 +54,6 @@ const ROUTE_KEYS: Route[] = [
   'taxes',
   'debts',
   'funds',
-  'insights',
   'settings',
 ];
 
@@ -532,8 +530,6 @@ function Shell() {
                 onAddLot={(holding) => setLotTarget({ holding, lot: null })}
                 onEditLot={(holding, lot) => setLotTarget({ holding, lot })}
               />
-            ) : route === 'insights' ? (
-              <Insights onOpenCategory={openCategoryTransactions} />
             ) : route === 'categories' ? (
               <Categories onOpenCategory={openCategoryTransactions} />
             ) : route === 'labels' ? (

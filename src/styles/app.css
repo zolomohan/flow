@@ -1085,40 +1085,6 @@ kbd {
 }
 .flow-axis span.is-hover { color: var(--ink); font-weight: 600; }
 
-.daily {
-  display: flex;
-  align-items: flex-end;
-  gap: 2px;
-  width: 100%;
-}
-/* The column takes the pointer so a near-empty day is still hoverable, and
-   lights up behind its own bar to say which one is being read. */
-.daily-col {
-  position: relative;
-  flex: 1;
-  height: 100%;
-  display: flex;
-  align-items: flex-end;
-  border-radius: var(--r-sm);
-  transition: background var(--fast) var(--ease);
-}
-.daily-col.is-hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
-.daily-bar {
-  width: 100%;
-  min-height: 2px;
-  border-radius: 2px;
-  background: var(--ink-4);
-  transition: background var(--fast) var(--ease);
-}
-.daily-col.is-hover .daily-bar { background: var(--ink); }
-.daily-bar.is-today { background: var(--blue); }
-
-/* One day, one figure — narrower than the in/out readout, and pinned inside
-   the card at either end of the row. */
-.daily-tip { min-width: 0; justify-items: center; white-space: nowrap; }
-.daily-tip.is-start { left: 0; transform: none; }
-.daily-tip.is-end { left: auto; right: 0; transform: none; }
-
 .split {
   display: flex;
   gap: 3px;
@@ -1749,10 +1715,10 @@ kbd {
 .delta.is-bad { color: var(--red); }
 .delta-flat { font-weight: 500; color: var(--ink-4); }
 
-/* A small labelled chart at the foot of a card — the daily spend under the
-   flow figures, the portfolio's year under what it is worth. */
-.flow-foot, .wealth-chart { margin-top: 18px; }
-.flow-foot > span, .wealth-chart > span {
+/* A small labelled chart at the foot of a card — the portfolio's year under
+   what it is worth. */
+.wealth-chart { margin-top: 18px; }
+.wealth-chart > span {
   display: block;
   margin-bottom: 8px;
   font-size: 11.5px;
@@ -3258,7 +3224,9 @@ kbd {
 .archived-toggle span { display: grid; place-items: center; }
 
 /* =================================================================
-   Insights
+   Overview — the spending half
+   Stats, the cash-flow chart, the category breakdown and the heat-map,
+   which the Planned screen borrows the stat and breakdown rows from.
    ================================================================= */
 
 .stat-row {
@@ -3314,16 +3282,6 @@ kbd {
   color: var(--ink-3);
 }
 .legend i { width: 8px; height: 8px; border-radius: 99px; }
-
-.insight-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
-  gap: 16px;
-  align-items: start;
-}
-@media (max-width: 980px) {
-  .insight-grid { grid-template-columns: minmax(0, 1fr); }
-}
 
 .breakdown { display: grid; gap: 13px; }
 .breakdown-line { display: flex; align-items: center; gap: 2px; }
