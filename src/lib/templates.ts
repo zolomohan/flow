@@ -1,12 +1,12 @@
 import { money } from './format';
-import type { TemplateField, TxKind, TxTemplate, TxTemplateInput } from './types';
+import type { TxKind, TxTemplate, TxTemplateInput } from './types';
 
 /**
- * The fields a template can either answer for or ask about, in the order a
- * form asks them. A field belongs to one side of the ledger or the other:
- * only a transfer has an account to arrive in, and only a bill has a category.
+ * The fields a template carries, in the order the form asks them. A field
+ * belongs to one side of the ledger or the other: only a transfer has an
+ * account to arrive in, and only a bill has a category.
  */
-export const ASKABLE: { key: TemplateField; label: string; only?: TxKind }[] = [
+const FIELDS: { key: string; label: string; only?: TxKind }[] = [
   { key: 'amount', label: 'Amount' },
   { key: 'account', label: 'Account' },
   { key: 'toAccount', label: 'To account', only: 'transfer' },
@@ -16,58 +16,50 @@ export const ASKABLE: { key: TemplateField; label: string; only?: TxKind }[] = [
 ];
 
 /** Which of them a template of this kind has anything to say about. */
-export const askableFor = (kind: TxKind) =>
-  ASKABLE.filter((field) =>
+export const fieldsFor = (kind: TxKind) =>
+  FIELDS.filter((field) =>
     field.only ? field.only === kind : !(kind === 'transfer' && field.key === 'category'),
   );
 
-/** What a field is called on the form, which is not always what it is called
- *  in the picker: a transfer has a description where a bill has a merchant. */
-export function fieldLabel(field: TemplateField, kind: TxKind) {
-  if (field === 'merchant') return kind === 'transfer' ? 'description' : 'merchant';
-  if (field === 'account') return kind === 'income' ? 'account to land in' : 'account';
-  if (field === 'toAccount') return 'account to move into';
-  return field;
+/**
+ * What each field of a template holds, for a list that shows what it will
+ * fill in. Null is a field left blank — which is not a gap in the template
+ * but the point of it: blank is how a template says "this one is different
+ * every time", and it comes out blank when the template is used.
+ */
+export function heldBy(template: TxTemplate): Record<string, string | null> {
+  return {
+    amount: template.amount ? money(template.amount) : null,
+    account: template.accountName,
+    toAccount: template.toAccountName,
+    category: template.splits.length
+      ? `${template.splits.length} parts`
+      : template.categoryName,
+    merchant: template.merchant || null,
+    note: template.note,
+  };
 }
 
-/**
- * What a template says of itself in one line: what it fills in, then what it
- * will ask you for. A field it asks about is left out of the first half even
- * when a value is remembered against it — the summary is a promise about what
- * arrives filled in, and that one won't.
- */
+/** What a template says of itself in one line: whatever it fills in, and
+ *  nothing about what it doesn't. */
 export function describeTemplate(template: TxTemplate) {
-  const asks = (field: TemplateField) => template.ask.includes(field);
-  const baked = [
-    asks('amount') ? null : template.amount ? money(template.amount) : null,
-    asks('category')
-      ? null
-      : template.splits.length
-        ? `${template.splits.length} parts`
-        : (template.categoryName ?? (template.kind === 'transfer' ? 'Transfer' : null)),
-    asks('account')
-      ? null
-      : template.kind === 'transfer' && template.toAccountName && !asks('toAccount')
-        ? `${template.accountName ?? '—'} → ${template.toAccountName}`
-        : template.accountName,
-  ].filter(Boolean);
-
-  const asked = askableFor(template.kind)
-    .filter((field) => asks(field.key))
-    .map((field) => field.label.toLowerCase());
-
-  return [
-    baked.join(' · '),
-    asked.length ? `asks ${asked.join(', ')}` : '',
+  const held = heldBy(template);
+  const line = [
+    held.amount,
+    held.category ?? (template.kind === 'transfer' ? 'Transfer' : null),
+    template.kind === 'transfer' && held.toAccount
+      ? `${held.account ?? '—'} → ${held.toAccount}`
+      : held.account,
   ]
     .filter(Boolean)
     .join(' · ');
+  return line || 'Blank — fill it in as you go';
 }
 
 /**
  * A template sent back as it stands, for a save that means to change only
- * some of it — its name, or what it asks for. Everything it holds goes back
- * unchanged, since a template is written whole every time.
+ * some of it — its name, say. Everything it holds goes back unchanged, since
+ * a template is written whole every time.
  */
 export const templateToInput = (
   template: TxTemplate,
@@ -88,6 +80,5 @@ export const templateToInput = (
     note: s.note,
   })),
   labelIds: template.labels.map((l) => l.id),
-  ask: template.ask,
   ...over,
 });

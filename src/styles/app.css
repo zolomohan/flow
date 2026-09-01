@@ -5793,22 +5793,7 @@ kbd {
   .plan-cal-totals { width: 100%; margin-left: 0; justify-content: space-between; }
 }
 
-/* What a template asks for rather than answers. Chips, because it is a set
-   of things picked out of a fixed list — the same gesture as pinning a label. */
-.ask-picker {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  /* A ticked field is a question the form will hold you to, which is the
-     same blue everything else that waits on you wears. Set here rather than
-     per chip, so no dot comes with it. */
-  --chip-accent: var(--blue);
-}
-.tpl-asks { padding: 2px 8px 6px; }
-.tpl-asks .field-label { font-size: 11px; }
-
-/* The template editor: a name, what it leaves for you, and what it holds
-   against everything else. */
+/* The template editor: a name, and what it holds against every field. */
 .tpl-edit { display: flex; flex-direction: column; gap: 18px; }
 .tpl-holds { display: flex; flex-direction: column; gap: 2px; }
 .tpl-holds .field-label { margin-bottom: 6px; }
@@ -5839,10 +5824,10 @@ kbd {
   font-weight: 500;
   color: var(--ink-4);
 }
-/* A field it asks for is a question, so it reads as one rather than as a
-   value that happens to be missing. */
-.tpl-hold.is-asked { background: var(--blue-soft); }
-.tpl-hold.is-asked .tpl-hold-value { color: var(--blue); }
+/* A field left blank comes out blank, which is a thing the template says
+   rather than a thing missing from it — quiet, not alarming. */
+.tpl-hold.is-blank { background: transparent; }
+.tpl-hold.is-blank .tpl-hold-value { color: var(--ink-4); font-weight: 500; }
 
 /* ---------------------------------------------------- one plan's own page */
 

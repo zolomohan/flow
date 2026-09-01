@@ -1,20 +1,16 @@
 import { useEffect, useState } from 'react';
 import { Icon } from './Icon';
-import { AskPicker } from './AskPicker';
 import { Button, Field, Sheet, TextInput } from './ui';
 import { useStore } from '../lib/store';
-import { money } from '../lib/format';
-import { askableFor, templateToInput } from '../lib/templates';
-import type { TemplateField, TxTemplate } from '../lib/types';
+import { fieldsFor, heldBy, templateToInput } from '../lib/templates';
+import type { TxTemplate } from '../lib/types';
 
 /**
- * What a template is called, and which of its fields are questions rather
- * than answers.
+ * What a template is called, and what it holds.
  *
- * What it answers *with* is not set here: a template is a transaction you
- * have already written, so its values are changed by using it — fill the
- * sheet in, correct what needs correcting, and save it back under the same
- * name. This is for the two things there is nowhere else to say.
+ * Only the name is editable here. What it fills in is changed by using it: a
+ * template is a transaction you have already written, so you fill the sheet
+ * in, correct what needs correcting, and save it back under the same name.
  */
 export function TemplateSheet({
   open, onClose, editing,
@@ -25,40 +21,25 @@ export function TemplateSheet({
 }) {
   const { saveTemplate } = useStore();
   const [name, setName] = useState('');
-  const [ask, setAsk] = useState<TemplateField[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open || !editing) return;
     setName(editing.name);
-    setAsk(editing.ask);
     setError(null);
   }, [open, editing]);
 
   if (!editing) return null;
 
-  // What it holds against each field, so ticking one is a decision made in
-  // front of the thing it affects rather than in the abstract. A field it
-  // asks for keeps whatever was remembered against it — untick it and that
-  // value comes back rather than leaving a hole.
-  const held: Record<TemplateField, string | null> = {
-    amount: editing.amount ? money(editing.amount) : null,
-    account: editing.accountName,
-    toAccount: editing.toAccountName,
-    category: editing.splits.length
-      ? `${editing.splits.length} parts`
-      : editing.categoryName,
-    merchant: editing.merchant || null,
-    note: editing.note,
-  };
+  const held = heldBy(editing);
 
   const submit = async () => {
     const trimmed = name.trim();
     if (!trimmed) return setError('A template needs a name.');
     setSaving(true);
     try {
-      await saveTemplate(templateToInput(editing, { name: trimmed, ask }));
+      await saveTemplate(templateToInput(editing, { name: trimmed }));
       onClose();
     } catch {
       /* the store has already said what went wrong */
@@ -72,7 +53,7 @@ export function TemplateSheet({
       open={open}
       onClose={onClose}
       title={editing.name}
-      subtitle="What it is called, and what it leaves for you"
+      subtitle="What it is called, and what it fills in"
       width={560}
       footer={
         <>
@@ -102,27 +83,16 @@ export function TemplateSheet({
           />
         </Field>
 
-        <AskPicker kind={editing.kind} value={ask} onChange={setAsk} />
-
         <div className="tpl-holds">
           <span className="field-label">What it fills in</span>
-          {askableFor(editing.kind).map((field) => {
-            const asked = ask.includes(field.key);
+          {fieldsFor(editing.kind).map((field) => {
             const value = held[field.key];
             return (
-              <div key={field.key} className={`tpl-hold ${asked ? 'is-asked' : ''}`}>
+              <div key={field.key} className={`tpl-hold ${value ? '' : 'is-blank'}`}>
                 <span className="tpl-hold-name">{field.label}</span>
-                <span className="tpl-hold-value">
-                  {asked ? (
-                    <>
-                      <Icon name="circle-help" size={13} />
-                      Asked each time
-                      {value && <em>{value} remembered</em>}
-                    </>
-                  ) : (
-                    (value ?? <em>Nothing set</em>)
-                  )}
-                </span>
+                {/* Blank is not a gap in the template but the point of one:
+                    it comes out blank, for you to fill in on the day. */}
+                <span className="tpl-hold-value">{value ?? <em>Left blank</em>}</span>
               </div>
             );
           })}
@@ -147,7 +117,8 @@ export function TemplateSheet({
         <p className="page-note">
           <Icon name="circle-help" size={13} />
           To change what it fills in, use it: the sheet opens on this template,
-          and saving it back under the same name replaces it.
+          and saving it back under the same name replaces it. A field you leave
+          empty is empty here, and empty again next time.
         </p>
       </div>
     </Sheet>

@@ -319,9 +319,6 @@ fn migrate(conn: &Connection) -> Result<()> {
             note          TEXT,
             used_count    INTEGER NOT NULL DEFAULT 0,
             last_used_at  TEXT,
-            -- The fields it asks for rather than answers, comma separated.
-            -- Everything not named here is pre-baked.
-            ask_fields    TEXT NOT NULL DEFAULT '',
             created_at    TEXT NOT NULL
         );
 
@@ -469,14 +466,10 @@ fn migrate(conn: &Connection) -> Result<()> {
         "owns_transaction",
         "owns_transaction INTEGER NOT NULL DEFAULT 0",
     )?;
-    // Books whose templates predate asking have templates that answer for
-    // everything, which is exactly what the empty default says.
-    add_column_if_missing(
-        conn,
-        "transaction_templates",
-        "ask_fields",
-        "ask_fields TEXT NOT NULL DEFAULT ''",
-    )?;
+    // A template once carried a list of the fields it would ask for rather
+    // than answer. A field left blank is the question now, so the column says
+    // nothing that the template does not already say by being empty.
+    drop_column_if_present(conn, "transaction_templates", "ask_fields")?;
     // Three columns a plan no longer has any use for. A plan is paid by what
     // is linked to it, so nothing turns on whether the amount moves or
     // whether it debits itself, and the importer's key stopped being how
@@ -2299,7 +2292,7 @@ pub fn delete_transaction(conn: &Connection, id: &str) -> Result<()> {
 const TEMPLATE_SELECT: &str = "
 SELECT t.id, t.name, t.kind, t.amount, t.account_id, t.to_account_id, t.category_id,
        t.merchant, t.note, t.used_count, t.last_used_at, t.created_at,
-       a.name, a.color, ta.name, c.name, c.icon, c.color, t.ask_fields
+       a.name, a.color, ta.name, c.name, c.icon, c.color
 FROM transaction_templates t
 LEFT JOIN accounts a ON a.id = t.account_id
 LEFT JOIN accounts ta ON ta.id = t.to_account_id
@@ -2328,40 +2321,7 @@ fn template_row(r: &Row) -> rusqlite::Result<TxTemplate> {
         category_color: r.get(17)?,
         splits: Vec::new(),
         labels: Vec::new(),
-        ask: r
-            .get::<_, String>(18)?
-            .split(',')
-            .filter(|f| !f.is_empty())
-            .map(str::to_string)
-            .collect(),
     })
-}
-
-/// The fields a template may ask for rather than answer. Anything else sent
-/// is dropped: a template is not worth losing over a field that has gone.
-const ASKABLE: [&str; 6] = [
-    "amount",
-    "account",
-    "toAccount",
-    "category",
-    "merchant",
-    "note",
-];
-
-/// What a template will ask for, in a settled order and with the fields that
-/// mean nothing for its kind taken out — a transfer has no category to ask
-/// about, and only a transfer has an account to arrive in.
-fn asked_fields(kind: &str, ask: &[String]) -> Vec<String> {
-    ASKABLE
-        .iter()
-        .filter(|field| ask.iter().any(|a| a == *field))
-        .filter(|field| match **field {
-            "category" => kind != "transfer",
-            "toAccount" => kind == "transfer",
-            _ => true,
-        })
-        .map(|f| (*f).to_string())
-        .collect()
 }
 
 /// Fills in the parts and the pins for a set of templates already read.
@@ -2526,16 +2486,6 @@ pub fn save_template(conn: &Connection, input: TxTemplateInput) -> Result<TxTemp
         }
     }
 
-    let ask = asked_fields(&input.kind, &input.ask.unwrap_or_default());
-    // A template that divides a bill is dividing a known figure. Asking for
-    // the amount would leave the parts standing against nothing.
-    if ask.iter().any(|f| f == "amount") && !splits.is_empty() {
-        return Err(
-            "A template that splits a bill has to say what the bill comes to.".into(),
-        );
-    }
-    let ask_fields = ask.join(",");
-
     let taken = |e: rusqlite::Error| {
         if e.to_string().contains("UNIQUE") {
             format!("There is already a template called \"{name}\".")
@@ -2551,8 +2501,7 @@ pub fn save_template(conn: &Connection, input: TxTemplateInput) -> Result<TxTemp
                 .execute(
                     "UPDATE transaction_templates
                         SET name = ?2, kind = ?3, amount = ?4, account_id = ?5,
-                            to_account_id = ?6, category_id = ?7, merchant = ?8, note = ?9,
-                            ask_fields = ?10
+                            to_account_id = ?6, category_id = ?7, merchant = ?8, note = ?9
                       WHERE id = ?1",
                     params![
                         id,
@@ -2564,7 +2513,6 @@ pub fn save_template(conn: &Connection, input: TxTemplateInput) -> Result<TxTemp
                         category_id,
                         input.merchant.trim(),
                         input.note.as_deref().map(str::trim).filter(|n| !n.is_empty()),
-                        ask_fields,
                     ],
                 )
                 .map_err(taken)?;
@@ -2578,8 +2526,8 @@ pub fn save_template(conn: &Connection, input: TxTemplateInput) -> Result<TxTemp
             conn.execute(
                 "INSERT INTO transaction_templates
                     (id, name, kind, amount, account_id, to_account_id, category_id,
-                     merchant, note, ask_fields, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                     merchant, note, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     id,
                     name,
@@ -2590,7 +2538,6 @@ pub fn save_template(conn: &Connection, input: TxTemplateInput) -> Result<TxTemp
                     category_id,
                     input.merchant.trim(),
                     input.note.as_deref().map(str::trim).filter(|n| !n.is_empty()),
-                    ask_fields,
                     now()
                 ],
             )
@@ -8166,7 +8113,6 @@ mod tests {
                 note: Some("  the rent  ".into()),
                 splits: None,
                 label_ids: None,
-                ask: None,
             },
         )
         .unwrap()
@@ -8209,7 +8155,6 @@ mod tests {
                     },
                 ]),
                 label_ids: Some(vec![label.clone()]),
-                ask: None,
             },
         )
         .unwrap();
@@ -8254,7 +8199,6 @@ mod tests {
                     TransactionSplitInput { id: None, amount: 100_000, category_id: Some(food), note: None },
                 ]),
                 label_ids: None,
-                ask: None,
             },
         )
         .unwrap_err();
@@ -8284,7 +8228,6 @@ mod tests {
                 note: None,
                 splits: None,
                 label_ids: None,
-                ask: None,
             },
         )
         .unwrap_err();
@@ -8305,7 +8248,6 @@ mod tests {
                 note: None,
                 splits: None,
                 label_ids: None,
-                ask: None,
             },
         )
         .unwrap();
@@ -8314,107 +8256,67 @@ mod tests {
         assert_eq!(list_templates(&conn).unwrap().len(), 1);
     }
 
-    /// What a template asks for is kept as a set the sheet can act on: the
-    /// fields that mean nothing for its kind are dropped, and so is anything
-    /// that is not a field at all.
+    /// A field left empty is empty in the template, and empty again every
+    /// time it is used. That is how a template says "this one is different
+    /// each time" — there is nothing else to set and nothing else to learn.
     #[test]
-    fn a_template_only_asks_for_fields_it_has() {
+    fn a_blank_field_stays_blank() {
         let conn = book();
         let hdfc = account(&conn, "HDFC", "bank", 0);
-        let icici = account(&conn, "ICICI", "bank", 0);
-        let food = category(&conn, "Food", None);
-
-        // An expense has a category to ask about and no account to arrive in.
-        let bill = save_template(
+        let kept = save_template(
             &conn,
             TxTemplateInput {
                 id: None,
                 name: "Friday shop".into(),
                 kind: "expense".into(),
+                // No amount and no category: the two things that are never
+                // the same twice about this one.
                 amount: 0,
-                account_id: Some(hdfc.clone()),
+                account_id: Some(hdfc),
                 to_account_id: None,
-                category_id: Some(food.clone()),
+                category_id: None,
                 merchant: "Big Basket".into(),
                 note: None,
                 splits: None,
                 label_ids: None,
-                ask: Some(vec![
-                    "note".into(),
-                    "amount".into(),
-                    "toAccount".into(),
-                    "colour".into(),
-                ]),
             },
         )
         .unwrap();
-        assert_eq!(
-            bill.ask,
-            vec!["amount".to_string(), "note".to_string()],
-            "no destination to ask for, and no such field as colour"
-        );
 
-        // A transfer is the other way round.
-        let move_it = save_template(
-            &conn,
-            TxTemplateInput {
-                id: None,
-                name: "Into savings".into(),
-                kind: "transfer".into(),
-                amount: 0,
-                account_id: Some(hdfc),
-                to_account_id: Some(icici),
-                category_id: None,
-                merchant: String::new(),
-                note: None,
-                splits: None,
-                label_ids: None,
-                ask: Some(vec!["category".into(), "toAccount".into(), "amount".into()]),
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            move_it.ask,
-            vec!["amount".to_string(), "toAccount".to_string()],
-            "a transfer has nowhere to file a category"
-        );
+        assert_eq!(kept.amount, 0);
+        assert_eq!(kept.category_id, None);
+        assert_eq!(kept.note, None);
+        assert_eq!(kept.merchant, "Big Basket", "what was filled in is kept");
 
-        // And it survives the round trip out of the list.
         let listed = list_templates(&conn).unwrap();
-        let reread = listed.iter().find(|t| t.name == "Friday shop").unwrap();
-        assert_eq!(reread.ask, vec!["amount".to_string(), "note".to_string()]);
+        assert_eq!(listed[0].amount, 0, "and it reads back blank");
+        assert_eq!(listed[0].category_name, None);
     }
 
-    /// Parts are shares of a figure. A template that divides a bill and then
-    /// asks what the bill came to is describing nothing.
+    /// An empty name is the one blank a template cannot carry: the name is
+    /// how it is reached for at all.
     #[test]
-    fn a_split_template_cannot_ask_for_the_amount() {
+    fn a_template_still_needs_a_name() {
         let conn = book();
         let hdfc = account(&conn, "HDFC", "bank", 0);
-        let food = category(&conn, "Food", None);
-        let home = category(&conn, "Home", None);
         let err = save_template(
             &conn,
             TxTemplateInput {
                 id: None,
-                name: "Friday shop".into(),
+                name: "   ".into(),
                 kind: "expense".into(),
-                amount: 300_000,
+                amount: 0,
                 account_id: Some(hdfc),
                 to_account_id: None,
                 category_id: None,
                 merchant: String::new(),
                 note: None,
-                splits: Some(vec![
-                    TransactionSplitInput { id: None, amount: 200_000, category_id: Some(food), note: None },
-                    TransactionSplitInput { id: None, amount: 100_000, category_id: Some(home), note: None },
-                ]),
+                splits: None,
                 label_ids: None,
-                ask: Some(vec!["amount".into()]),
             },
         )
         .unwrap_err();
-        assert!(err.contains("what the bill comes to"), "{err}");
+        assert!(err.contains("needs a name"), "{err}");
     }
 
     /// An account deleted out from under a template leaves the template

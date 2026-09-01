@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { motion } from 'motion/react';
 import { Icon } from '../components/Icon';
 import { TemplateSheet } from '../components/TemplateSheet';
-import { Button, Card, Empty } from '../components/ui';
+import { Button, Card, Confirm, Empty } from '../components/ui';
 import { useStore } from '../lib/store';
 import { dayLabel } from '../lib/format';
 import { describeTemplate } from '../lib/templates';
@@ -27,14 +27,9 @@ export function Templates({
 }) {
   const { templates, deleteTemplate } = useStore();
   const [editing, setEditing] = useState<TxTemplate | null>(null);
+  // The template being asked about, held by id: the row it belongs to is
+  // still there behind the dialog, and the list is rebuilt on every save.
   const [confirming, setConfirming] = useState<string | null>(null);
-
-  // A delete armed and then abandoned disarms itself.
-  useEffect(() => {
-    if (!confirming) return;
-    const timer = window.setTimeout(() => setConfirming(null), 4000);
-    return () => window.clearTimeout(timer);
-  }, [confirming]);
 
   // The sheet edits the copy it was opened with, so it follows the book
   // rather than going stale behind a save.
@@ -137,16 +132,11 @@ export function Templates({
                     </Button>
                     <Button
                       size="sm"
-                      tone={confirming === template.id ? 'danger' : 'ghost'}
+                      tone="ghost"
                       icon="trash-2"
-                      onClick={async () => {
-                        if (confirming !== template.id) return setConfirming(template.id);
-                        setConfirming(null);
-                        if (editing?.id === template.id) setEditing(null);
-                        await deleteTemplate(template.id).catch(() => {});
-                      }}
+                      onClick={() => setConfirming(template.id)}
                     >
-                      {confirming === template.id ? 'Sure?' : 'Delete'}
+                      Delete
                     </Button>
                   </div>
                 </motion.div>
@@ -157,6 +147,23 @@ export function Templates({
       </Card>
 
       <TemplateSheet open={!!open} onClose={() => setEditing(null)} editing={open} />
+
+      <Confirm
+        open={!!confirming}
+        title="Delete this template?"
+        onConfirm={async () => {
+          const id = confirming;
+          setConfirming(null);
+          if (!id) return;
+          if (editing?.id === id) setEditing(null);
+          await deleteTemplate(id).catch(() => {});
+        }}
+        onCancel={() => setConfirming(null)}
+      >
+        {templates.find((t) => t.id === confirming)?.name
+          ? `${templates.find((t) => t.id === confirming)!.name} goes. Everything written from it stays in your ledger.`
+          : 'Everything written from it stays in your ledger.'}
+      </Confirm>
     </div>
   );
 }

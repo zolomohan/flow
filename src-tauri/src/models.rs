@@ -251,6 +251,10 @@ pub struct LabelInput {
 /// Friday groceries, the standing transfer into savings. It holds the shape
 /// of a posting rather than a posting — no date, because the date is the one
 /// thing that is never the same twice.
+///
+/// It holds what was on the form when it was kept, blanks included: a field
+/// left empty is empty in the template, and empty again every time it is
+/// used. That is how a template says "this one is different each time".
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TxTemplate {
@@ -285,10 +289,6 @@ pub struct TxTemplate {
     pub splits: Vec<TemplateSplit>,
     /// Labels every posting written from it should wear.
     pub labels: Vec<TxLabel>,
-    /// What the template asks for rather than answers: the fields it leaves
-    /// blank for you to fill in each time it is used. Everything not named
-    /// here is pre-baked and arrives filled in.
-    pub ask: Vec<String>,
 }
 
 /// One line of a templated split bill.
@@ -326,11 +326,6 @@ pub struct TxTemplateInput {
     pub splits: Option<Vec<TransactionSplitInput>>,
     #[serde(default)]
     pub label_ids: Option<Vec<String>>,
-    /// The fields to leave blank and ask for each time. Anything not named
-    /// here is pre-baked. Unknown names are ignored rather than refused: a
-    /// template is not worth losing over a field that no longer exists.
-    #[serde(default)]
-    pub ask: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

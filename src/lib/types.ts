@@ -289,12 +289,15 @@ export interface CardsOverview {
  * Friday groceries, the standing transfer into savings. It holds the shape of
  * a posting rather than a posting — no date, because the date is the one
  * thing that is never the same twice.
+ *
+ * It holds what was on the form when it was kept, blanks included: a field
+ * left empty is empty in the template, and empty again every time it is used.
  */
 export interface TxTemplate {
   id: string;
   name: string;
   kind: TxKind;
-  /** Zero means it carries no amount, and the sheet opens on an empty well. */
+  /** Zero means it was left blank, and the sheet opens on an empty well. */
   amount: Paise;
   /** Nullable where a posting's is not: an account can be deleted out from
    *  under a template, and the template is still worth keeping. */
@@ -317,23 +320,7 @@ export interface TxTemplate {
   splits: TemplateSplit[];
   /** Labels every posting written from it should wear. */
   labels: TxLabel[];
-  /** What it asks for rather than answers. Everything not named here is
-   *  pre-baked and arrives filled in. */
-  ask: TemplateField[];
 }
-
-/**
- * A field a template can either answer for or ask about. What it asks for is
- * left blank when the template is used, and has to be filled in before the
- * transaction can be saved.
- */
-export type TemplateField =
-  | 'amount'
-  | 'account'
-  | 'toAccount'
-  | 'category'
-  | 'merchant'
-  | 'note';
 
 /** One line of a templated split bill. */
 export interface TemplateSplit {
@@ -352,7 +339,7 @@ export interface TxTemplateInput {
   id?: string | null;
   name: string;
   kind: TxKind;
-  /** Zero leaves the amount out of the template. */
+  /** Zero for a template that does not carry an amount. */
   amount: Paise;
   accountId: string | null;
   toAccountId: string | null;
@@ -363,9 +350,6 @@ export interface TxTemplateInput {
    *  nothing half-saved to leave alone: what is sent is what it becomes. */
   splits?: TransactionSplitInput[] | null;
   labelIds?: string[] | null;
-  /** The fields to leave blank and ask for each time. Fields that mean
-   *  nothing for the kind are dropped rather than refused. */
-  ask?: TemplateField[] | null;
 }
 
 export interface LabelInput {
