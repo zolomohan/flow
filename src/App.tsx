@@ -1,4 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import {
+  useCallback, useEffect, useLayoutEffect, useRef, useState,
+  type MutableRefObject, type ReactNode,
+} from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { INVESTMENT_TABS, Sidebar, isInvestmentRoute, type Route } from './components/Sidebar';
 import { api } from './lib/api';
@@ -60,23 +63,46 @@ const ROUTE_KEYS: Route[] = [
     of it in a session, short enough that nothing grows without bound. */
 const HISTORY_MAX = 60;
 
+/** One stop on the trail. The id is what tells two visits to the same screen
+ *  apart, so each keeps its own place on the page. */
+interface Stop {
+  id: number;
+  route: Route;
+}
+
 /**
  * Where you have been, and where you were before you came back. The trail is
  * a list of screens with a finger on the one being looked at: going somewhere
  * new cuts off whatever was ahead, which is what forward means once you have
  * taken a different turn.
+ *
+ * It also remembers how far down each stop was read. Coming back to a ledger
+ * you were halfway through and being handed the top of it is the app losing
+ * your place, not you.
  */
 function useHistory(initial: Route) {
-  const [trail, setTrail] = useState<{ stack: Route[]; at: number }>({
-    stack: [initial],
+  const seq = useRef(0);
+  const [trail, setTrail] = useState<{ stack: Stop[]; at: number }>(() => ({
+    stack: [{ id: 0, route: initial }],
     at: 0,
-  });
+  }));
+  // Where each stop was scrolled to, by its id. A ref rather than state: it
+  // changes as you scroll away from a screen, and nothing on screen depends
+  // on it until you come back to one.
+  const marks = useRef(new Map<number, number>());
 
   const navigate = useCallback((next: Route) => {
     setTrail((t) => {
-      if (t.stack[t.at] === next) return t;
-      const stack = [...t.stack.slice(0, t.at + 1), next].slice(-HISTORY_MAX);
-      return { stack, at: stack.length - 1 };
+      if (t.stack[t.at].route === next) return t;
+      const stack = [...t.stack.slice(0, t.at + 1), { id: ++seq.current, route: next }];
+      const trimmed = stack.slice(-HISTORY_MAX);
+      // What was ahead is gone, and so is the far end of a trail this long.
+      // Their places go with them rather than sitting in the map forever.
+      const kept = new Set(trimmed.map((stop) => stop.id));
+      for (const stop of t.stack) {
+        if (!kept.has(stop.id)) marks.current.delete(stop.id);
+      }
+      return { stack: trimmed, at: trimmed.length - 1 };
     });
   }, []);
 
@@ -88,8 +114,11 @@ function useHistory(initial: Route) {
     setTrail((t) => (t.at < t.stack.length - 1 ? { ...t, at: t.at + 1 } : t));
   }, []);
 
+  const stop = trail.stack[trail.at];
   return {
-    route: trail.stack[trail.at],
+    route: stop.route,
+    stop: stop.id,
+    marks,
     navigate,
     back,
     forward,
@@ -98,9 +127,70 @@ function useHistory(initial: Route) {
   };
 }
 
+/** How long to keep asking for an offset a screen cannot reach yet. */
+const RESTORE_FRAMES = 60;
+
+/**
+ * The page itself: one scrolling box per stop on the trail, which puts back
+ * the place that stop was left at and hands it back on the way out.
+ *
+ * A screen fills in as its reads come back, so the box is usually shorter
+ * when it mounts than it will be a moment later — asking once would land you
+ * partway down, or at the bottom of a page that had nothing in it yet. So the
+ * offset is asked for again each frame until the page is long enough to hold
+ * it, and given up on if it never is.
+ */
+function ScrollPane({
+  stop, marks, children,
+}: {
+  stop: number;
+  marks: MutableRefObject<Map<number, number>>;
+  children: ReactNode;
+}) {
+  const pane = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const node = pane.current;
+    if (!node) return;
+    const want = marks.current.get(stop) ?? 0;
+    let frame = 0;
+    let raf = 0;
+    const settle = () => {
+      if (!pane.current) return;
+      pane.current.scrollTop = want;
+      // Short of it because the page is still short: ask again next frame.
+      if (pane.current.scrollTop < want - 0.5 && frame++ < RESTORE_FRAMES) {
+        raf = requestAnimationFrame(settle);
+      }
+    };
+    settle();
+    return () => {
+      cancelAnimationFrame(raf);
+      // On the way out — after the screen has animated away, since that is
+      // when React lets go of it — remember where it was left.
+      marks.current.set(stop, node.scrollTop);
+    };
+  }, [stop, marks]);
+
+  return (
+    <motion.div
+      ref={pane}
+      variants={screenVariants}
+      initial="initial"
+      animate="animate"
+      exit="exit"
+      className="main-scroll"
+    >
+      {children}
+    </motion.div>
+  );
+}
+
 function Shell() {
   const { ready, fatal, accounts } = useStore();
-  const { route, navigate: setRoute, back, forward, canBack, canForward } = useHistory('overview');
+  const {
+    route, stop, marks, navigate: setRoute, back, forward, canBack, canForward,
+  } = useHistory('overview');
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [txOpen, setTxOpen] = useState(false);
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
@@ -366,14 +456,7 @@ function Shell() {
       <main className="main">
         <div className="titlebar-drag main-drag" data-tauri-drag-region />
         <AnimatePresence mode="wait">
-          <motion.div
-            key={route}
-            variants={screenVariants}
-            initial="initial"
-            animate="animate"
-            exit="exit"
-            className="main-scroll"
-          >
+          <ScrollPane key={stop} stop={stop} marks={marks}>
             {accounts.length === 0 && route !== 'settings' ? (
               <div className="screen">
                 <div className="welcome">
@@ -463,7 +546,7 @@ function Shell() {
             ) : (
               <Settings />
             )}
-          </motion.div>
+          </ScrollPane>
         </AnimatePresence>
       </main>
 
