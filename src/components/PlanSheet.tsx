@@ -283,7 +283,7 @@ export function PlanSheet({
           </div>
 
           <div className="tx-meta">
-            <Field label="Falls due on" hint="any date it lands on; the rest follow">
+            <Field label="Falls due on">
               <DateField value={anchorOn} onChange={setAnchorOn} />
             </Field>
             <Field label="Until" hint="optional">
@@ -328,10 +328,7 @@ export function PlanSheet({
             )}
           </div>
 
-          <Field
-            label="Payee"
-            hint="written on payments this plan makes"
-          >
+          <Field label="Payee">
             <TextInput
               value={merchant}
               placeholder={name || 'Netflix'}

@@ -12,7 +12,7 @@ import { useStore } from '../lib/store';
 import {
   cadenceLabel, cadenceSuffix, dueLabel, hasRisen, isLive, monthlyTotal,
 } from '../lib/plans';
-import { compactMoney, money, monthKey, shortDayLabel } from '../lib/format';
+import { compactMoney, money, monthKey, shiftMonth, shortDayLabel } from '../lib/format';
 import { itemVariants, listVariants } from '../lib/motion';
 import type { Plan, PlanOccurrence, PlanPosting } from '../lib/types';
 import type { PlanDraft } from '../components/PlanSheet';
@@ -235,17 +235,27 @@ export function Planned({
 
 /* ---------------------------------------------------------------- upcoming */
 
-/** Which shelf a plan falls on. Time, not category: what lands on you first. */
+/**
+ * Which shelf a plan falls on. Time, not category: what lands on you first.
+ *
+ * The near shelves are counted in days, because a week away is a week away
+ * whatever the calendar says. Past that they are calendar months, because
+ * "this month" is a claim about the month — a bill due on the 3rd is next
+ * month's problem even when it is twenty days off, and counting it as this
+ * month's made the total under that heading a figure for nothing.
+ */
 function shelfOf(plan: Plan): string | null {
-  if (!isLive(plan) || plan.daysUntil === null) return null;
+  if (!isLive(plan) || plan.daysUntil === null || !plan.nextDue) return null;
   if (plan.daysUntil < 0) return 'Late';
   if (plan.daysUntil === 0) return 'Today';
   if (plan.daysUntil <= 7) return 'This week';
-  if (plan.daysUntil <= 31) return 'This month';
+  const due = plan.nextDue.slice(0, 7);
+  if (due === monthKey()) return 'This month';
+  if (due === shiftMonth(monthKey(), 1)) return 'Next month';
   return 'Later';
 }
 
-const SHELVES = ['Late', 'Today', 'This week', 'This month', 'Later'];
+const SHELVES = ['Late', 'Today', 'This week', 'This month', 'Next month', 'Later'];
 
 function Upcoming({
   plans, onOpen, onEdit, onLink, onPay, onSkip, onArchive, onOpenTransaction,
