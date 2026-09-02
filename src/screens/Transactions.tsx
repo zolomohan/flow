@@ -123,7 +123,8 @@ export function Transactions({
   initialSearch?: string;
 }) {
   const {
-    accounts, categories, labels, month, setMonth, listTransactions, transactionSummary,
+    accounts, categories, labels, folders, addToFolder,
+    month, setMonth, listTransactions, transactionSummary,
     revision, updateTransactions, deleteTransactions, confirmTriage, toast,
   } = useStore();
   const [search, setSearch] = useState(initialSearch ?? '');
@@ -407,6 +408,33 @@ export function Transactions({
   // a transfer has no category, and a split bill takes its own from its parts.
   const chosen = rows.filter((r) => pickedSet.has(r.id));
   const categorisable = chosen.filter((r) => r.kind !== 'transfer' && !r.splits.length).length;
+
+  // Where a run of rows can be gathered to. A folder holds names rather than
+  // money, so this is the one bulk action that changes nothing about the rows
+  // it is applied to.
+  const bulkFolders = useMemo<SelectOption[]>(
+    () =>
+      folders.map((f) => ({
+        value: f.id,
+        label: f.name,
+        icon: f.icon,
+        color: f.color,
+        hint: f.count ? `${f.count} in it` : 'empty',
+      })),
+    [folders],
+  );
+
+  const fileInFolder = async (folderId: string) => {
+    setWorking(true);
+    try {
+      await addToFolder(folderId, [...pickedSet]);
+      clearPicked();
+    } catch {
+      /* the store has already said what went wrong */
+    } finally {
+      setWorking(false);
+    }
+  };
 
   const applyToPicked = async (patch: TransactionPatch, said: string) => {
     setWorking(true);
@@ -1002,6 +1030,17 @@ export function Transactions({
                 searchPlaceholder="Find an account"
                 disabled={working}
               />
+              {folders.length > 0 && (
+                <Select
+                  options={bulkFolders}
+                  value={null}
+                  onChange={(id) => id && void fileInFolder(id)}
+                  placeholder="Into a folder"
+                  searchable
+                  searchPlaceholder="Find a folder"
+                  disabled={working}
+                />
+              )}
             </div>
 
             <div className="bulk-actions">

@@ -19,6 +19,7 @@ export type Route =
   | 'taxes'
   | 'categories'
   | 'labels'
+  | 'folders'
   | 'templates'
   | 'settings';
 
@@ -52,6 +53,7 @@ const NAV: { id: Route; label: string; icon: string }[] = [
   { id: 'taxes', label: 'Taxes', icon: 'scroll-text' },
   { id: 'categories', label: 'Categories', icon: 'tags' },
   { id: 'labels', label: 'Labels', icon: 'bookmark' },
+  { id: 'folders', label: 'Folders', icon: 'folder' },
   { id: 'templates', label: 'Templates', icon: 'shapes' },
 ];
 

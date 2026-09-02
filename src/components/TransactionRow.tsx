@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from './Icon';
 import { MerchantLogo } from './MerchantLogo';
 import { Amount } from './Money';
-import { MoreMenu } from './ui';
+import { MoreMenu, type MenuItem } from './ui';
 import { spring } from '../lib/motion';
 import { initials, money, timeLabel } from '../lib/format';
 import type { Paise, Transaction, TransactionSplit } from '../lib/types';
@@ -44,6 +44,7 @@ function byCategory(splits: TransactionSplit[]) {
 
 export function TransactionRow({
   tx, onClick, onSplit, onDebt, onRefund, showDate, selected, onSelect, enterDelay = 0,
+  extraActions,
 }: {
   tx: Transaction;
   onClick?: () => void;
@@ -69,6 +70,9 @@ export function TransactionRow({
   /** Ticking the box. `range` is true when shift was held, which the ledger
    *  reads as "everything between the last one and this". */
   onSelect?: (range: boolean) => void;
+  /** Anything else this row can do where it is being shown rather than
+   *  everywhere — taking it out of the folder showing it, say. */
+  extraActions?: MenuItem[];
 }) {
   const [open, setOpen] = useState(false);
   const isTransfer = tx.kind === 'transfer';
@@ -247,6 +251,7 @@ export function TransactionRow({
                   onClick: onRefund,
                 }]
               : []),
+            ...(extraActions ?? []),
           ]}
         />
       </div>

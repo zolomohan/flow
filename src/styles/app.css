@@ -5593,6 +5593,183 @@ kbd {
 }
 .import-row.is-off .import-filed { opacity: 0.5; }
 
+/* ----------------------------------------------------------------- folders */
+
+/* A folder is read as a tile: what it is, what is in it, what it came to.
+   Wider than a card of figures because the name is the point of it, and the
+   name is usually a place or a project rather than a word. */
+.folder-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+}
+.folder-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px 18px 17px;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-2xl);
+  box-shadow: var(--shadow-xs);
+  cursor: pointer;
+  transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+}
+.folder-card:hover {
+  border-color: color-mix(in srgb, var(--tint) 45%, var(--line-soft));
+  box-shadow: var(--shadow-sm);
+}
+.folder-card-top { display: flex; align-items: center; gap: 11px; }
+.folder-card-top > svg { color: var(--ink-4); flex-shrink: 0; }
+
+/* The mark, in the folder's own colour. Square-ish rather than round: a
+   folder holds things, and a disc reads as a category. */
+.folder-glyph {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: var(--r-md);
+  color: var(--tint);
+  background: color-mix(in srgb, var(--tint) 14%, transparent);
+}
+.folder-glyph.is-large { width: 38px; height: 38px; border-radius: var(--r-lg); }
+
+.folder-card-name {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: var(--tight);
+}
+.folder-card-name em,
+.folder-preview-name em {
+  font-style: normal;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+.folder-card-figures { display: flex; align-items: baseline; gap: 20px; }
+.folder-card-total,
+.folder-card-net {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: var(--tight);
+  font-variant-numeric: tabular-nums;
+}
+.folder-card-net { font-size: 15px; color: var(--ink-3); }
+.folder-card-net.is-up { color: var(--green); }
+.folder-card-total em,
+.folder-card-net em {
+  font-style: normal;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: var(--wide);
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.folder-card-note {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-3);
+  border-top: 1px solid var(--line-soft);
+  padding-top: 11px;
+}
+
+/* The folder's own page: the figures first, then what they are made of. */
+.folder-summary { display: grid; }
+.folder-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+  padding: 18px 22px 20px;
+}
+@media (min-width: 861px) {
+  .folder-hero {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 300px);
+    align-items: center;
+    gap: 28px;
+  }
+}
+.folder-hero-total { margin-top: 4px; font-size: 34px; color: var(--ink); }
+.folder-hero-sub {
+  margin-top: 3px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+.folder-split .split { margin-top: 0; }
+.folder-split-legend {
+  display: flex;
+  gap: 16px;
+  margin-top: 9px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+.folder-split-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.folder-split-legend i { width: 8px; height: 8px; border-radius: var(--r-full); }
+.folder-split-legend i.is-in { background: var(--green); }
+.folder-split-legend i.is-out { background: var(--ink-3); }
+
+/* Where it went: the ring beside the list, and the list carrying its own
+   bars — the same reading the overview gives a month. */
+.folder-breakdown {
+  display: grid;
+  gap: 22px;
+  justify-items: center;
+  padding: 20px 22px 22px;
+}
+@media (min-width: 861px) {
+  .folder-breakdown {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    justify-items: stretch;
+  }
+}
+.folder-slices { display: grid; gap: 11px; align-content: center; }
+.folder-slices li {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) 90px auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.folder-slices li > i { width: 8px; height: 8px; border-radius: var(--r-full); }
+.folder-slice-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-slice-bar {
+  height: 5px;
+  border-radius: var(--r-full);
+  background: var(--surface-inset);
+  overflow: hidden;
+}
+.folder-slice-bar i { display: block; height: 100%; border-radius: var(--r-full); }
+.folder-slices strong {
+  font-size: 12.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* What the folder will look like, while it is being named. */
+.folder-preview { display: flex; align-items: center; gap: 12px; }
+.folder-preview-name {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: var(--tight);
+}
+
 /* ------------------------------------------------------------------ labels */
 
 /* What the label will look like on a row, shown while it is being named. A

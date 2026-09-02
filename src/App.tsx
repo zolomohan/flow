@@ -26,6 +26,7 @@ import { Taxes } from './screens/Taxes';
 import { Debts } from './screens/Debts';
 import { Investments } from './screens/Investments';
 import { Categories } from './screens/Categories';
+import { Folders } from './screens/Folders';
 import { Labels } from './screens/Labels';
 import { Templates } from './screens/Templates';
 import { Settings } from './screens/Settings';
@@ -546,6 +547,13 @@ function Shell() {
               <Categories onOpenCategory={openCategoryTransactions} />
             ) : route === 'labels' ? (
               <Labels onOpenLabel={openLabelTransactions} />
+            ) : route === 'folders' ? (
+              <Folders
+                onOpenTransaction={openTransaction}
+                onSplitTransaction={splitTransaction}
+                onOweTransaction={oweTransaction}
+                onRefundTransaction={refundTransaction}
+              />
             ) : route === 'templates' ? (
               <Templates
                 onUseTemplate={useTemplate}

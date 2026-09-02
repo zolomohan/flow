@@ -135,6 +135,39 @@ export interface TxLabel {
   silent: boolean;
 }
 
+/**
+ * A folder: postings kept together because they belong together — a trip, a
+ * renovation, a year of one client's invoices. What is in one is said by
+ * hand, and only ids are kept, so correcting a posting corrects what the
+ * folder says about it.
+ */
+export interface Folder {
+  id: string;
+  name: string;
+  color: string;
+  icon: string;
+  /** What it is for, in your own words. Most folders need none. */
+  note: string | null;
+  createdAt: string;
+  /** What it holds, and what that comes to by direction. The figures are the
+   *  ledger's own: a refund and the posting it gives back cancel. */
+  count: number;
+  income: Paise;
+  expense: Paise;
+  transferred: Paise;
+  /** The oldest and newest posting in it. Null on an empty folder. */
+  firstAt: string | null;
+  lastAt: string | null;
+}
+
+export interface FolderInput {
+  id?: string | null;
+  name: string;
+  color: string;
+  icon: string;
+  note?: string | null;
+}
+
 export interface Label {
   id: string;
   name: string;
@@ -396,6 +429,8 @@ export interface TransactionQuery {
   search?: string | null;
   /** Only postings carrying one of these labels. */
   labelIds?: string[] | null;
+  /** Only postings kept in one of these folders. */
+  folderIds?: string[] | null;
   kinds?: TxKind[] | null;
   accountIds?: string[] | null;
   /** Which side of a posting the accounts must be on. Only transfers differ. */

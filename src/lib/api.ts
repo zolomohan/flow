@@ -18,6 +18,8 @@ import type {
   ImportPreviewRow,
   ImportResult,
   InvestmentTab,
+  Folder,
+  FolderInput,
   Label,
   LabelInput,
   Overview,
@@ -112,6 +114,19 @@ export const api = {
   saveLabel: (input: LabelInput) => call<Label>('save_label', { input }),
   /** The label goes and comes off every posting; the postings stay. */
   deleteLabel: (id: string) => call<void>('delete_label', { id }),
+
+  /** Every folder, with what it holds already added up. */
+  listFolders: () => call<Folder[]>('list_folders'),
+  saveFolder: (input: FolderInput) => call<Folder>('save_folder', { input }),
+  /** The folder goes; every posting it held stays where it was. */
+  deleteFolder: (id: string) => call<void>('delete_folder', { id }),
+  /** Puts postings in a folder. Answers with how many were not in it already,
+   *  so gathering the same run twice reports the truth. */
+  addToFolder: (folderId: string, ids: string[]) =>
+    call<number>('add_to_folder', { folderId, ids }),
+  /** Takes postings back out. They are untouched otherwise. */
+  removeFromFolder: (folderId: string, ids: string[]) =>
+    call<void>('remove_from_folder', { folderId, ids }),
   /** "Filed right": clears Triage and teaches the importer the filing. */
   confirmTriage: (ids: string[]) => call<number>('confirm_triage', { ids }),
 

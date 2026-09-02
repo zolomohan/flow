@@ -300,6 +300,29 @@ pub(crate) fn migrate(conn: &Connection) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_tx_labels_label ON transaction_labels(label_id);
 
+        -- A folder holds postings rather than marking them: the Goa trip, the
+        -- kitchen, a year of one client's invoices. What is in one is said by
+        -- hand, because the only thing a run like that has in common is that
+        -- you say so. Only ids are kept, so the postings stay where they are
+        -- and a folder never holds a stale copy of one.
+        CREATE TABLE IF NOT EXISTS folders (
+            id         TEXT PRIMARY KEY,
+            name       TEXT NOT NULL UNIQUE,
+            color      TEXT NOT NULL,
+            icon       TEXT NOT NULL,
+            note       TEXT,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS folder_transactions (
+            folder_id      TEXT NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+            transaction_id TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+            added_at       TEXT NOT NULL,
+            PRIMARY KEY (folder_id, transaction_id)
+        ) WITHOUT ROWID;
+
+        CREATE INDEX IF NOT EXISTS idx_folder_tx ON folder_transactions(transaction_id);
+
         -- What the importer has learned about a counterparty: how the last
         -- import of them was filed, keyed on the stable part of the bank's
         -- narration. Confirmed means a person said so; unconfirmed rules were
@@ -1735,7 +1758,7 @@ fn rupees_to_paise(text: &str) -> Option<Paise> {
     Some(whole * 100 + paise)
 }
 
-fn placeholders(n: usize) -> String {
+pub(crate) fn placeholders(n: usize) -> String {
     std::iter::repeat("?").take(n).collect::<Vec<_>>().join(",")
 }
 
@@ -1824,6 +1847,16 @@ fn tx_filters(q: &TransactionQuery) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
         wheres.push(format!(
             "EXISTS (SELECT 1 FROM transaction_labels tl
                      WHERE tl.transaction_id = t.id AND tl.label_id IN ({ph}))"
+        ));
+        for id in ids {
+            args.push(Box::new(id.clone()));
+        }
+    }
+    if let Some(ids) = q.folder_ids.as_ref().filter(|v| !v.is_empty()) {
+        let ph = placeholders(ids.len());
+        wheres.push(format!(
+            "EXISTS (SELECT 1 FROM folder_transactions ft
+                     WHERE ft.transaction_id = t.id AND ft.folder_id IN ({ph}))"
         ));
         for id in ids {
             args.push(Box::new(id.clone()));
@@ -6132,10 +6165,12 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
 
 /// Every table the book is made of, in an order that can be emptied and
 /// refilled with the foreign keys looking on.
-const TABLES: [&str; 15] = [
+const TABLES: [&str; 17] = [
     "settings",
     "price_history",
     "price_cache",
+    "folder_transactions",
+    "folders",
     "template_labels",
     "template_splits",
     "transaction_templates",
@@ -6227,6 +6262,7 @@ pub fn reset(conn: &Connection) -> Result<()> {
          DELETE FROM debt_payments; DELETE FROM debts;
          DELETE FROM template_splits; DELETE FROM template_labels;
          DELETE FROM transaction_templates;
+         DELETE FROM folder_transactions; DELETE FROM folders;
          DELETE FROM transaction_splits; DELETE FROM transactions;
          DELETE FROM captures;
          DELETE FROM accounts; DELETE FROM categories; DELETE FROM settings;",

@@ -255,6 +255,41 @@ pub struct TransactionInput {
     pub refund_of: Option<String>,
 }
 
+/// A folder: postings kept together because they belong together, with what
+/// is in it already added up. The figures are the ledger's own, so a folder
+/// never disagrees with the screen it was gathered from.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Folder {
+    pub id: String,
+    pub name: String,
+    pub color: String,
+    pub icon: String,
+    /// What it is for, in your own words. Most folders need none.
+    pub note: Option<String>,
+    pub created_at: String,
+    /// How many postings it holds, and what they come to by direction.
+    pub count: i64,
+    pub income: Paise,
+    pub expense: Paise,
+    pub transferred: Paise,
+    /// The span it covers: the oldest and newest posting in it. Both are
+    /// `None` on a folder with nothing in it yet.
+    pub first_at: Option<String>,
+    pub last_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderInput {
+    pub id: Option<String>,
+    pub name: String,
+    pub color: String,
+    pub icon: String,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LabelInput {
@@ -416,6 +451,8 @@ pub struct TransactionQuery {
     pub search: Option<String>,
     /// Only postings carrying one of these labels.
     pub label_ids: Option<Vec<String>>,
+    /// Only postings kept in one of these folders.
+    pub folder_ids: Option<Vec<String>>,
     pub kinds: Option<Vec<String>>,
     pub account_ids: Option<Vec<String>>,
     /// Which side of a posting the accounts have to be on: `from` for money

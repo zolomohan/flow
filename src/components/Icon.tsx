@@ -5,8 +5,9 @@ import {
   CheckCheck, ChevronDown, ChevronLeft, ChevronRight, ChevronsUpDown, CircleCheckBig,
   CircleDashed, CircleHelp, Clapperboard, Coffee, Cog, Coins, Cookie, CornerUpLeft,
   Copy, Cpu, CreditCard, Croissant, Download, Drama, Droplets, Dumbbell, Equal, FileUp,
-  EyeOff, Flag, Flower2, ForkKnifeCrossed, Fuel, Gamepad2, Gem, Gift, Glasses, Globe,
-  GraduationCap, Grid2x2, GripVertical, Hammer, HandHeart, HandPlatter, Handshake, HeartHandshake,
+  EyeOff, Flag, Flower2, Folder, FolderMinus, FolderOpen, ForkKnifeCrossed,
+  Fuel, Gamepad2, Gem, Gift, Glasses, Globe, GraduationCap, Grid2x2,
+  GripVertical, Hammer, HandHeart, HandPlatter, Handshake, HeartHandshake,
   HeartPulse, Heart, Hospital, Hourglass, House, IceCreamCone, Inbox, Info, KeyRound,
   Landmark, Laptop,
   LayoutDashboard, Lightbulb, Link2, ListFilter, Luggage, Milk, MonitorSmartphone, Moon,
@@ -78,6 +79,9 @@ export const ICONS: Record<string, LucideIcon> = {
   'eye-off': EyeOff,
   flag: Flag,
   'flower-2': Flower2,
+  folder: Folder,
+  'folder-minus': FolderMinus,
+  'folder-open': FolderOpen,
   fuel: Fuel,
   'gamepad-2': Gamepad2,
   gem: Gem,
@@ -251,6 +255,23 @@ export const CATEGORY_ICON_GROUPS: { label: string; icons: string[] }[] = [
 
 /** Icon names offered when creating a category, flattened. */
 export const CATEGORY_ICONS = CATEGORY_ICON_GROUPS.flatMap((g) => g.icons);
+
+/**
+ * What a folder can wear. The category shelves, with a shelf of its own in
+ * front: a folder is usually a trip, a place, a project or a person, and the
+ * glyphs for those are scattered across shelves named after spending.
+ */
+export const FOLDER_ICON_GROUPS: { label: string; icons: string[] }[] = [
+  {
+    label: 'Folders',
+    icons: [
+      'folder', 'folder-open', 'luggage', 'plane', 'house', 'hammer',
+      'briefcase', 'graduation-cap', 'party-popper', 'heart', 'users-round',
+      'box', 'tent', 'palmtree', 'gift', 'shapes',
+    ],
+  },
+  ...CATEGORY_ICON_GROUPS,
+];
 
 /** Icon names offered when creating an account. */
 export const ACCOUNT_ICONS = [

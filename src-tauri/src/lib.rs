@@ -2,6 +2,7 @@ mod capture;
 mod cards;
 mod db;
 mod demo;
+mod folders;
 mod import;
 mod models;
 mod plans;
@@ -244,6 +245,35 @@ fn save_label(db: State<Db>, input: LabelInput) -> R<Label> {
 #[tauri::command]
 fn delete_label(db: State<Db>, id: String) -> R<()> {
     with_db(&db, |c| db::delete_label(c, &id))
+}
+
+/// Every folder, with what it holds already added up.
+#[tauri::command]
+fn list_folders(db: State<Db>) -> R<Vec<Folder>> {
+    with_db(&db, folders::list_folders)
+}
+
+#[tauri::command]
+fn save_folder(db: State<Db>, input: FolderInput) -> R<Folder> {
+    with_db(&db, |c| folders::save_folder(c, input))
+}
+
+/// The folder goes; every posting it held stays exactly where it was.
+#[tauri::command]
+fn delete_folder(db: State<Db>, id: String) -> R<()> {
+    with_db(&db, |c| folders::delete_folder(c, &id))
+}
+
+/// Puts postings in a folder, answering with how many were not already in it.
+#[tauri::command]
+fn add_to_folder(db: State<Db>, folder_id: String, ids: Vec<String>) -> R<i64> {
+    with_db(&db, |c| folders::add_postings(c, &folder_id, &ids))
+}
+
+/// Takes postings back out of one. They are untouched otherwise.
+#[tauri::command]
+fn remove_from_folder(db: State<Db>, folder_id: String, ids: Vec<String>) -> R<()> {
+    with_db(&db, |c| folders::remove_postings(c, &folder_id, &ids))
 }
 
 /// Every saved template, what you reach for most at the top.
@@ -663,6 +693,11 @@ pub fn run() {
             list_labels,
             save_label,
             delete_label,
+            list_folders,
+            save_folder,
+            delete_folder,
+            add_to_folder,
+            remove_from_folder,
             confirm_triage,
             sync_captures,
             list_captures,

@@ -28,6 +28,8 @@ import type {
   ImportCommitRow,
   ImportResult,
   InvestmentLotInput,
+  Folder,
+  FolderInput,
   Label,
   LabelInput,
   Overview,
@@ -114,6 +116,8 @@ interface Store {
   holdings: Holding[];
   /** Every label in the book, with how many postings carry each. */
   labels: Label[];
+  /** Every folder, with what it holds already added up. */
+  folders: Folder[];
   /** Saved transaction templates, what you reach for most first. */
   templates: TxTemplate[];
   /** Every planned payment, soonest due first. */
@@ -180,6 +184,12 @@ interface Store {
   dismissCapture: (id: string) => Promise<void>;
   saveLabel: (input: LabelInput) => Promise<Label>;
   deleteLabel: (id: string) => Promise<void>;
+  saveFolder: (input: FolderInput) => Promise<Folder>;
+  /** The folder goes; every posting it held stays where it was. */
+  deleteFolder: (id: string) => Promise<void>;
+  /** Puts postings in a folder, saying how many were not already in it. */
+  addToFolder: (folderId: string, ids: string[]) => Promise<number>;
+  removeFromFolder: (folderId: string, ids: string[]) => Promise<void>;
   savePlan: (input: PlanInput) => Promise<Plan>;
   deletePlan: (id: string) => Promise<void>;
   setPlanArchived: (id: string, archived: boolean) => Promise<void>;
@@ -221,6 +231,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [debts, setDebts] = useState<Debt[]>([]);
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [labels, setLabels] = useState<Label[]>([]);
+  const [folders, setFolders] = useState<Folder[]>([]);
   const [captures, setCaptures] = useState<Capture[]>([]);
   const [captureHistory, setCaptureHistory] = useState<Capture[]>([]);
   const [lastCaptureSync, setLastCaptureSync] = useState<CaptureSync | null>(null);
@@ -273,6 +284,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const [
         nextAccounts, nextCategories, nextUsage, nextDebts, nextHoldings, nextOverview,
         nextSettings, nextLabels, nextTemplates, nextPlans, nextCaptures, nextSpoken,
+        nextFolders,
       ] = await Promise.all([
         api.listAccounts(),
         api.listCategories(),
@@ -286,6 +298,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         api.listPlans(),
         api.listCaptures(),
         api.captureHistory(),
+        api.listFolders(),
       ]);
       setAccounts(nextAccounts);
       setCategories(nextCategories);
@@ -295,6 +308,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setOverview(nextOverview);
       setSettings(nextSettings);
       setLabels(nextLabels);
+      setFolders(nextFolders);
       setTemplates(nextTemplates);
       setPlans(nextPlans);
       setCaptures(nextCaptures);
@@ -414,6 +428,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       debts,
       holdings,
       labels,
+      folders,
       templates,
       plans,
       overview,
@@ -504,6 +519,29 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       saveLabel: (input) =>
         mutate(() => api.saveLabel(input), input.id ? 'Label updated' : 'Label added'),
       deleteLabel: (id) => mutate(() => api.deleteLabel(id), 'Label deleted'),
+      saveFolder: (input) =>
+        mutate(() => api.saveFolder(input), input.id ? 'Folder updated' : 'Folder added'),
+      deleteFolder: (id) => mutate(() => api.deleteFolder(id), 'Folder deleted'),
+      // What it says is what actually changed: gathering a run you have
+      // already gathered should not claim to have put it somewhere twice.
+      addToFolder: (folderId, ids) =>
+        mutate(async () => {
+          const added = await api.addToFolder(folderId, ids);
+          return added;
+        }).then((added) => {
+          const name = folders.find((f) => f.id === folderId)?.name;
+          toast(
+            added === 0
+              ? `Already in ${name ?? 'the folder'}`
+              : `${added} ${added === 1 ? 'entry' : 'entries'} into ${name ?? 'the folder'}`,
+          );
+          return added;
+        }),
+      removeFromFolder: (folderId, ids) =>
+        mutate(
+          () => api.removeFromFolder(folderId, ids),
+          ids.length === 1 ? 'Taken out of the folder' : `${ids.length} taken out`,
+        ),
       savePlan: (input) =>
         mutate(() => api.savePlan(input), input.id ? 'Plan updated' : 'Plan added'),
       deletePlan: (id) => mutate(() => api.deletePlan(id), 'Plan removed'),
@@ -550,6 +588,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       debts,
       holdings,
       labels,
+      folders,
       templates,
       plans,
       overview,

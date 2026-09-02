@@ -151,6 +151,25 @@ the template. It is for a question worth asking often and not worth reading a
 hundred times. Postings still carry their silent labels over the wire, because
 the sheet has to know what is pinned to let you unpin it.
 
+**Folders** (`folders` / `folder_transactions`) are the third way of grouping,
+and the only one that is neither a filing nor a mark: a folder *holds*
+postings, by hand, for as long as the thing they are about is going on — the
+Goa trip, the kitchen, a year of one client's invoices. Runs like that cut
+across every category and account the book has, and no rule could gather them,
+because the only thing they have in common is that you say so.
+
+Only ids are kept, so nothing is stored twice: correcting a posting corrects
+what the folder says about it, deleting one takes it out of every folder that
+held it, and deleting a folder leaves every posting exactly where it was. A
+posting can sit in as many folders as you like — a flight to Goa is both the
+trip and the year's travel. Gather entries from the folder's own page (the
+whole ledger opens in a picker, search and filters and all) or by ticking rows
+in the ledger and choosing **Into a folder**. The folder's page opens on what
+it came to: the total, the split between money in and out, entries, average,
+biggest, the span it covers or what it runs at a month, and a ring of what it
+went on — which reads a split bill as the several categories it was filed
+under rather than as one.
+
 `scripts/seed_import_rules.py` can prime the rule memory from history: it
 pairs old statements against the book the same way the preview does and
 writes what it finds as *unconfirmed* rules — suggestions, still triaged,
