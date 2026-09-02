@@ -305,6 +305,10 @@ export function percentDelta(now: number, before: number) {
  * A scaled quantity as text: `12.5 g`, `142.3671 units`. Trailing zeros go,
  * because gold is bought in tenths of a gram and funds allot to four places —
  * padding both to the same width would only add noise.
+ *
+ * Hidden along with the amounts: grams and units are what a holding is worth
+ * said in another currency, and a book that hides ₹8,40,000 while showing the
+ * hundred grams it is has hidden nothing.
  */
 export function quantity(e4: Scaled, unit: 'g' | 'units' | '' = 'g') {
   const negative = e4 < 0;
@@ -313,8 +317,9 @@ export function quantity(e4: Scaled, unit: 'g' | 'units' | '' = 'g') {
   const frac = String(abs % 10_000).padStart(4, '0').replace(/0+$/, '');
   const body = frac ? `${whole}.${frac}` : whole;
   // An empty unit is for places whose label already says what is being
-  // counted, where "142.36 units" only repeats the column heading.
-  return `${negative ? '−' : ''}${body}${unit ? ` ${unit}` : ''}`;
+  // counted, where "142.36 units" only repeats the column heading. The unit
+  // itself is a word, not a figure, so it stays when the figure goes.
+  return `${negative ? '−' : ''}${hidden ? veil(body) : body}${unit ? ` ${unit}` : ''}`;
 }
 
 /** `+3.2%`, `−1.8%`, `0%` — the same minus sign `money` uses. */
