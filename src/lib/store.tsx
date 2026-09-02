@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from 'react';
 import { api } from './api';
-import { monthKey } from './format';
+import { monthKey, setAmountsHidden } from './format';
 import { isDeposit } from './types';
 import type {
   Account,
@@ -49,6 +49,15 @@ import type {
  * obey a setting have no business importing the one that sets it.
  */
 export const REQUIRE_NOTE = 'require_note';
+
+/**
+ * Whether every figure comes out hidden. A book left open on a desk shows
+ * what you have to whoever walks past, and a shared screen shows it to the
+ * room: with this on, an amount prints as the shape of itself — ₹•,••,••• —
+ * and the words around it are left alone. Nothing in the book changes; this
+ * is about what the screen says, not what it holds.
+ */
+export const HIDE_AMOUNTS = 'hide_amounts';
 
 /**
  * Whose book this is. The sidebar wears it in place of the app's own name,
@@ -235,6 +244,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('midas.theme', theme);
     if (theme !== 'light') lastDark.current = theme;
   }, [theme]);
+
+  // Whether figures print hidden, handed to the formatter as this renders
+  // rather than in an effect: everything below reads it on this very pass,
+  // and an effect would set it after the amounts had already been drawn.
+  setAmountsHidden(settings[HIDE_AMOUNTS] === '1');
 
   const toggleTheme = useCallback(
     () => setTheme((t) => (t === 'light' ? lastDark.current : 'light')),

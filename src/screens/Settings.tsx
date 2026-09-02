@@ -7,7 +7,9 @@ import {
 } from '../components/ui';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { api } from '../lib/api';
-import { OWNER_FALLBACK, OWNER_NAME, REQUIRE_NOTE, THEMES, useStore } from '../lib/store';
+import {
+  HIDE_AMOUNTS, OWNER_FALLBACK, OWNER_NAME, REQUIRE_NOTE, THEMES, useStore,
+} from '../lib/store';
 import { spring } from '../lib/motion';
 
 type Tab = 'preferences' | 'data';
@@ -59,6 +61,7 @@ export function Settings() {
 function PreferencesPanel() {
   const { theme, setTheme, settings, saveSetting } = useStore();
   const requireNote = settings[REQUIRE_NOTE] === '1';
+  const hideAmounts = settings[HIDE_AMOUNTS] === '1';
   return (
     <>
     <Card>
@@ -102,6 +105,25 @@ function PreferencesPanel() {
             ariaLabel="Ask for a note"
             on={requireNote}
             onChange={(next) => saveSetting(REQUIRE_NOTE, next ? '1' : '0')}
+          />
+        </div>
+
+        <div className="data-row">
+          <div>
+            <strong>Hide amounts</strong>
+            <p>
+              Every figure on every screen comes out as the shape of itself —
+              <strong className="setting-sample"> ₹•,••,•••</strong> — with the
+              words around it left readable. For a desk somebody walks past, or
+              a screen you are sharing. Nothing in the book changes, and what
+              you are typing is never hidden from you.
+            </p>
+          </div>
+          <Switch
+            size="lg"
+            ariaLabel="Hide amounts"
+            on={hideAmounts}
+            onChange={(next) => saveSetting(HIDE_AMOUNTS, next ? '1' : '0')}
           />
         </div>
       </div>

@@ -10,8 +10,42 @@ const inrPaise = new Intl.NumberFormat('en-IN', {
   maximumFractionDigits: 2,
 });
 
+/**
+ * Whether figures come out hidden — the setting on the Settings screen, kept
+ * here as a plain flag.
+ *
+ * It lives beside the function that prints money rather than being passed to
+ * it, because an amount is printed in a hundred and seventy places and most
+ * of them are sentences about one — "₹40,000 a month committed", a chart's
+ * axis, a tooltip. Threading a parameter through all of them would be a
+ * change to every screen in the app instead of to the one place that turns
+ * paise into words, and blurring the elements those sentences sit in would
+ * take the sentence with it.
+ *
+ * The store sets it as it renders, so the tree below reads it on the same
+ * pass rather than a frame late.
+ */
+let hidden = false;
+
+export function setAmountsHidden(next: boolean) {
+  hidden = next;
+}
+
+/** Whether amounts are being hidden right now. */
+export const amountsHidden = () => hidden;
+
+/**
+ * The same figure with the numbers taken out: ₹1,23,456 → ₹•,••,•••. The
+ * shape stays, so nothing on the screen moves when it is turned on and a
+ * column of amounts still reads as a column of amounts.
+ */
+const veil = (text: string) => text.replace(/\d/g, '•');
+
 /** ₹1,20,450 — whole rupees, Indian digit grouping. */
-export function money(paise: Paise, opts: { paise?: boolean; sign?: boolean } = {}) {
+export function money(
+  paise: Paise,
+  opts: { paise?: boolean; sign?: boolean; plain?: boolean } = {},
+) {
   const abs = Math.abs(paise);
   const body = opts.paise
     ? inrPaise.format(abs / 100)
@@ -21,7 +55,11 @@ export function money(paise: Paise, opts: { paise?: boolean; sign?: boolean } = 
   // debt, and "+₹0" is a gain that didn't happen.
   const shown = opts.paise ? abs : Math.round(abs / 100);
   const prefix = shown === 0 ? '' : paise < 0 ? '−' : opts.sign ? '+' : '';
-  return `${prefix}₹${body}`;
+  const out = `${prefix}₹${body}`;
+  // `plain` is for a figure that is only an echo of what is being typed: the
+  // field beside it is showing the number in the clear, so hiding the echo
+  // would hide nothing and only make the sum unreadable.
+  return hidden && !opts.plain ? veil(out) : out;
 }
 
 /** Splits into parts so the rupee mark and decimals can be styled down. */
@@ -30,17 +68,27 @@ export function moneyParts(paise: Paise) {
   const abs = Math.abs(paise);
   const whole = inr.format(Math.floor(abs / 100));
   const cents = String(abs % 100).padStart(2, '0');
-  return { negative, symbol: '₹', whole, cents };
+  return {
+    negative,
+    symbol: '₹',
+    whole: hidden ? veil(whole) : whole,
+    cents: hidden ? veil(cents) : cents,
+  };
 }
 
 /** 1.2L / 45.6K / 2.4Cr — for axis ticks and dense chips. */
 export function compactMoney(paise: Paise) {
   const rupees = Math.abs(paise) / 100;
   const sign = paise < 0 ? '−' : '';
-  if (rupees >= 1e7) return `${sign}₹${trim(rupees / 1e7)}Cr`;
-  if (rupees >= 1e5) return `${sign}₹${trim(rupees / 1e5)}L`;
-  if (rupees >= 1e3) return `${sign}₹${trim(rupees / 1e3)}K`;
-  return `${sign}₹${Math.round(rupees)}`;
+  const out =
+    rupees >= 1e7
+      ? `${sign}₹${trim(rupees / 1e7)}Cr`
+      : rupees >= 1e5
+        ? `${sign}₹${trim(rupees / 1e5)}L`
+        : rupees >= 1e3
+          ? `${sign}₹${trim(rupees / 1e3)}K`
+          : `${sign}₹${Math.round(rupees)}`;
+  return hidden ? veil(out) : out;
 }
 
 function trim(n: number) {
@@ -278,7 +326,8 @@ export function percent(value: number, opts: { sign?: boolean } = {}) {
 
 /** Rupees per gram or unit, from a scaled price. */
 export function unitPrice(e4: Scaled) {
-  return `₹${inrPaise.format(e4 / 10_000)}`;
+  const out = `₹${inrPaise.format(e4 / 10_000)}`;
+  return hidden ? veil(out) : out;
 }
 
 /** What a lot worked out to per gram or unit, in paise. */

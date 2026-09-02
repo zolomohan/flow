@@ -3521,6 +3521,10 @@ kbd {
    right-hand edge of the card reads as one column. With no head above it the
    card holds one line, so it keeps its sides and gives back its height. */
 .name-input { width: 200px; flex: none; }
+/* The dots as the setting itself shows them: the same weight as the sentence
+   around it, so it reads as an example and not as an emphasis. */
+.data-row .setting-sample { display: inline; font-size: inherit; color: var(--ink-2); }
+
 .setting-card { padding-block: 10px; }
 .setting-card .data-row { padding-block: 6px; }
 

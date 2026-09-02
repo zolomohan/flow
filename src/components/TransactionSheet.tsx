@@ -1120,7 +1120,7 @@ export function TransactionSheet({
               exit={{ opacity: 0 }}
               transition={{ duration: 0.14 }}
             >
-              = {money(Math.round(typed * 100))}
+              = {money(Math.round(typed * 100), { plain: true })}
             </motion.span>
           )}
         </AnimatePresence>

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from './Icon';
 import { Amount } from './Money';
-import { useStore } from '../lib/store';
+import { HIDE_AMOUNTS, useStore } from '../lib/store';
 import { describeTemplate } from '../lib/templates';
 import { accountWorth, dayLabel, money } from '../lib/format';
 import { sheetBackdrop, sheetPanel, spring } from '../lib/motion';
@@ -30,7 +30,10 @@ export function CommandPalette({
   onUseTemplate: (template: TxTemplate) => void;
   onOpenTransaction: (tx: Transaction) => void;
 }) {
-  const { accounts, listTransactions, templates, toggleTheme } = useStore();
+  const { accounts, listTransactions, templates, toggleTheme, settings } = useStore();
+  // The hints below hold formatted amounts, so the list has to be built again
+  // when the book starts or stops hiding them.
+  const hidden = settings[HIDE_AMOUNTS] === '1';
   const [query, setQuery] = useState('');
   const [matches, setMatches] = useState<Transaction[]>([]);
   const [cursor, setCursor] = useState(0);
@@ -126,7 +129,7 @@ export function CommandPalette({
     return [...filteredActions, ...templateMatches, ...accountMatches, ...txMatches];
   }, [
     query, accounts, matches, templates, onNavigate, onNewTransaction, onUseTemplate,
-    onOpenTransaction, toggleTheme,
+    onOpenTransaction, toggleTheme, hidden,
   ]);
 
   useEffect(() => setCursor(0), [query]);
