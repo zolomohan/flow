@@ -232,7 +232,7 @@ export interface SelectOption {
 /** Custom listbox — the native one can't carry colour swatches or groups. */
 export function Select({
   options, value, onChange, placeholder = 'Select…', disabled, allowClear, searchable,
-  searchPlaceholder = 'Type to filter…',
+  searchPlaceholder = 'Type to filter…', clearLabel = 'None',
 }: {
   options: SelectOption[];
   value: string | null;
@@ -240,6 +240,9 @@ export function Select({
   placeholder?: string;
   disabled?: boolean;
   allowClear?: boolean;
+  /** What emptying it means here, where "None" is not the whole story — a
+   *  template's blank field is a question it means to ask, not an absence. */
+  clearLabel?: string;
   /** Puts a filter box at the top of the menu, for a long list. */
   searchable?: boolean;
   searchPlaceholder?: string;
@@ -363,7 +366,7 @@ export function Select({
           onClick={() => { onChange(null); setOpen(false); }}
         >
           <span className="swatch swatch-empty" />
-          <span className="select-option-label">None</span>
+          <span className="select-option-label">{clearLabel}</span>
         </button>
       )}
       {shown.length === 0 && <p className="select-empty">Nothing matches “{query.trim()}”.</p>}

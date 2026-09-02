@@ -160,28 +160,33 @@ export function TemplateSheet({
             <TextInput
               value={amount}
               inputMode="decimal"
-              placeholder="Left blank"
+              placeholder="Asked for each time"
               onChange={(e) => setAmount(e.target.value)}
             />
           </Field>
-          <Field label={editing.kind === 'transfer' ? 'Out of' : 'Account'}>
+          <Field
+            label={editing.kind === 'transfer' ? 'Out of' : 'Account'}
+            hint="Blank asks each time"
+          >
             <Select
               options={accountOptions}
               value={accountId}
               onChange={setAccountId}
-              placeholder="Left blank"
+              placeholder="Asked for each time"
               allowClear
+              clearLabel="Ask each time"
               searchable
             />
           </Field>
           {editing.kind === 'transfer' ? (
-            <Field label="Into">
+            <Field label="Into" hint="Blank asks each time">
               <Select
                 options={accountOptions.filter((o) => o.value !== accountId)}
                 value={toAccountId}
                 onChange={setToAccountId}
-                placeholder="Left blank"
+                placeholder="Asked for each time"
                 allowClear
+                clearLabel="Ask each time"
                 searchable
               />
             </Field>
@@ -216,8 +221,10 @@ export function TemplateSheet({
 
         <p className="page-note">
           <Icon name="circle-help" size={13} />
-          A field left blank is blank when you use it, and asked for when your
-          phone does. To change the parts of a split, use the template instead
+          A field left blank is a field this template asks for: set the account
+          to <strong>Ask each time</strong> and every posting written from it
+          asks where the money went — in the sheet, and in the shortcut your
+          phone runs. To change the parts of a split, use the template instead
           and save it back under this name.
         </p>
       </div>

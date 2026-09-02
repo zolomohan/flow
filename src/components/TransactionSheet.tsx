@@ -20,7 +20,7 @@ import {
 } from '../lib/format';
 import { itemVariants, listVariants, pageVariants, popover, press, spring } from '../lib/motion';
 import { RecordPicker } from './RecordPicker';
-import { describeTemplate } from '../lib/templates';
+import { asksFor, describeTemplate, spoken } from '../lib/templates';
 import type {
   Account, Category, Paise, Transaction, TransactionInput, TxKind,
   TxTemplate, TxTemplateInput,
@@ -899,7 +899,14 @@ export function TransactionSheet({
     // Into whatever it left blank, when that is the amount — the well the
     // sheet opens on anyway, and what most templates leave for you.
     if (!template.amount) window.setTimeout(() => amountRef.current?.focus(), 60);
-    toast(`Filled in from “${template.name}”`);
+    // A template's blanks are the questions it means to ask, so it says which
+    // ones on the way in rather than as a refusal on the way out.
+    const asks = asksFor(template);
+    toast(
+      asks.length
+        ? `Filled in from “${template.name}” — it asks for ${spoken(asks)}`
+        : `Filled in from “${template.name}”`,
+    );
   };
 
   /** Keeping this one under a name: the form as it stands, less the date.

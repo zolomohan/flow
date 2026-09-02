@@ -40,20 +40,55 @@ export function heldBy(template: TxTemplate): Record<string, string | null> {
   };
 }
 
+/**
+ * What a template leaves for you to answer.
+ *
+ * A blank is how a template says "this one is different every time", and
+ * these are the blanks a posting cannot be written without: the sheet refuses
+ * to save until they are filled in, so a template is worth hearing say so
+ * before it is used. A blank category or note asks nothing — a posting is
+ * perfectly happy without either.
+ */
+export function asksFor(template: TxTemplate): string[] {
+  const asks: string[] = [];
+  if (!template.amount) asks.push('an amount');
+  if (!template.accountId) {
+    asks.push(template.kind === 'transfer' ? 'an account to move out of' : 'an account');
+  }
+  if (template.kind === 'transfer' && !template.toAccountId) {
+    asks.push('an account to move into');
+  }
+  return asks;
+}
+
+/** "a and b", "a, b and c" — a short list read the way it is spoken. */
+export const spoken = (parts: string[]) =>
+  parts.length < 2
+    ? parts[0] ?? ''
+    : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+
 /** What a template says of itself in one line: whatever it fills in, and
- *  nothing about what it doesn't. */
+ *  what it means to ask for rather than answer. */
 export function describeTemplate(template: TxTemplate) {
   const held = heldBy(template);
+  // A transfer reads as a route when it knows both ends, and as a
+  // destination when the account it leaves is one of the questions.
+  const route =
+    template.kind === 'transfer' && held.toAccount
+      ? held.account
+        ? `${held.account} → ${held.toAccount}`
+        : `into ${held.toAccount}`
+      : held.account;
   const line = [
     held.amount,
     held.category ?? (template.kind === 'transfer' ? 'Transfer' : null),
-    template.kind === 'transfer' && held.toAccount
-      ? `${held.account ?? '—'} → ${held.toAccount}`
-      : held.account,
+    route,
   ]
     .filter(Boolean)
     .join(' · ');
-  return line || 'Blank — fill it in as you go';
+  if (!line) return 'Blank — fill it in as you go';
+  const asks = asksFor(template);
+  return asks.length ? `${line} · asks for ${spoken(asks)}` : line;
 }
 
 /**
