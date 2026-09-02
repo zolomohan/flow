@@ -1245,7 +1245,9 @@ export function TransactionSheet({
 
   // Pins, under whatever the right-hand column is saying about the money —
   // a label is not a filing, so it sits after the categories rather than
-  // among them, and it applies to a transfer as much as to a bill.
+  // among them, and it applies to a transfer as much as to a bill. Silent
+  // labels are pinned from here like any other: this is where you say what
+  // is on a posting, and a silent one is only quiet on the way out.
   const labelPicker = (
     <div className="tx-labels">
       <span className="field-label">
@@ -1270,6 +1272,9 @@ export function TransactionSheet({
               )
             }
           >
+            {label.silent && (
+              <Icon name="eye-off" size={10.5} strokeWidth={2.2} className="chip-quiet" />
+            )}
             {label.name}
           </Chip>
         ))}

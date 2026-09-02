@@ -129,6 +129,10 @@ export interface TxLabel {
   id: string;
   name: string;
   color: string;
+  /** A silent label is pinned and filterable but never drawn on a row. It
+   *  still comes back on the posting, because the sheet has to know what is
+   *  already pinned to be able to unpin it. */
+  silent: boolean;
 }
 
 export interface Label {
@@ -137,6 +141,8 @@ export interface Label {
   color: string;
   /** How many postings carry it right now. */
   count: number;
+  /** Whether it keeps to itself: offered in the filters and nowhere else. */
+  silent: boolean;
 }
 
 /** One line of a split bill: part of the money, filed on its own. */
@@ -363,6 +369,8 @@ export interface LabelInput {
   id?: string | null;
   name: string;
   color: string;
+  /** Left off, a label is one you can see. Silence is always asked for. */
+  silent?: boolean;
 }
 
 /**

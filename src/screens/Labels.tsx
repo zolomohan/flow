@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { Icon } from '../components/Icon';
-import { Button, Card, CardHead, Confirm, Empty, TextInput } from '../components/ui';
+import {
+  Button, Card, CardHead, Confirm, Empty, Field, Sheet, Switch, TextInput,
+} from '../components/ui';
 import { useStore } from '../lib/store';
 import { itemVariants, listVariants } from '../lib/motion';
 import type { Label } from '../lib/types';
@@ -17,6 +19,11 @@ const SWATCHES = [
  * and a label sits on top for as long as it is useful — "Triage" on
  * unreviewed imports, or anything of your own. Deleting one takes it off
  * every posting it was pinned to and touches nothing else.
+ *
+ * A label can also be silent, which is the same pin kept to itself: it is
+ * offered wherever you pin or filter, and drawn nowhere — no chip on the
+ * row, none on the template. Some questions are worth asking often and not
+ * worth reading a hundred times, and a ledger only has so much room.
  */
 export function Labels({
   onOpenLabel,
@@ -24,95 +31,58 @@ export function Labels({
   /** Opens the ledger filtered to one label. */
   onOpenLabel?: (labelId: string) => void;
 }) {
-  const { labels, saveLabel, deleteLabel } = useStore();
+  const { labels, deleteLabel } = useStore();
+  // The label being worked on outlives the sheet's dismissal, so the form
+  // keeps its content through the closing animation. `null` is a new one.
   const [editing, setEditing] = useState<Label | null>(null);
-  const [name, setName] = useState('');
-  const [color, setColor] = useState(SWATCHES[0]);
+  const [sheetOpen, setSheetOpen] = useState(false);
   // The label being asked about, held by id: the row it belongs to is still
   // there behind the dialog.
   const [confirming, setConfirming] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
 
-  const startEdit = (label: Label) => {
+  const open = (label: Label | null) => {
     setEditing(label);
-    setName(label.name);
-    setColor(label.color);
+    setSheetOpen(true);
   };
 
-  const clear = () => {
-    setEditing(null);
-    setName('');
-    setColor(SWATCHES[0]);
-  };
-
-  const submit = async () => {
-    if (!name.trim() || busy) return;
-    setBusy(true);
-    try {
-      await saveLabel({ id: editing?.id ?? null, name: name.trim(), color });
-      clear();
-    } catch {
-      /* the store has already said what went wrong */
-    } finally {
-      setBusy(false);
-    }
-  };
+  const silent = labels.filter((l) => l.silent).length;
 
   return (
     <div className="screen">
       <header className="screen-head">
         <div>
           <h1>Labels</h1>
-          <p>Pins on top of postings — a filing lives in categories, a label is temporary by nature.</p>
+          <p>
+            Pins on top of postings — a filing lives in categories, a label is temporary by
+            nature. A silent one is pinned the same way and never drawn: you filter by it, you
+            don’t read it.
+          </p>
         </div>
       </header>
 
-      <Card>
-        <CardHead
-          title={editing ? `Editing “${editing.name}”` : 'New label'}
-          hint={editing ? 'Renaming keeps it on every posting it is pinned to' : undefined}
-        />
-        <div className="label-form">
-          <TextInput
-            value={name}
-            placeholder="What should it say?"
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && submit()}
-          />
-          <div className="label-swatches">
-            {SWATCHES.map((c) => (
-              <button
-                key={c}
-                type="button"
-                className={`label-swatch ${c === color ? 'is-on' : ''}`}
-                style={{ background: c }}
-                aria-label={`Colour ${c}`}
-                onClick={() => setColor(c)}
-              >
-                {c === color && <Icon name="check" size={12} strokeWidth={3} />}
-              </button>
-            ))}
-          </div>
-          <div className="label-form-actions">
-            {editing && (
-              <Button tone="ghost" onClick={clear} disabled={busy}>
-                Cancel
-              </Button>
-            )}
-            <Button tone="primary" icon={editing ? 'check' : 'plus'} onClick={submit} disabled={!name.trim() || busy}>
-              {editing ? 'Save changes' : 'Add label'}
-            </Button>
-          </div>
-        </div>
-      </Card>
-
       <Card padded={false}>
+        <div className="card-pad card-head-only">
+          <CardHead
+            title={`${labels.length} ${labels.length === 1 ? 'label' : 'labels'}`}
+            hint={silent > 0 ? `${silent} of them silent` : undefined}
+            action={
+              <Button size="sm" tone="primary" icon="plus" onClick={() => open(null)}>
+                New label
+              </Button>
+            }
+          />
+        </div>
         {labels.length === 0 ? (
           <div className="card-pad">
             <Empty
               icon="bookmark"
               title="No labels yet"
-              body="Make one above — or import a statement, which pins Triage on whatever needs a look."
+              body="Make one — or import a statement, which pins Triage on whatever needs a look."
+              action={
+                <Button tone="primary" icon="plus" onClick={() => open(null)}>
+                  New label
+                </Button>
+              }
             />
           </div>
         ) : (
@@ -126,13 +96,21 @@ export function Labels({
                   onClick={() => onOpenLabel?.(label.id)}
                   title={`Show the ${label.count} ${label.count === 1 ? 'posting' : 'postings'} wearing it`}
                 >
-                  {label.name}
+                  <span className="label-name-line">
+                    {label.name}
+                    {label.silent && (
+                      <span className="label-silent">
+                        <Icon name="eye-off" size={10.5} strokeWidth={2.2} />
+                        Silent
+                      </span>
+                    )}
+                  </span>
                   <em>
                     {label.count} {label.count === 1 ? 'transaction' : 'transactions'}
                   </em>
                 </button>
                 <div className="label-actions">
-                  <Button size="sm" tone="ghost" icon="pencil" onClick={() => startEdit(label)}>
+                  <Button size="sm" tone="ghost" icon="pencil" onClick={() => open(label)}>
                     Edit
                   </Button>
                   <Button
@@ -150,6 +128,8 @@ export function Labels({
         )}
       </Card>
 
+      <LabelSheet open={sheetOpen} editing={editing} onClose={() => setSheetOpen(false)} />
+
       <Confirm
         open={!!confirming}
         title="Delete this label?"
@@ -157,7 +137,7 @@ export function Labels({
           const id = confirming;
           setConfirming(null);
           if (!id) return;
-          if (editing?.id === id) clear();
+          if (editing?.id === id) setSheetOpen(false);
           await deleteLabel(id).catch(() => {});
         }}
         onCancel={() => setConfirming(null)}
@@ -173,5 +153,132 @@ export function Labels({
         })()}
       </Confirm>
     </div>
+  );
+}
+
+/**
+ * What a label is, asked in a sheet rather than in a panel above the list:
+ * naming one is a small piece of work with an end to it, and the list it
+ * belongs to stays where it was while you do it.
+ */
+function LabelSheet({
+  open, editing, onClose,
+}: {
+  open: boolean;
+  /** The label being changed, or null for one that doesn't exist yet. */
+  editing: Label | null;
+  onClose: () => void;
+}) {
+  const { labels, saveLabel } = useStore();
+  const [name, setName] = useState('');
+  const [color, setColor] = useState(SWATCHES[0]);
+  const [silent, setSilent] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  // How many labels the book has, held rather than watched: it is only the
+  // opening colour's business, and saving one changes it — a form that read
+  // it as it rendered would empty itself the moment it succeeded.
+  const made = useRef(labels.length);
+  useEffect(() => {
+    made.current = labels.length;
+  }, [labels.length]);
+
+  useEffect(() => {
+    if (!open) return;
+    setName(editing?.name ?? '');
+    // A new label comes up in a colour the book isn't already leaning on, so
+    // one made in a hurry still comes out distinct from the rest.
+    setColor(editing?.color ?? SWATCHES[made.current % SWATCHES.length]);
+    setSilent(editing?.silent ?? false);
+    setBusy(false);
+  }, [open, editing]);
+
+  const submit = async () => {
+    if (!name.trim() || busy) return;
+    setBusy(true);
+    try {
+      await saveLabel({ id: editing?.id ?? null, name: name.trim(), color, silent });
+      onClose();
+    } catch {
+      // The store has already said what went wrong; stay put so the name can
+      // be fixed rather than typed again.
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Sheet
+      open={open}
+      onClose={onClose}
+      title={editing ? 'Edit label' : 'New label'}
+      subtitle={
+        editing
+          ? 'Renaming keeps it on every posting it is pinned to'
+          : 'A pin you can put on any posting, and filter the ledger by'
+      }
+      width={430}
+      footer={
+        <>
+          <span />
+          <div className="foot-actions">
+            <Button tone="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
+            <Button
+              tone="primary"
+              icon={editing ? 'check' : 'plus'}
+              disabled={!name.trim() || busy}
+              onClick={submit}
+            >
+              {editing ? 'Save changes' : 'Add label'}
+            </Button>
+          </div>
+        </>
+      }
+    >
+      <div className="account-form">
+        <div className="label-preview">
+          <span className="tx-label" style={{ ['--tint' as any]: color }}>
+            {name.trim() || 'Label'}
+          </span>
+        </div>
+
+        <Field label="Name">
+          <TextInput
+            value={name}
+            placeholder="What should it say?"
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && submit()}
+          />
+        </Field>
+
+        <Field label="Colour">
+          <div className="label-swatches">
+            {SWATCHES.map((c) => (
+              <button
+                key={c}
+                type="button"
+                className={`label-swatch ${c === color ? 'is-on' : ''}`}
+                style={{ background: c }}
+                aria-label={`Colour ${c}`}
+                onClick={() => setColor(c)}
+              >
+                {c === color && <Icon name="check" size={12} strokeWidth={3} />}
+              </button>
+            ))}
+          </div>
+        </Field>
+
+        <Switch
+          on={silent}
+          onChange={setSilent}
+          size="lg"
+          label="Silent"
+          hint={
+            silent
+              ? 'In the pickers and the filters only — no chip on a row'
+              : 'Shows wherever the posting shows'
+          }
+        />
+      </div>
+    </Sheet>
   );
 }

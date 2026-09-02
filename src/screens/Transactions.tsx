@@ -686,6 +686,11 @@ export function Transactions({
                           active={labelIds.includes(label.id)}
                           onClick={() => setLabelIds((l) => toggle(l, label.id))}
                         >
+                          {/* A silent label is offered here and drawn nowhere
+                              else, so the glyph says which is which. */}
+                          {label.silent && (
+                            <Icon name="eye-off" size={10.5} strokeWidth={2.2} className="chip-quiet" />
+                          )}
                           {label.name}
                         </Chip>
                       ))}

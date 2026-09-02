@@ -5591,7 +5591,16 @@ kbd {
 
 /* ------------------------------------------------------------------ labels */
 
-.label-form { display: flex; flex-direction: column; gap: 12px; }
+/* What the label will look like on a row, shown while it is being named. A
+   silent one is drawn here all the same: this is the chip it would wear, and
+   seeing the colour is the whole point of picking one. */
+.label-preview { display: flex; align-items: center; min-height: 26px; }
+.label-preview .tx-label {
+  margin-left: 0;
+  padding: 3px 11px;
+  font-size: 12px;
+}
+
 .label-swatches { display: flex; flex-wrap: wrap; gap: 8px; }
 .label-swatch {
   display: grid;
@@ -5607,7 +5616,6 @@ kbd {
 }
 .label-swatch:hover { transform: scale(1.08); }
 .label-swatch.is-on { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px currentColor; }
-.label-form-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 .label-list { display: flex; flex-direction: column; }
 .label-row {
@@ -5636,7 +5644,28 @@ kbd {
   color: var(--ink-3);
 }
 .label-name:hover { color: var(--blue); }
+.label-name-line { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .label-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+/* What a silent label is told apart by. Grey rather than tinted: the colour
+   is the one thing a silent label never gets to spend, since it is drawn on
+   no row. */
+.label-silent {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1.5px 7px;
+  border-radius: var(--r-full);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink-3);
+  background: var(--surface-inset);
+}
+
+/* The same thing said in a chip, where the name is already there and only
+   the glyph is needed. */
+.chip-quiet { opacity: 0.6; margin-right: -2px; }
 
 /* Labels in the sheet's right column, under whatever it says about the
    money: pins, so they come after the filing rather than among it. */

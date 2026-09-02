@@ -145,6 +145,12 @@ renames, recolours and deletes them (deleting takes a label off every posting
 and touches nothing else); the transaction sheet pins them on any entry; the
 ledger filters by them. "Triage" is simply the one the importer uses.
 
+A label can also be **silent**, which is the same pin kept to itself: offered
+wherever you pin or filter, and drawn nowhere — no chip on the row, none on
+the template. It is for a question worth asking often and not worth reading a
+hundred times. Postings still carry their silent labels over the wire, because
+the sheet has to know what is pinned to let you unpin it.
+
 `scripts/seed_import_rules.py` can prime the rule memory from history: it
 pairs old statements against the book the same way the preview does and
 writes what it finds as *unconfirmed* rules — suggestions, still triaged,

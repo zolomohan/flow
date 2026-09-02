@@ -145,6 +145,10 @@ pub struct TxLabel {
     pub id: String,
     pub name: String,
     pub color: String,
+    /// A silent label is still pinned, and still worth filtering by; it just
+    /// doesn't show on the row. The pin comes back either way, because the
+    /// sheet has to know what is already on a posting to unpin it.
+    pub silent: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,6 +159,9 @@ pub struct Label {
     pub color: String,
     /// How many postings carry it right now.
     pub count: i64,
+    /// Whether it keeps to itself: a silent label is a way of asking a
+    /// question of the ledger, not a mark to be read off a row.
+    pub silent: bool,
 }
 
 /// One line of a split bill: part of the money, filed on its own.
@@ -254,6 +261,9 @@ pub struct LabelInput {
     pub id: Option<String>,
     pub name: String,
     pub color: String,
+    /// Left off, a label is one you can see. Silence is always asked for.
+    #[serde(default)]
+    pub silent: bool,
 }
 
 /* --------------------------------------------------------------- captures */

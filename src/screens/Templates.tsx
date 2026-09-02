@@ -92,7 +92,7 @@ export function Templates({
                     {template.name}
                     <em>
                       {describeTemplate(template)}
-                      {template.labels.map((label) => (
+                      {template.labels.filter((l) => !l.silent).map((label) => (
                         <span
                           key={label.id}
                           className="tx-label"

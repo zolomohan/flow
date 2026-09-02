@@ -182,7 +182,10 @@ export function TransactionRow({
                 {givenBack === 'all' ? 'Refunded' : `${money(tx.refunded)} back`}
               </span>
             )}
-            {tx.labels.map((label) => (
+            {/* Silent labels are pinned and filterable, and drawn nowhere:
+                they are a way of asking the ledger a question, not a mark to
+                be read off a row. */}
+            {tx.labels.filter((label) => !label.silent).map((label) => (
               <span
                 key={label.id}
                 className="tx-label"

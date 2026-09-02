@@ -281,10 +281,14 @@ pub(crate) fn migrate(conn: &Connection) -> Result<()> {
         -- Labels are pins, not files: a posting keeps its account and its
         -- category, and a label sits on top for as long as it is useful.
         -- \"Triage\" is the one the importer uses; others cost nothing.
+        -- A silent label is one you file by and never read: it is offered in
+        -- the filters and nowhere else, so a question you ask often costs the
+        -- ledger no ink.
         CREATE TABLE IF NOT EXISTS labels (
             id         TEXT PRIMARY KEY,
             name       TEXT NOT NULL UNIQUE,
             color      TEXT NOT NULL,
+            silent     INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL
         );
 
@@ -447,6 +451,9 @@ pub(crate) fn migrate(conn: &Connection) -> Result<()> {
     )
     .map_err(oops)?;
     add_column_if_missing(conn, "captures", "raw", "raw TEXT NOT NULL DEFAULT ''")?;
+    // Every label a book already has is one it shows: silence is asked for,
+    // never inherited, so the default is exactly right for all of them.
+    add_column_if_missing(conn, "labels", "silent", "silent INTEGER NOT NULL DEFAULT 0")?;
     add_column_if_missing(conn, "categories", "parent_id", "parent_id TEXT")?;
     // What a recurring deposit puts in each cycle. Zero on anything that is
     // not one, and on an RD nobody has told the book about yet.
@@ -1659,7 +1666,7 @@ pub(crate) fn attach_parts(conn: &Connection, rows: &mut [Transaction]) -> Resul
         .map_err(oops)?;
 
     let sql = format!(
-        "SELECT tl.transaction_id, l.id, l.name, l.color
+        "SELECT tl.transaction_id, l.id, l.name, l.color, l.silent
          FROM transaction_labels tl
          JOIN labels l ON l.id = tl.label_id
          WHERE tl.transaction_id IN ({ph})
@@ -1674,6 +1681,7 @@ pub(crate) fn attach_parts(conn: &Connection, rows: &mut [Transaction]) -> Resul
                     id: r.get(1)?,
                     name: r.get(2)?,
                     color: r.get(3)?,
+                    silent: r.get(4)?,
                 },
             ))
         })
@@ -2626,7 +2634,7 @@ fn hydrate_templates(conn: &Connection, rows: &mut [TxTemplate]) -> Result<()> {
     }
 
     let sql = format!(
-        "SELECT tl.template_id, l.id, l.name, l.color
+        "SELECT tl.template_id, l.id, l.name, l.color, l.silent
          FROM template_labels tl
          JOIN labels l ON l.id = tl.label_id
          WHERE tl.template_id IN ({ph})
@@ -2641,6 +2649,7 @@ fn hydrate_templates(conn: &Connection, rows: &mut [TxTemplate]) -> Result<()> {
                     id: r.get(1)?,
                     name: r.get(2)?,
                     color: r.get(3)?,
+                    silent: r.get(4)?,
                 },
             ))
         })
@@ -2871,7 +2880,8 @@ pub fn list_labels(conn: &Connection) -> Result<Vec<Label>> {
     let mut stmt = conn
         .prepare(
             "SELECT l.id, l.name, l.color,
-                    (SELECT COUNT(*) FROM transaction_labels tl WHERE tl.label_id = l.id)
+                    (SELECT COUNT(*) FROM transaction_labels tl WHERE tl.label_id = l.id),
+                    l.silent
              FROM labels l ORDER BY l.name",
         )
         .map_err(oops)?;
@@ -2882,6 +2892,7 @@ pub fn list_labels(conn: &Connection) -> Result<Vec<Label>> {
                 name: r.get(1)?,
                 color: r.get(2)?,
                 count: r.get(3)?,
+                silent: r.get(4)?,
             })
         })
         .map_err(oops)?
@@ -2905,8 +2916,8 @@ pub fn save_label(conn: &Connection, input: LabelInput) -> Result<Label> {
     let id = match input.id.filter(|i| !i.is_empty()) {
         Some(id) => {
             conn.execute(
-                "UPDATE labels SET name = ?2, color = ?3 WHERE id = ?1",
-                params![id, name, input.color],
+                "UPDATE labels SET name = ?2, color = ?3, silent = ?4 WHERE id = ?1",
+                params![id, name, input.color, input.silent],
             )
             .map_err(taken)?;
             id
@@ -2914,8 +2925,9 @@ pub fn save_label(conn: &Connection, input: LabelInput) -> Result<Label> {
         None => {
             let id = new_id();
             conn.execute(
-                "INSERT INTO labels (id, name, color, created_at) VALUES (?1, ?2, ?3, ?4)",
-                params![id, name, input.color, now()],
+                "INSERT INTO labels (id, name, color, silent, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![id, name, input.color, input.silent, now()],
             )
             .map_err(taken)?;
             id
@@ -2923,7 +2935,8 @@ pub fn save_label(conn: &Connection, input: LabelInput) -> Result<Label> {
     };
     conn.query_row(
         "SELECT l.id, l.name, l.color,
-                (SELECT COUNT(*) FROM transaction_labels tl WHERE tl.label_id = l.id)
+                (SELECT COUNT(*) FROM transaction_labels tl WHERE tl.label_id = l.id),
+                l.silent
          FROM labels l WHERE l.id = ?1",
         params![id],
         |r| {
@@ -2932,6 +2945,7 @@ pub fn save_label(conn: &Connection, input: LabelInput) -> Result<Label> {
                 name: r.get(1)?,
                 color: r.get(2)?,
                 count: r.get(3)?,
+                silent: r.get(4)?,
             })
         },
     )
@@ -8561,7 +8575,9 @@ mod tests {
     }
 
     /// A filing shaped by hand in the review teaches its rule at once, and
-    /// labels set through the ordinary save stick and can be taken off.
+    /// labels set through the ordinary save stick and can be taken off —
+    /// silent ones included, which travel with the posting so the sheet can
+    /// unpin what it cannot draw.
     #[test]
     fn hand_edits_learn_and_labels_stick() {
         let conn = book();
@@ -8581,7 +8597,12 @@ mod tests {
 
         let label = save_label(
             &conn,
-            LabelInput { id: None, name: "Trip".into(), color: "#118AE4".into() },
+            LabelInput {
+                id: None,
+                name: "Trip".into(),
+                color: "#118AE4".into(),
+                silent: false,
+            },
         )
         .unwrap();
         let tx = list_transactions(&conn, TransactionQuery::default())
@@ -8605,6 +8626,26 @@ mod tests {
         let saved = save_transaction(&conn, relabel(vec![label.id.clone()])).unwrap();
         assert_eq!(saved.labels.len(), 1);
         assert_eq!(saved.labels[0].name, "Trip");
+        assert!(!saved.labels[0].silent);
+
+        // Silence is a property of the label, and it reaches the posting: the
+        // pin still comes back, saying it is not to be drawn. Making one quiet
+        // after the fact quiets it everywhere it is already pinned.
+        let quiet = save_label(
+            &conn,
+            LabelInput {
+                id: Some(label.id.clone()),
+                name: "Trip".into(),
+                color: "#118AE4".into(),
+                silent: true,
+            },
+        )
+        .unwrap();
+        assert!(quiet.silent && quiet.count == 1);
+        assert!(list_labels(&conn).unwrap().iter().any(|l| l.name == "Trip" && l.silent));
+        let listed = list_transactions(&conn, TransactionQuery::default()).unwrap();
+        assert!(listed[0].labels[0].silent);
+
         let saved = save_transaction(&conn, relabel(vec![])).unwrap();
         assert!(saved.labels.is_empty());
 
