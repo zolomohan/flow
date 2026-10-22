@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Merged into the generated Info.plist at build time. It lives here
+	     rather than in gen/apple, which `tauri ios init` rewrites. -->
+
+	<key>CFBundleDisplayName</key>
+	<string>flow</string>
+
+	<!-- The two keys that make the app's own Documents directory a real
+	     folder in Files, under "On My iPhone > flow". That folder is where
+	     `capture.rs` looks for the drop on iOS, and a Shortcut's Save File
+	     can only be pointed at somewhere that appears in the picker. -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+
+	<!-- The book is the point of the app; a phone backup that skipped it
+	     would restore an empty one. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+</dict>
+</plist>

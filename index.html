@@ -2,11 +2,93 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/midas.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Midas</title>
+    <link rel="icon" type="image/svg+xml" href="/flow.svg" />
+    <!-- `viewport-fit=cover` puts the page under the notch and the home
+         indicator rather than beside them, which is what makes the safe-area
+         insets non-zero and gives the shell something to pad with.
+         `maximum-scale=1` is not a preference: iOS zooms the whole page when
+         a field under 16px takes focus, and there is no way back out of that
+         zoom in an app that has no address bar. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover"
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="format-detection" content="telephone=no" />
+    <title>flow</title>
+
+    <!-- The splash is inlined so it paints on the first frame, before the
+         bundle has even been fetched. #20294C matches the window's own
+         backgroundColor, so there is no white flash ahead of it. -->
+    <style>
+      @font-face {
+        font-family: 'Caveat';
+        src: url('/fonts/Caveat-700.woff2') format('woff2');
+        font-weight: 700;
+        font-display: block;
+      }
+
+      html, body { height: 100%; }
+      body { margin: 0; background: #20294c; }
+
+      #splash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: grid;
+        place-items: center;
+        background: #20294c;
+        transition: opacity 420ms cubic-bezier(0.4, 0, 0.2, 1);
+      }
+
+      .splash-mark {
+        font-family: 'Caveat', ui-rounded, cursive;
+        font-weight: 700;
+        font-size: 84px;
+        line-height: 1.3;
+        padding: 0 0.14em;
+        color: #f0f1f5;
+
+        /* The wordmark is laid down left to right, the way it would be
+           written. A soft-edged mask sweeping across reads as ink arriving;
+           a hard edge would read as a cursor, which a script face fights. */
+        -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 50%, rgba(0, 0, 0, 0) 58%, rgba(0, 0, 0, 0) 100%);
+        mask-image: linear-gradient(90deg, #000 0%, #000 50%, rgba(0, 0, 0, 0) 58%, rgba(0, 0, 0, 0) 100%);
+        -webkit-mask-size: 220% 100%;
+        mask-size: 220% 100%;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: 0% 0;
+        mask-position: 0% 0;
+
+        animation: splash-write 1150ms cubic-bezier(0.32, 0, 0.24, 1) 140ms both;
+        transition: opacity 300ms cubic-bezier(0.4, 0, 0.2, 1),
+                    transform 420ms cubic-bezier(0.4, 0, 0.2, 1);
+      }
+
+      @keyframes splash-write {
+        from { -webkit-mask-position: 100% 0; mask-position: 100% 0; }
+        to   { -webkit-mask-position: 0% 0;   mask-position: 0% 0; }
+      }
+
+      /* Leaving: the mark lifts away and the ground goes with it. Dropping the
+         animation hands the element back to its transition — the keyframes end
+         on the base values, so nothing jumps at the handover. */
+      #splash.is-gone { opacity: 0; pointer-events: none; }
+      #splash.is-gone .splash-mark {
+        animation: none;
+        transform: translateY(-10px) scale(1.04);
+        opacity: 0;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .splash-mark { animation: none; }
+        #splash.is-gone .splash-mark { transform: none; }
+      }
+    </style>
   </head>
   <body>
+    <div id="splash"><span class="splash-mark">flow</span></div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
