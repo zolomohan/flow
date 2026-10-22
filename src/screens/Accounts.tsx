@@ -66,14 +66,11 @@ export function Accounts({
       </header>
 
       {live.length === 0 ? (
-        <Card>
-          <Empty
-            icon="wallet-cards"
-            title="No accounts yet"
-            body="Add the places your money sits — a bank, a card, a wallet, a fund."
-            action={<Button tone="primary" icon="plus" onClick={onAddAccount}>New account</Button>}
-          />
-        </Card>
+        <Empty
+          screen
+          title="No accounts yet"
+          body="A bank, a card, a wallet, a fund: wherever your money sits."
+        />
       ) : (
         grouped.map((group) => (
           <section key={group.kind} className="account-group">

@@ -86,7 +86,7 @@ export function describeTemplate(template: TxTemplate) {
   ]
     .filter(Boolean)
     .join(' · ');
-  if (!line) return 'Blank — fill it in as you go';
+  if (!line) return 'Blank, fill it in as you go';
   const asks = asksFor(template);
   return asks.length ? `${line} · asks for ${spoken(asks)}` : line;
 }

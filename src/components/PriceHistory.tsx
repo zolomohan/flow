@@ -29,7 +29,7 @@ const RANGES: SegmentOption<Range>[] = (Object.keys(DAYS) as Range[]).map((value
  */
 export function PriceHistory({
   title, hint, tint, load, kind = 'price', reference, referenceLabel, footnote, filter,
-  reloadOn, initialRange = '1Y',
+  reloadOn, initialRange = '1Y', ranges = true,
 }: {
   title: string;
   hint?: string;
@@ -48,6 +48,12 @@ export function PriceHistory({
   /** Anything else that changes what `load` returns — a purity, say. */
   reloadOn?: string | number;
   initialRange?: Range;
+  /**
+   * Whether the window is the reader's to choose. Off where the line covers
+   * a period that is already settled — a holding you have sold out of has
+   * one window worth drawing, and offering "1M" of it would offer nothing.
+   */
+  ranges?: boolean;
 }) {
   const { revision } = useStore();
   const [range, setRange] = useState<Range>(initialRange);
@@ -60,7 +66,7 @@ export function PriceHistory({
 
   useEffect(() => {
     let live = true;
-    load(DAYS[range])
+    load(ranges ? DAYS[range] : null)
       .then((series) => live && setPoints(series))
       .catch(() => live && setPoints([]));
     return () => {
@@ -94,13 +100,15 @@ export function PriceHistory({
         action={
           <span className="price-head-tools">
             {filter}
-            <Segmented
-              options={RANGES}
-              value={range}
-              onChange={setRange}
-              size="sm"
-              name={`range-${title}`}
-            />
+            {ranges && (
+              <Segmented
+                options={RANGES}
+                value={range}
+                onChange={setRange}
+                size="sm"
+                name={`range-${title}`}
+              />
+            )}
           </span>
         }
       />

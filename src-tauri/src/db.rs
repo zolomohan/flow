@@ -201,6 +201,23 @@ pub(crate) fn migrate(conn: &Connection) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_debt_payments ON debt_payments(debt_id);
 
+        -- More handed over against a debt already open: a second loan to the
+        -- same friend, a top-up on what was borrowed. The debt's own principal
+        -- stays what it opened at, and what it stands at is that plus these —
+        -- each one kept, with its day and its posting, the way a repayment is.
+        CREATE TABLE IF NOT EXISTS debt_additions (
+            id               TEXT PRIMARY KEY,
+            debt_id          TEXT NOT NULL REFERENCES debts(id) ON DELETE CASCADE,
+            amount           INTEGER NOT NULL CHECK (amount > 0),
+            occurred_at      TEXT NOT NULL,
+            note             TEXT,
+            transaction_id   TEXT REFERENCES transactions(id) ON DELETE SET NULL,
+            owns_transaction INTEGER NOT NULL DEFAULT 0,
+            created_at       TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_debt_additions ON debt_additions(debt_id);
+
         CREATE TABLE IF NOT EXISTS holdings (
             id          TEXT PRIMARY KEY,
             -- gold and funds are worth what the market says; a deposit is
@@ -272,6 +289,31 @@ pub(crate) fn migrate(conn: &Connection) -> Result<()> {
             transaction_id TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
             PRIMARY KEY (debt_id, transaction_id)
         ) WITHOUT ROWID;
+
+        -- What a card's terms were, and from when. A limit that has been
+        -- raised, a statement day that moved, a due day the bank shifted —
+        -- every one of them makes an old cycle read wrong if the card is
+        -- taken to have always been as it is now: 60% of the limit in 2024
+        -- was a card at its edge, and against today's limit it looks
+        -- comfortable. The account carries the terms as they stand today;
+        -- this carries the days they changed on.
+        --
+        -- A column left null is a term that change said nothing about, and
+        -- it carries forward from whatever came before it.
+        CREATE TABLE IF NOT EXISTS card_terms (
+            id            TEXT PRIMARY KEY,
+            account_id    TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            -- The plain day these terms began, and stood until the next.
+            effective_on  TEXT NOT NULL,
+            credit_limit  INTEGER,
+            statement_day INTEGER,
+            due_day       INTEGER,
+            note          TEXT,
+            created_at    TEXT NOT NULL,
+            UNIQUE (account_id, effective_on)
+        );
+        CREATE INDEX IF NOT EXISTS idx_card_terms
+            ON card_terms(account_id, effective_on);
 
         CREATE TABLE IF NOT EXISTS settings (
             key   TEXT PRIMARY KEY,
@@ -473,6 +515,7 @@ pub(crate) fn migrate(conn: &Connection) -> Result<()> {
         ",
     )
     .map_err(oops)?;
+    carry_limits_into_terms(conn)?;
     add_column_if_missing(conn, "captures", "raw", "raw TEXT NOT NULL DEFAULT ''")?;
     // Every label a book already has is one it shows: silence is asked for,
     // never inherited, so the default is exactly right for all of them.
@@ -654,6 +697,30 @@ fn settle_debt_hand_offs(conn: &Connection) -> Result<()> {
 
 /// SQLite has no `ADD COLUMN IF NOT EXISTS`, so check the table first. Books
 /// created before category nesting existed pick the column up on next launch.
+/// The limit history came before the cycle days did, in a table of its own.
+/// Everything it holds is a card term like any other, so it moves across and
+/// the narrower table goes.
+fn carry_limits_into_terms(conn: &Connection) -> Result<()> {
+    let had: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'credit_limits'",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(oops)?;
+    if had == 0 {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "INSERT OR IGNORE INTO card_terms
+             (id, account_id, effective_on, credit_limit, statement_day, due_day, note, created_at)
+         SELECT id, account_id, effective_on, amount, NULL, NULL, note, created_at
+         FROM credit_limits;
+         DROP TABLE credit_limits;",
+    )
+    .map_err(oops)
+}
+
 fn add_column_if_missing(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<()> {
     let mut stmt = conn
         .prepare(&format!("PRAGMA table_info({table})"))
@@ -1099,14 +1166,6 @@ fn get_account(conn: &Connection, id: &str) -> Result<Account> {
 /// A day of the month a cycle can actually land on, or nothing. Only a card
 /// has one, and 1–31 is the whole of what a day of the month can be — which
 /// month it falls in is the caller's business, not the column's.
-fn cycle_day(kind: &str, day: i64) -> i64 {
-    if kind == "credit" && (1..=31).contains(&day) {
-        day
-    } else {
-        0
-    }
-}
-
 /// The book's own account is not yours to change: every debt runs through it,
 /// and a rename, an archive or a delete would take the other side out from
 /// under every hand-off in the ledger.
@@ -1124,9 +1183,16 @@ pub fn save_account(conn: &Connection, input: AccountInput) -> Result<Account> {
         Some(id) => {
             refuse_the_books_own(conn, &id)?;
             conn.execute(
+                // A card's terms are not this form's to write: the limit and
+                // both cycle days follow the changes recorded against it, so
+                // saving the account leaves them exactly as they were. An
+                // account that stops being a card keeps none of them, since
+                // nothing would ever read them again.
                 "UPDATE accounts SET name = ?2, kind = ?3, institution = ?4,
-                        opening_balance = ?5, color = ?6, icon = ?7, credit_limit = ?8,
-                        statement_day = ?9, due_day = ?10
+                        opening_balance = ?5, color = ?6, icon = ?7,
+                        credit_limit   = CASE WHEN ?3 = 'credit' THEN credit_limit ELSE 0 END,
+                        statement_day  = CASE WHEN ?3 = 'credit' THEN statement_day ELSE 0 END,
+                        due_day        = CASE WHEN ?3 = 'credit' THEN due_day ELSE 0 END
                  WHERE id = ?1",
                 params![
                     id,
@@ -1136,10 +1202,6 @@ pub fn save_account(conn: &Connection, input: AccountInput) -> Result<Account> {
                     input.opening_balance,
                     input.color,
                     input.icon,
-                    // A limit only means anything on a card, and so does a cycle.
-                    if input.kind == "credit" { input.credit_limit } else { 0 },
-                    cycle_day(&input.kind, input.statement_day),
-                    cycle_day(&input.kind, input.due_day)
                 ],
             )
             .map_err(oops)?;
@@ -1158,7 +1220,10 @@ pub fn save_account(conn: &Connection, input: AccountInput) -> Result<Account> {
                 "INSERT INTO accounts (id, name, kind, institution, opening_balance, color, icon,
                                        archived, sort_order, created_at, credit_limit,
                                        statement_day, due_day)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?10, ?11, ?12)",
+                 -- A new card is on no terms at all until a change is
+                 -- recorded against it, which is where every one of them
+                 -- comes from.
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, 0, 0, 0)",
                 params![
                     id,
                     input.name,
@@ -1169,9 +1234,6 @@ pub fn save_account(conn: &Connection, input: AccountInput) -> Result<Account> {
                     input.icon,
                     next,
                     now(),
-                    if input.kind == "credit" { input.credit_limit } else { 0 },
-                    cycle_day(&input.kind, input.statement_day),
-                    cycle_day(&input.kind, input.due_day)
                 ],
             )
             .map_err(oops)?;
@@ -1612,6 +1674,7 @@ pub(crate) fn tx_from_row(r: &Row) -> rusqlite::Result<Transaction> {
         splits: Vec::new(),
         shares: Vec::new(),
         labels: Vec::new(),
+        folders: Vec::new(),
     })
 }
 
@@ -1668,6 +1731,9 @@ pub(crate) fn attach_parts(conn: &Connection, rows: &mut [Transaction]) -> Resul
             let amount: Paise = r.get(4)?;
             let paid: Paise = r.get(8)?;
             let settled_at: Option<String> = r.get(7)?;
+            // The bill's part of the debt, and only that. Anything lent on top
+            // since is the debt's to show, not the bill's — and what comes
+            // back pays off the oldest money first, which is this.
             let outstanding = (amount - paid).max(0);
             Ok((
                 r.get::<_, String>(0)?,
@@ -1712,7 +1778,31 @@ pub(crate) fn attach_parts(conn: &Connection, rows: &mut [Transaction]) -> Resul
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(oops)?;
 
-    if splits.is_empty() && shares.is_empty() && labels.is_empty() {
+    let sql = format!(
+        "SELECT ft.transaction_id, f.id, f.name, f.color, f.icon
+         FROM folder_transactions ft
+         JOIN folders f ON f.id = ft.folder_id
+         WHERE ft.transaction_id IN ({ph})
+         ORDER BY f.name"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(oops)?;
+    let in_folders = stmt
+        .query_map(params_from_iter(ids.iter()), |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                TxFolder {
+                    id: r.get(1)?,
+                    name: r.get(2)?,
+                    color: r.get(3)?,
+                    icon: r.get(4)?,
+                },
+            ))
+        })
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?;
+
+    if splits.is_empty() && shares.is_empty() && labels.is_empty() && in_folders.is_empty() {
         return Ok(());
     }
     let at: HashMap<String, usize> = rows
@@ -1733,6 +1823,11 @@ pub(crate) fn attach_parts(conn: &Connection, rows: &mut [Transaction]) -> Resul
     for (tx_id, label) in labels {
         if let Some(&i) = at.get(&tx_id) {
             rows[i].labels.push(label);
+        }
+    }
+    for (tx_id, folder) in in_folders {
+        if let Some(&i) = at.get(&tx_id) {
+            rows[i].folders.push(folder);
         }
     }
     Ok(())
@@ -3422,6 +3517,48 @@ pub fn commit_import(
     })
 }
 
+/// Pins a label on a run of postings, or takes it off them.
+///
+/// Answers with how many postings actually changed — a label already pinned
+/// is not an edit, and saying "12 changed" when nine of them already wore it
+/// would be a count of what was selected rather than of what was done.
+pub fn label_transactions(
+    conn: &Connection,
+    ids: &[String],
+    label_id: &str,
+    on: bool,
+) -> Result<i64> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let guard = conn.unchecked_transaction().map_err(oops)?;
+    let holes = vec!["?"; ids.len()].join(",");
+    let mut args: Vec<&dyn rusqlite::ToSql> = vec![&label_id];
+    for id in ids {
+        args.push(id);
+    }
+    let changed = if on {
+        conn.execute(
+            &format!(
+                "INSERT OR IGNORE INTO transaction_labels (transaction_id, label_id)
+                 SELECT t.id, ?1 FROM transactions t WHERE t.id IN ({holes})"
+            ),
+            params_from_iter(args),
+        )
+    } else {
+        conn.execute(
+            &format!(
+                "DELETE FROM transaction_labels
+                 WHERE label_id = ?1 AND transaction_id IN ({holes})"
+            ),
+            params_from_iter(args),
+        )
+    }
+    .map_err(oops)?;
+    guard.commit().map_err(oops)?;
+    Ok(changed as i64)
+}
+
 /// A person has looked at these postings and said they are filed right. The
 /// Triage label comes off, and how each one is filed is written down against
 /// its counterparty — which is what makes the next import of them arrive
@@ -3515,22 +3652,26 @@ pub fn list_debts(conn: &Connection) -> Result<Vec<Debt>> {
                 d.note, d.settled_at, d.created_at, d.transaction_id,
                 {TX_LABEL} d.transaction_id),
                 COALESCE((SELECT SUM(p.amount) FROM debt_payments p WHERE p.debt_id = d.id), 0),
-                d.from_split
+                d.from_split,
+                COALESCE((SELECT SUM(a.amount) FROM debt_additions a WHERE a.debt_id = d.id), 0)
          FROM debts d
          ORDER BY d.settled_at IS NOT NULL, d.opened_on DESC, d.created_at DESC"
     );
     let mut stmt = conn.prepare(&sql).map_err(oops)?;
     let mut debts = stmt
         .query_map([], |r| {
-            let principal: Paise = r.get(3)?;
+            let opening: Paise = r.get(3)?;
             let paid: Paise = r.get(11)?;
+            let added: Paise = r.get(13)?;
             let settled_at: Option<String> = r.get(7)?;
+            let principal = opening + added;
             let outstanding = (principal - paid).max(0);
             Ok(Debt {
                 id: r.get(0)?,
                 direction: r.get(1)?,
                 counterparty: r.get(2)?,
                 principal,
+                opening,
                 opened_on: r.get(4)?,
                 due_on: r.get(5)?,
                 note: r.get(6)?,
@@ -3541,14 +3682,51 @@ pub fn list_debts(conn: &Connection) -> Result<Vec<Debt>> {
                 transaction_label: r.get(10)?,
                 from_split: r.get::<_, i64>(12)? != 0,
                 paid,
+                added,
                 outstanding,
                 payments: Vec::new(),
+                additions: Vec::new(),
             })
         })
         .map_err(oops)?
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(oops)?;
 
+    for payment in debt_movements(conn, Movement::Repayment)? {
+        if let Some(debt) = debts.iter_mut().find(|d| d.id == payment.debt_id) {
+            debt.payments.push(payment);
+        }
+    }
+    for addition in debt_movements(conn, Movement::Addition)? {
+        if let Some(debt) = debts.iter_mut().find(|d| d.id == addition.debt_id) {
+            debt.additions.push(addition);
+        }
+    }
+    Ok(debts)
+}
+
+/// Money that moved against a debt after it opened: some of it coming back,
+/// or more of it handed over. The two are kept apart, in tables of their own,
+/// so that nothing summing one can ever count the other by mistake — but they
+/// are the same shape and are written the same way, differing only in which
+/// way the money went.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Movement {
+    Repayment,
+    Addition,
+}
+
+impl Movement {
+    fn table(self) -> &'static str {
+        match self {
+            Movement::Repayment => "debt_payments",
+            Movement::Addition => "debt_additions",
+        }
+    }
+}
+
+/// Every repayment, or every addition, across the book, newest first.
+fn debt_movements(conn: &Connection, movement: Movement) -> Result<Vec<DebtPayment>> {
     let sql = format!(
         "SELECT p.id, p.debt_id, p.amount, p.occurred_at, p.note, p.transaction_id,
                 {TX_LABEL} p.transaction_id), p.created_at,
@@ -3559,11 +3737,12 @@ pub fn list_debts(conn: &Connection) -> Result<Vec<Debt>> {
                                 ELSE t.account_id END
                     FROM transactions t JOIN accounts fa ON fa.id = t.account_id
                     WHERE t.id = p.transaction_id) END
-         FROM debt_payments p ORDER BY p.occurred_at DESC",
-        DEBT = DEBT_ACCOUNT
+         FROM {table} p ORDER BY p.occurred_at DESC",
+        DEBT = DEBT_ACCOUNT,
+        table = movement.table(),
     );
     let mut stmt = conn.prepare(&sql).map_err(oops)?;
-    let payments = stmt
+    let rows = stmt
         .query_map([], |r| {
             Ok(DebtPayment {
                 id: r.get(0)?,
@@ -3580,13 +3759,7 @@ pub fn list_debts(conn: &Connection) -> Result<Vec<Debt>> {
         .map_err(oops)?
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(oops)?;
-
-    for payment in payments {
-        if let Some(debt) = debts.iter_mut().find(|d| d.id == payment.debt_id) {
-            debt.payments.push(payment);
-        }
-    }
-    Ok(debts)
+    Ok(rows)
 }
 
 pub fn save_debt(conn: &Connection, input: DebtInput) -> Result<()> {
@@ -3655,7 +3828,8 @@ pub fn save_debt(conn: &Connection, input: DebtInput) -> Result<()> {
 }
 
 /// Everything the ledger holds for one debt: the posting that opened it, the
-/// postings that repaid it, and whatever else was filed against it. Ordered
+/// postings that added to it and repaid it, and whatever else was filed
+/// against it. Ordered
 /// as the ledger is, newest first.
 pub fn debt_entries(conn: &Connection, debt_id: &str) -> Result<Vec<Transaction>> {
     let mut stmt = conn
@@ -3666,6 +3840,9 @@ pub fn debt_entries(conn: &Connection, debt_id: &str) -> Result<Vec<Transaction>
               WHERE id = ?1 AND transaction_id IS NOT NULL
              UNION
              SELECT transaction_id FROM debt_payments
+              WHERE debt_id = ?1 AND transaction_id IS NOT NULL
+             UNION
+             SELECT transaction_id FROM debt_additions
               WHERE debt_id = ?1 AND transaction_id IS NOT NULL",
         )
         .map_err(oops)?;
@@ -3776,16 +3953,32 @@ const DEBT_ACCOUNT_WAS: &str = "Lent & borrowed";
 const DEBT_ACCOUNT_KEY: &str = "debt_account";
 
 pub fn save_debt_payment(conn: &Connection, input: DebtPaymentInput) -> Result<()> {
+    save_debt_movement(conn, Movement::Repayment, input)
+}
+
+/// More handed over against a debt already open. Written exactly as a
+/// repayment is, with the money going the other way: out to them again when
+/// you lent, in from them again when you borrowed.
+pub fn save_debt_addition(conn: &Connection, input: DebtAdditionInput) -> Result<()> {
+    save_debt_movement(conn, Movement::Addition, input)
+}
+
+fn save_debt_movement(conn: &Connection, movement: Movement, input: DebtPaymentInput) -> Result<()> {
     if input.amount <= 0 {
-        return Err("A repayment needs an amount greater than zero.".into());
+        return Err(match movement {
+            Movement::Repayment => "A repayment needs an amount greater than zero.",
+            Movement::Addition => "Adding to a debt needs an amount greater than zero.",
+        }
+        .into());
     }
+    let table = movement.table();
     let guard = conn.unchecked_transaction().map_err(oops)?;
 
-    // What this repayment already names, and whether it wrote it.
+    // What this entry already names, and whether it wrote it.
     let (had_tx, had_own): (Option<String>, bool) = match input.id.as_deref() {
         Some(id) => conn
             .query_row(
-                "SELECT transaction_id, owns_transaction FROM debt_payments WHERE id = ?1",
+                &format!("SELECT transaction_id, owns_transaction FROM {table} WHERE id = ?1"),
                 params![id],
                 |r| Ok((r.get(0)?, r.get::<_, i64>(1)? != 0)),
             )
@@ -3814,9 +4007,9 @@ pub fn save_debt_payment(conn: &Connection, input: DebtPaymentInput) -> Result<(
             (Some(tx_id.to_string()), false)
         }
 
-        // Writing the posting ourselves: money coming back lands in the
-        // chosen account, money going out leaves it, and the other end is
-        // the account that stands for what is out with people.
+        // Writing the posting ourselves: money coming in lands in the chosen
+        // account, money going out leaves it, and the other end is the
+        // account that stands for what is out with people.
         (Some(cash_id), None) => {
             let direction: String = conn
                 .query_row(
@@ -3833,10 +4026,14 @@ pub fn save_debt_payment(conn: &Connection, input: DebtPaymentInput) -> Result<(
                     "Pick the account the money actually moved through — {DEBT_ACCOUNT} is the other side of it."
                 ));
             }
-            let (from, to) = if direction == "lent" {
-                (holding, cash_id.to_string())
-            } else {
+            // Out of your account when you are lending more or paying back
+            // what you borrowed; into it when they are paying you back or
+            // lending you more.
+            let leaving = (direction == "lent") == (movement == Movement::Addition);
+            let (from, to) = if leaving {
                 (cash_id.to_string(), holding)
+            } else {
+                (holding, cash_id.to_string())
             };
             let counterparty: String = conn
                 .query_row(
@@ -3845,8 +4042,8 @@ pub fn save_debt_payment(conn: &Connection, input: DebtPaymentInput) -> Result<(
                     |r| r.get(0),
                 )
                 .map_err(oops)?;
-            // Only a posting this repayment wrote may be rewritten; a linked
-            // one is the user's record and is left exactly as entered.
+            // Only a posting this entry wrote may be rewritten; a linked one
+            // is the user's record and is left exactly as entered.
             let reuse = if had_own { had_tx.clone() } else { None };
             let tx = save_transaction(
                 conn,
@@ -3878,9 +4075,11 @@ pub fn save_debt_payment(conn: &Connection, input: DebtPaymentInput) -> Result<(
 
     match input.id {
         Some(id) => conn.execute(
-            "UPDATE debt_payments SET amount = ?2, occurred_at = ?3, note = ?4,
-                    transaction_id = ?5, owns_transaction = ?6
-             WHERE id = ?1",
+            &format!(
+                "UPDATE {table} SET amount = ?2, occurred_at = ?3, note = ?4,
+                        transaction_id = ?5, owns_transaction = ?6
+                 WHERE id = ?1"
+            ),
             params![
                 id,
                 input.amount,
@@ -3891,9 +4090,11 @@ pub fn save_debt_payment(conn: &Connection, input: DebtPaymentInput) -> Result<(
             ],
         ),
         None => conn.execute(
-            "INSERT INTO debt_payments (id, debt_id, amount, occurred_at, note,
-                                        transaction_id, owns_transaction, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            &format!(
+                "INSERT INTO {table} (id, debt_id, amount, occurred_at, note,
+                                      transaction_id, owns_transaction, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
+            ),
             params![
                 new_id(),
                 input.debt_id,
@@ -3914,18 +4115,30 @@ pub fn save_debt_payment(conn: &Connection, input: DebtPaymentInput) -> Result<(
 /// The repayment goes, and the posting it wrote goes with it. One you linked
 /// is your own record and stays.
 pub fn delete_debt_payment(conn: &Connection, id: &str) -> Result<()> {
+    delete_debt_movement(conn, Movement::Repayment, id)
+}
+
+/// The addition comes off the debt, on the same terms a repayment does.
+pub fn delete_debt_addition(conn: &Connection, id: &str) -> Result<()> {
+    delete_debt_movement(conn, Movement::Addition, id)
+}
+
+fn delete_debt_movement(conn: &Connection, movement: Movement, id: &str) -> Result<()> {
+    let table = movement.table();
     let guard = conn.unchecked_transaction().map_err(oops)?;
     let owned: Option<String> = conn
         .query_row(
-            "SELECT transaction_id FROM debt_payments
-             WHERE id = ?1 AND owns_transaction = 1",
+            &format!(
+                "SELECT transaction_id FROM {table}
+                 WHERE id = ?1 AND owns_transaction = 1"
+            ),
             params![id],
             |r| r.get(0),
         )
         .optional()
         .map_err(oops)?
         .flatten();
-    conn.execute("DELETE FROM debt_payments WHERE id = ?1", params![id])
+    conn.execute(&format!("DELETE FROM {table} WHERE id = ?1"), params![id])
         .map_err(oops)?;
     if let Some(tx) = owned {
         delete_transaction(conn, &tx)?;
@@ -3940,6 +4153,8 @@ fn debt_positions(conn: &Connection) -> Result<(Paise, Paise)> {
         .prepare(
             "SELECT d.direction,
                     COALESCE(SUM(MAX(0, d.principal
+                      + COALESCE((SELECT SUM(a.amount) FROM debt_additions a
+                                  WHERE a.debt_id = d.id), 0)
                       - COALESCE((SELECT SUM(p.amount) FROM debt_payments p
                                   WHERE p.debt_id = d.id), 0))), 0)
              FROM debts d WHERE d.settled_at IS NULL GROUP BY d.direction",
@@ -6165,7 +6380,7 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
 
 /// Every table the book is made of, in an order that can be emptied and
 /// refilled with the foreign keys looking on.
-const TABLES: [&str; 17] = [
+const TABLES: [&str; 18] = [
     "settings",
     "price_history",
     "price_cache",
@@ -6175,6 +6390,7 @@ const TABLES: [&str; 17] = [
     "template_splits",
     "transaction_templates",
     "debt_entries",
+    "debt_additions",
     "debt_payments",
     "debts",
     "investment_lots",
@@ -6259,7 +6475,7 @@ pub fn reset(conn: &Connection) -> Result<()> {
         // and keeping it means an offline relaunch can still value holdings.
         "DELETE FROM plan_entries; DELETE FROM plans;
          DELETE FROM investment_lots; DELETE FROM holdings;
-         DELETE FROM debt_payments; DELETE FROM debts;
+         DELETE FROM debt_additions; DELETE FROM debt_payments; DELETE FROM debts;
          DELETE FROM template_splits; DELETE FROM template_labels;
          DELETE FROM transaction_templates;
          DELETE FROM folder_transactions; DELETE FROM folders;
@@ -6340,9 +6556,6 @@ mod tests {
                 opening_balance: opening,
                 color: "#000000".into(),
                 icon: "wallet".into(),
-                credit_limit: 0,
-                statement_day: 0,
-                due_day: 0,
             },
         )
         .unwrap()
@@ -8861,6 +9074,132 @@ mod tests {
         delete_debt_payment(&conn, &payment.id).unwrap();
         assert!(get_transaction(&conn, &tx.id).is_err());
         assert_eq!(net_worth(&conn), before);
+    }
+
+    /// Lending more to somebody who already owes you raises what they owe by
+    /// that much, posts the money out of the account it left, and leaves the
+    /// figure the debt opened at alone — the form for editing the debt still
+    /// changes that, and only that.
+    #[test]
+    fn more_can_be_added_to_an_open_debt() {
+        let conn = book();
+        let bank = account(&conn, "Bank", "bank", 500_000);
+        save_debt(
+            &conn,
+            DebtInput {
+                id: None,
+                direction: "lent".into(),
+                counterparty: "Asha".into(),
+                principal: 100_000,
+                opened_on: "2026-08-01".into(),
+                due_on: None,
+                note: None,
+                transaction_id: None,
+                settled: None,
+            },
+        )
+        .unwrap();
+        let debt_id = list_debts(&conn).unwrap()[0].id.clone();
+        let before = net_worth(&conn);
+
+        save_debt_addition(
+            &conn,
+            DebtAdditionInput {
+                id: None,
+                debt_id: debt_id.clone(),
+                amount: 50_000,
+                occurred_at: "2026-09-02".into(),
+                note: Some("for the deposit".into()),
+                transaction_id: None,
+                cash_account_id: Some(bank.clone()),
+            },
+        )
+        .unwrap();
+
+        let debt = &list_debts(&conn).unwrap()[0];
+        assert_eq!(debt.opening, 100_000);
+        assert_eq!(debt.added, 50_000);
+        assert_eq!(debt.principal, 150_000);
+        assert_eq!(debt.outstanding, 150_000);
+        assert_eq!(debt.paid, 0);
+        assert!(debt.payments.is_empty());
+        let addition = &debt.additions[0];
+        assert_eq!(addition.cash_account_id.as_deref(), Some(bank.as_str()));
+
+        // Out of the bank and into what is out with people: the bank is
+        // lower, she owes that much more, and the total has not moved.
+        let tx = get_transaction(&conn, addition.transaction_id.as_deref().unwrap()).unwrap();
+        assert_eq!(tx.kind, "transfer");
+        assert_eq!(tx.account_id, bank);
+        assert_eq!(tx.to_account_name.as_deref(), Some(DEBT_ACCOUNT));
+        assert_eq!(net_worth(&conn), before);
+        assert!(debt_entries(&conn, &debt_id).unwrap().iter().any(|t| t.id == tx.id));
+
+        // Paying back the whole of it, the addition included, settles it.
+        save_debt_payment(
+            &conn,
+            DebtPaymentInput {
+                id: None,
+                debt_id: debt_id.clone(),
+                amount: 150_000,
+                occurred_at: "2026-10-01".into(),
+                note: None,
+                transaction_id: None,
+                cash_account_id: None,
+            },
+        )
+        .unwrap();
+        assert!(list_debts(&conn).unwrap()[0].settled);
+
+        // Taking the addition off again takes its posting with it, and what
+        // was repaid now more than covers what is owed.
+        delete_debt_addition(&conn, &addition.id).unwrap();
+        assert!(get_transaction(&conn, &tx.id).is_err());
+        let debt = &list_debts(&conn).unwrap()[0];
+        assert_eq!(debt.principal, 100_000);
+        assert_eq!(debt.outstanding, 0);
+    }
+
+    /// Borrowing more runs the other way: the money lands in your account,
+    /// and what you owe rises with it.
+    #[test]
+    fn borrowing_more_brings_the_money_in() {
+        let conn = book();
+        let bank = account(&conn, "Bank", "bank", 0);
+        save_debt(
+            &conn,
+            DebtInput {
+                id: None,
+                direction: "borrowed".into(),
+                counterparty: "Ravi".into(),
+                principal: 20_000,
+                opened_on: "2026-08-01".into(),
+                due_on: None,
+                note: None,
+                transaction_id: None,
+                settled: None,
+            },
+        )
+        .unwrap();
+        let debt_id = list_debts(&conn).unwrap()[0].id.clone();
+        save_debt_addition(
+            &conn,
+            DebtAdditionInput {
+                id: None,
+                debt_id,
+                amount: 30_000,
+                occurred_at: "2026-08-15".into(),
+                note: None,
+                transaction_id: None,
+                cash_account_id: Some(bank.clone()),
+            },
+        )
+        .unwrap();
+        let debt = &list_debts(&conn).unwrap()[0];
+        assert_eq!(debt.outstanding, 50_000);
+        let tx = get_transaction(&conn, debt.additions[0].transaction_id.as_deref().unwrap()).unwrap();
+        assert_eq!(tx.account_name, DEBT_ACCOUNT);
+        assert_eq!(tx.to_account_id.as_deref(), Some(bank.as_str()));
     }
 
     /// A row the balance has already seen leaves every balance where it

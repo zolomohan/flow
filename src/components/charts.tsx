@@ -272,7 +272,7 @@ export function PriceChart({
       ) : (
         width > 0 && (
           <span className="price-chart-empty">
-            Not enough price history yet — refresh prices and it fills in.
+            Not enough price history yet. Refresh prices and it fills in.
           </span>
         )
       )}
@@ -441,6 +441,10 @@ export interface DonutSlice {
   color: string;
 }
 
+/** How much an arc swells under the pointer, and so how much room the ring
+ *  has to leave itself inside the box it is drawn in. */
+const HOVER_GROW = 5;
+
 export function Donut({
   slices, size = 188, thickness = 22, centerLabel, centerValue, onSelect,
 }: {
@@ -454,7 +458,11 @@ export function Donut({
   }) {
   const [hover, setHover] = useState<string | null>(null);
   const total = slices.reduce((sum, s) => sum + s.value, 0);
-  const radius = (size - thickness) / 2;
+  // The ring is drawn inside the room the hovered arc will need. A radius of
+  // (size - thickness) / 2 puts the outer edge exactly on the viewport, so
+  // the arc under the pointer — which swells by HOVER_GROW — was drawn half
+  // of that beyond it and came back with its sides shaved off.
+  const radius = Math.max(1, (size - thickness - HOVER_GROW) / 2);
   const circumference = 2 * Math.PI * radius;
   const gap = slices.length > 1 ? 2.5 : 0;
 
@@ -489,7 +497,7 @@ export function Donut({
               r={radius}
               fill="none"
               stroke={arc.color}
-              strokeWidth={hover === arc.id ? thickness + 5 : thickness}
+              strokeWidth={hover === arc.id ? thickness + HOVER_GROW : thickness}
               strokeLinecap="round"
               strokeDasharray={`${arc.length} ${circumference}`}
               strokeDashoffset={-arc.offset}

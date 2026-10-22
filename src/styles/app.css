@@ -193,23 +193,21 @@ kbd {
   display: grid;
   place-items: center;
   height: 100%;
-  background: var(--bg);
+  background: #20294c;
 }
 
+/* The wordmark the splash in index.html paints, repeated here so the handoff
+   from the static splash to React is invisible. */
 .boot-mark {
-  display: grid;
-  place-items: center;
-  width: 54px;
-  height: 54px;
-  border-radius: var(--r-lg);
-  background: var(--brand-bg);
-  color: var(--green-bright);
-  font-size: 26px;
+  font-family: 'Caveat', ui-rounded, cursive;
+  font-size: 84px;
   font-weight: 700;
-  letter-spacing: var(--tight);
-  box-shadow: var(--shadow-md);
+  line-height: 1;
+  color: #f0f1f5;
 }
 
+/* The failure case is read, not admired: put it back on the page ground. */
+.boot.boot-failed { background: var(--bg); }
 .boot-error { max-width: 420px; }
 
 .welcome {
@@ -234,25 +232,12 @@ kbd {
   border-right: 1px solid var(--line-soft);
 }
 
+/* 10px of padding puts the name on the same left edge as the nav labels
+   below it, which carry 10px of their own inside the sidebar's 14px. */
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 4px 8px 14px;
-}
-
-.brand-mark {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 11px;
-  background: var(--brand-bg);
-  color: var(--green-bright);
-  font-size: 17px;
-  font-weight: 700;
-  letter-spacing: var(--tight);
-  box-shadow: var(--shadow-sm);
+  padding: 4px 10px 14px;
 }
 
 .brand-text { display: flex; flex-direction: column; min-width: 0; }
@@ -370,6 +355,7 @@ kbd {
   flex-direction: column;
   gap: 18px;
   max-width: 1240px;
+  min-height: 100%;
   padding: calc(var(--titlebar-h) + 10px) 30px 56px;
   margin: 0 auto;
 }
@@ -379,6 +365,7 @@ kbd {
    they would have without the tabs. */
 .screen-tabs { display: flex; }
 .tab-panel { display: flex; flex-direction: column; gap: 18px; }
+.screen > .tab-panel { flex: 1; }
 
 .screen-head {
   display: flex;
@@ -480,6 +467,9 @@ kbd {
 .icon-btn:hover { background: var(--surface-3); color: var(--ink); }
 .icon-btn:disabled { opacity: 0.3; pointer-events: none; }
 .icon-btn-secondary { background: var(--surface); border-color: var(--line); }
+/* The one that adds a row, where a full button would not fit the column. */
+.icon-btn-primary { background: var(--solid); color: var(--on-solid); }
+.icon-btn-primary:hover { background: var(--solid); color: var(--on-solid); opacity: 0.9; }
 .icon-btn-danger:hover { background: var(--red-soft); color: var(--red); }
 
 /* =================================================================
@@ -553,6 +543,156 @@ kbd {
 }
 .field-hint { text-transform: none; letter-spacing: 0; font-weight: 500; color: var(--ink-4); }
 .field-error { display: block; margin-top: 6px; font-size: 12px; color: var(--red); font-weight: 500; }
+
+/* Said to a screen reader and to nobody else — a column of buttons needs a
+   heading even where sighted eyes want none. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* A card's terms: what it has been on, and the change being written. Two
+   jobs, so two panes — the record on the left as a table, the form on the
+   right with every field named. */
+.terms-block .field-label em {
+  font-style: normal;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+  color: var(--ink-4);
+}
+.terms-panes {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  overflow: hidden;
+}
+.terms-pane { padding: 12px 14px 14px; min-width: 0; }
+.terms-pane + .terms-pane { border-left: 1px solid var(--line); }
+.terms-write { background: var(--surface-inset); }
+.terms-pane > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.terms-pane h4 {
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: var(--tight);
+  color: var(--ink);
+}
+.terms-pane > header > span {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ink-4);
+}
+.terms-cancel {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--blue);
+}
+.terms-cancel:hover { text-decoration: underline; }
+
+/* The record. A row is a button: clicking it opens that change in the form
+   beside, rather than making you delete it and type it again. */
+.terms-scroll { overflow-x: auto; margin: 0 -4px; }
+.terms-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.terms-table th, .terms-table td {
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.terms-table thead th {
+  padding-bottom: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: var(--wide);
+  text-transform: uppercase;
+  color: var(--ink-4);
+  border-bottom: 1px solid var(--line);
+}
+.terms-table tbody tr { border-bottom: 1px solid var(--line-soft); }
+.terms-table tbody tr:last-child { border-bottom: 0; }
+.terms-table tbody th { padding: 0; }
+.terms-table tbody th button {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  text-align: left;
+  border-radius: var(--r-sm);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.terms-table tbody th button:hover { background: var(--surface-3); }
+.terms-table tbody th small {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--ink-4);
+}
+.terms-table td { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+/* A due day at or before the closing day is paid the month after the bill is
+   cut, which the column would otherwise leave you to work out. */
+.terms-table td small {
+  display: block;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: var(--wide);
+  text-transform: uppercase;
+  color: var(--ink-4);
+}
+/* A term the change said nothing about, which carries on as it was. */
+.terms-table td em { font-style: normal; color: var(--ink-4); }
+.terms-table .is-num { text-align: right; }
+.terms-table .is-day { text-align: right; width: 60px; }
+.terms-table .is-act { width: 32px; padding-left: 0; padding-right: 0; }
+.terms-table tr.is-standing td { color: var(--ink); }
+.terms-table tr.is-standing th small { color: var(--green); }
+.terms-table tr.is-future th small { color: var(--amber); }
+.terms-table tr.is-editing th button { background: var(--blue-soft); color: var(--blue); }
+.terms-table tr.is-editing th small { color: var(--blue); }
+
+.terms-none {
+  padding: 4px 2px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-4);
+}
+
+/* The form. Its fields are stacked and named, because a bare well in a row
+   of wells says nothing about what belongs in it. */
+.terms-write .field + .field, .terms-write .field + .btn { margin-top: 10px; }
+.terms-write .btn { margin-top: 12px; }
+.terms-foot {
+  margin-top: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--ink-4);
+}
+.terms-foot.is-error { color: var(--red); }
+
+/* Below the width two panes need, they stack: the record over the form. */
+@media (max-width: 720px) {
+  .terms-panes { grid-template-columns: minmax(0, 1fr); }
+  .terms-pane + .terms-pane { border-left: 0; border-top: 1px solid var(--line); }
+}
 
 .input {
   width: 100%;
@@ -762,6 +902,10 @@ kbd {
   display: flex;
   flex-direction: column;
   width: 100%;
+  /* Handed in from the component as a custom property rather than set as
+     `max-width` inline, so a narrower window can take the whole of it back
+     without an inline style standing in the way. */
+  max-width: var(--sheet-w, 520px);
   max-height: min(86vh, 820px);
   /* Some sheets grow a column as you fill them in — glide rather than jump.
      What is inside is sized for where the glide is going, so the width is the
@@ -787,10 +931,15 @@ kbd {
 .sheet-sub { margin-top: 2px; font-size: 13px; color: var(--ink-3); font-weight: 500; }
 
 .sheet-body { padding: 0 22px 22px; overflow-y: auto; overflow-x: hidden; }
-/* Its width is set inline, from the sheet's own target — deliberately not
-   from its parent, which is the thing that moves. Its height is set inline
-   too, from what it is holding, so the panel glides between sizes. */
-.sheet-canvas { flex: none; }
+/* Its width comes from the sheet's own target — deliberately not from its
+   parent, which is the thing that moves. Its height is set inline, from what
+   it is holding, so the panel glides between sizes. */
+.sheet-canvas {
+  flex: none;
+  width: min(calc(var(--sheet-w, 520px) - 44px), calc(100vw - 92px));
+}
+/* A sheet already as wide as it is going to get has nothing to lay out for. */
+.sheet.is-full .sheet-canvas { width: 100%; }
 /* A block of its own, so a child's margin is inside the measurement rather
    than collapsing out of it and leaving the sheet a few pixels short. */
 .sheet-canvas-inner { display: flow-root; }
@@ -879,26 +1028,58 @@ kbd {
 }
 .meter-fill { display: block; height: 100%; border-radius: 99px; }
 
+/* Nothing here yet. Type alone, centred — no panel and no picture — so an
+   empty screen reads as a pause rather than as a thing to look at. */
+
 .empty {
   display: grid;
   justify-items: center;
-  gap: 8px;
-  padding: 40px 20px;
+  align-content: center;
+  gap: 9px;
+  padding: 44px 24px;
   text-align: center;
 }
-.empty-glyph {
-  display: grid;
-  place-items: center;
-  width: 44px;
-  height: 44px;
-  margin-bottom: 4px;
-  border-radius: var(--r-lg);
-  background: var(--surface-inset);
-  color: var(--ink-3);
+
+/* The whole space the list would have filled, so the words land in the middle
+   of the screen instead of sitting at the top of it. */
+.empty.is-screen {
+  flex: 1;
+  min-height: min(56vh, 440px);
+  padding: 32px 24px;
 }
-.empty h4 { font-size: 15px; font-weight: 600; letter-spacing: -0.015em; }
-.empty p { max-width: 320px; font-size: 13px; color: var(--ink-3); font-weight: 500; }
-.empty > *:last-child { margin-top: 6px; }
+
+/* Big enough to read as a face rather than as punctuation, and held back
+   from the title so the two do not crowd. */
+.empty-glyph {
+  font-size: 38px;
+  line-height: 1;
+  margin-bottom: 3px;
+  opacity: 0.85;
+}
+
+.empty h4 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: var(--tight);
+  color: var(--ink);
+  text-wrap: balance;
+}
+
+.empty p {
+  max-width: 33ch;
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 500;
+  line-height: 1.65;
+  color: var(--ink-3);
+  text-wrap: pretty;
+}
+
+.empty.is-screen h4 { font-size: 20px; }
+.empty.is-screen p { max-width: 36ch; font-size: 14.5px; }
+
+.empty-action { margin-top: 14px; }
 
 /* =================================================================
    Money type
@@ -1239,7 +1420,32 @@ kbd {
   color: var(--ink-4);
 }
 
-.tx-right { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; flex-shrink: 0; }
+/* Pins and collections, on the figure's side and centred against both its
+   lines. They give way before the payee's name does — a row that has run out
+   of width should lose somebody's filing before it loses its own words. */
+.tx-tags {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  flex-shrink: 1;
+  overflow: hidden;
+}
+/* The chips carry their own left margin for sitting after a title; in a row
+   of their own the first one does not need it. */
+.tx-tags > :first-child { margin-left: 0; }
+
+/* Fixed rather than fitted, so the tags beside it start at the same place
+   down the whole ledger. Wide enough for a seven-figure sum with its sign,
+   which is more than a bill has any business being. */
+.tx-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  flex: none;
+  width: 132px;
+}
 .tx-time { font-size: 11.5px; color: var(--ink-4); font-weight: 500; }
 
 .tx-chevron {
@@ -1307,16 +1513,27 @@ kbd {
 .ledger-days.is-selectable { --ledger-pad: 48px; --ledger-indent: 88px; }
 
 /* What to do with them, floating over the ledger rather than sitting in it. */
+/* Centred on the ledger rather than on the window, and the same width as it.
+   Fixed to the viewport but spanning only the main column, so the sidebar
+   does not push it off true — and holding the screen's own box, 1240 less
+   its 30px gutters, so its ends line up with the rows above it.
+
+   It wraps rather than overflowing. There are six controls in it now, and a
+   bar that runs off the edge of the window hides the one you were reaching
+   for. */
 .bulk-bar {
   position: fixed;
-  left: 50%;
-  bottom: 26px;
+  bottom: 22px;
   z-index: 50;
-  transform: translateX(-50%);
   display: flex;
   align-items: center;
-  gap: 14px;
-  max-width: min(880px, calc(100vw - 48px));
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  /* The whole main column, not the ledger's own box. Six controls and two
+     glyphs need the room, and a bar is furniture rather than reading — it
+     does not have to hold the measure the rows are set to. */
+  left: calc(var(--sidebar-w) + 20px);
+  right: 20px;
   padding: 10px 14px;
   border-radius: var(--r-xl);
   background: var(--surface);
@@ -1339,19 +1556,27 @@ kbd {
   color: var(--ink);
   font-variant-numeric: tabular-nums;
 }
-.bulk-fields { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.bulk-fields > * { width: 210px; }
+.bulk-fields {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.bulk-fields > * { flex: 1 1 168px; min-width: 0; max-width: 210px; }
 .bulk-actions {
   display: flex;
   align-items: center;
   gap: 6px;
+  margin-left: auto;
   padding-left: 6px;
   border-left: 1px solid var(--line-soft);
 }
 
 @media (max-width: 860px) {
-  .bulk-bar { flex-wrap: wrap; justify-content: flex-end; }
-  .bulk-fields > * { width: 170px; }
+  /* The rule loses its meaning once everything is on its own line. */
+  .bulk-actions { border-left: 0; padding-left: 0; }
 }
 
 /* Sits over the chevron, which is decoration — the whole row is the target. */
@@ -2444,6 +2669,22 @@ kbd {
   inset: 1px;
   border-radius: var(--r-sm);
   background: var(--solid);
+}
+
+/* The day-of-the-month picker: the calendar's clothes with no month behind
+   it — no weekday row, and a line about the short months, which is the whole
+   reason a card's closing day is picked rather than typed. */
+.day-pop { width: 258px; }
+.day-pop .date-pop-head { justify-content: flex-start; margin-bottom: 8px; }
+.day-pop .date-grid { gap: 2px; }
+.day-pop-note {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--ink-4);
 }
 
 .date-pop-foot {
@@ -4505,15 +4746,23 @@ kbd {
 /* The space the fold rides on. It grows to fill whatever the list leaves and
    winds back to nothing as the fold opens; the negative margin cancels the
    column's gap so that at no height it takes up no room. */
-.debt-past-gap { flex-basis: 0; min-height: 0; margin-top: -18px; }
+.debt-past-gap,
+.fold-gap { flex-basis: 0; min-height: 0; margin-top: -18px; }
 /* Level with Settings and the theme toggle across the sidebar: the screen
    ends on the sidebar's own 16px, and the row is built to the same 36px the
-   foot's nav item stands at, so the two read as one line across the window. */
-.debt-screen { padding-bottom: 16px; }
-.debt-screen .debt-past-head { min-height: 36px; padding: 8px 4px; }
-.debt-past { margin-top: 4px; }
+   foot's nav item stands at, so the two read as one line across the window.
+   Any screen ending in a fold wants the same, or the screen's usual 56px
+   tail leaves the row floating above the foot of the window. */
+.debt-screen,
+.screen.has-fold { padding-bottom: 16px; }
+.debt-screen .debt-past-head,
+.screen.has-fold .fold-head { min-height: 36px; padding: 8px 4px; }
+.screen.has-fold .fold { margin-top: 0; }
+.debt-past,
+.fold { margin-top: 4px; }
 .debt-screen .debt-past { margin-top: 0; }
-.debt-past-head {
+.debt-past-head,
+.fold-head {
   display: flex;
   align-items: center;
   gap: 9px;
@@ -4525,11 +4774,16 @@ kbd {
   text-align: left;
   transition: color var(--fast) var(--ease);
 }
-.debt-past-head:hover { color: var(--ink); }
-.debt-past-head > span:first-child { display: grid; place-items: center; color: var(--ink-4); }
-.debt-past-head strong { font-size: 13px; font-weight: 600; color: var(--ink-2); }
-.debt-past-head.is-open strong { color: var(--ink); }
-.debt-past-count {
+.debt-past-head:hover,
+.fold-head:hover { color: var(--ink); }
+.debt-past-head > span:first-child,
+.fold-head > span:first-child { display: grid; place-items: center; color: var(--ink-4); }
+.debt-past-head strong,
+.fold-head strong { font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.debt-past-head.is-open strong,
+.fold-head.is-open strong { color: var(--ink); }
+.debt-past-count,
+.fold-count {
   padding: 2px 8px;
   border-radius: var(--r-full);
   background: var(--surface-inset);
@@ -4537,7 +4791,8 @@ kbd {
   font-weight: 600;
   color: var(--ink-3);
 }
-.debt-past-head em {
+.debt-past-head em,
+.fold-head em {
   margin-left: auto;
   font-style: normal;
   font-size: 12px;
@@ -4671,6 +4926,7 @@ kbd {
   transition: border-color var(--fast) var(--ease), color var(--fast) var(--ease);
 }
 .debt-repay:hover { border-color: var(--tint); color: var(--tint); }
+.debt-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 
 /* What the debt is made of, as the ledger has it. On its own page the lists
    run edge to edge like every other list on a detail screen. */
@@ -5311,6 +5567,26 @@ kbd {
   color: var(--tint);
   background: color-mix(in srgb, var(--tint) 14%, transparent);
 }
+
+/* Squared where a label is round, and carrying its folder's glyph: a folder
+   is somewhere a posting is kept, not something pinned on it, and at this
+   size the shape reads before the name does. */
+.tx-folder {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 7px;
+  padding: 1.5px 6px 1.5px 5px;
+  border-radius: 5px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  vertical-align: 1px;
+  color: var(--tint);
+  background: color-mix(in srgb, var(--tint) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tint) 24%, transparent);
+}
+.tx-folder svg { flex: none; }
 
 /* The way into the review queue, sitting between the toolbar and the list. */
 .triage-banner {
@@ -6860,12 +7136,49 @@ kbd {
   font-weight: 500;
   color: var(--ink-3);
 }
-.card-detail-limit { display: grid; gap: 7px; margin-top: 12px; max-width: 380px; }
-.card-detail-limit span {
+/* How much of the limit is gone: one bar carrying both figures. The fill is
+   a wash rather than a block, so the share and the limit can be read off the
+   track itself instead of a caption underneath repeating what it is. */
+.limit-bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 30px;
+  margin-top: 12px;
+  max-width: 380px;
+  padding: 0 11px;
+  border-radius: var(--r-md);
+  background: var(--surface-inset);
+  border: 1px solid var(--line-soft);
+  overflow: hidden;
+}
+.limit-bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-right: 1.5px solid var(--tone);
+  background: color-mix(in srgb, var(--tone) 16%, transparent);
+  transition: width var(--slow) var(--ease);
+}
+.limit-bar-read, .limit-bar-cap {
+  position: relative;
   font-size: 11.5px;
   font-weight: 500;
+  white-space: nowrap;
   color: var(--ink-3);
 }
+.limit-bar-read b {
+  margin-right: 5px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--tone);
+  font-variant-numeric: tabular-nums;
+}
+.limit-bar-cap { font-weight: 600; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.limit-bar.is-low { --tone: var(--green); }
+.limit-bar.is-mid { --tone: var(--amber); }
+.limit-bar.is-high { --tone: var(--red); }
 
 /* The figures on one rule, divided by hairlines rather than boxed up. */
 .figure-row {
@@ -7063,12 +7376,16 @@ kbd {
   color: var(--ink-3);
 }
 
-/* The three lists under a card: statements, categories, merchants. */
+/* The three lists under a card: statements, categories, merchants. They
+   stretch rather than sit at their own heights, so the rules between them
+   run the whole way down however little any one of them has to say. */
 .card-lists {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  align-items: start;
+  align-items: stretch;
 }
+/* The donut over the categories, in the same hand as the dashboard's. */
+.card-donut { display: flex; justify-content: center; padding: 2px 0 12px; }
 .card-lists > section { padding: 18px 22px 20px; }
 .card-lists > section + section { border-left: 1px solid var(--line-soft); }
 
@@ -7117,10 +7434,30 @@ kbd {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 12px 16px;
+  flex-wrap: wrap;
   padding: 16px 22px 6px;
 }
 .card-recent-head .section-head { margin-bottom: 0; }
+/* The window the whole card page is read over: a stepper to walk it back, and
+   the segments that say what one step is. It sits in the page head, where the
+   tab keeps its own month strip — this is the same control for one card.
+   Given room it stays on the header's line; short of it, it wraps as a block
+   under the card's name rather than squeezing the name out. */
+.card-range-bar { justify-content: flex-end; gap: 8px; }
+.card-range-nav { padding: 2px; }
+.card-range-nav .month-label {
+  min-width: 128px;
+  height: 28px;
+  padding: 0 6px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  cursor: default;
+}
+.card-range-nav .month-label:hover { background: transparent; }
+
+/* The pager sits inside the panel, so it keeps the panel's own gutter. */
+.card-more { padding: 10px 22px 16px; }
 
 @media (max-width: 1180px) {
   .card-lists { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -7700,3 +8037,8 @@ kbd {
 @media (max-width: 620px) {
   .tpl-fields { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* A fold's own body. Always in the page so its height can be measured when
+   it is asked to open, and clipped to nothing until it is. */
+.fold-body { overflow: hidden; }
+.fold-inner { padding-top: 10px; }

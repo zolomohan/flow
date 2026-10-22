@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { createPortal } from 'react-dom';
 import { Icon } from './Icon';
@@ -7,6 +7,8 @@ import { itemVariants, popover, press, spring } from '../lib/motion';
 
 const WEEKDAYS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 const MONTHS = Array.from({ length: 12 }, (_, i) => i + 1);
+/** Every day a month can land on, for the picker that has no month at all. */
+const DAYS = Array.from({ length: 31 }, (_, i) => i + 1);
 /** How many years the year grid shows at once, and how far a chevron jumps. */
 const YEAR_BLOCK = 12;
 
@@ -334,6 +336,160 @@ export function DateField({
                   Today
                 </button>
               </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+/* --------------------------------------------------- a day of the month */
+
+/** 1st, 2nd, 3rd — a day of the month said out loud. */
+export function ordinalDay(day: number) {
+  const tens = day % 100;
+  const suffix = tens >= 11 && tens <= 13 ? 'th' : (['th', 'st', 'nd', 'rd'][day % 10] ?? 'th');
+  return `${day}${suffix}`;
+}
+
+/**
+ * A day of the month with no month and no year behind it — for the two days a
+ * card keeps: the one its statement closes on and the one the bill is due.
+ * Those are not dates. They are the same day every month, for as long as the
+ * card is open, so a calendar would be asking the wrong question and a
+ * numeric well leaves you to know that 31 is allowed and 32 is not.
+ */
+export function DayField({
+  value, onChange, placeholder = 'Pick a day', allowClear = true,
+}: {
+  /** 1–31, or 0 for a day that isn't kept. */
+  value: number;
+  onChange: (day: number) => void;
+  placeholder?: string;
+  allowClear?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [rect, setRect] = useState<DOMRect | null>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  const pick = useId();
+
+  useLayoutEffect(() => {
+    if (open && trigger.current) setRect(trigger.current.getBoundingClientRect());
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (panel.current?.contains(target) || trigger.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey, true);
+    };
+  }, [open]);
+
+  // Flip above the trigger when there isn't room beneath it.
+  const height = 260;
+  const below = rect ? window.innerHeight - rect.bottom : 0;
+  const flip = rect ? below < height && rect.top > below : false;
+
+  return (
+    <>
+      <button
+        ref={trigger}
+        type="button"
+        className={`date-field ${open ? 'is-open' : ''} ${value ? '' : 'is-empty'}`}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <Icon name="calendar-days" size={15} />
+        <span>{value ? `${ordinalDay(value)} of the month` : placeholder}</span>
+        {allowClear && !!value && (
+          <span
+            className="date-clear"
+            role="button"
+            aria-label="Clear"
+            onClick={(e) => {
+              e.stopPropagation();
+              onChange(0);
+            }}
+          >
+            <Icon name="x" size={13} />
+          </span>
+        )}
+      </button>
+
+      {createPortal(
+        <AnimatePresence>
+          {open && rect && (
+            <motion.div
+              ref={panel}
+              className="date-pop day-pop"
+              variants={popover}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              style={{
+                position: 'fixed',
+                left: Math.min(rect.left, window.innerWidth - 296),
+                top: flip ? undefined : rect.bottom + 6,
+                bottom: flip ? window.innerHeight - rect.top + 6 : undefined,
+              }}
+            >
+              <div className="date-pop-head">
+                <strong>Day of the month</strong>
+              </div>
+
+              <motion.div
+                className="date-grid"
+                initial={{ opacity: 0, y: 6 }}
+                animate={{
+                  opacity: 1,
+                  y: 0,
+                  transition: { ...spring, staggerChildren: 0.01, delayChildren: 0.02 },
+                }}
+              >
+                {DAYS.map((day) => (
+                  <button
+                    key={day}
+                    type="button"
+                    className={`date-cell ${day === value ? 'is-picked' : ''}`}
+                    onClick={() => {
+                      onChange(day);
+                      setOpen(false);
+                    }}
+                  >
+                    {day === value && (
+                      <motion.span
+                        layoutId={`day-pick-${pick}`}
+                        className="date-pick"
+                        transition={spring}
+                      />
+                    )}
+                    <em>{day}</em>
+                  </button>
+                ))}
+              </motion.div>
+
+              {/* The short months are the whole reason this is a picker and
+                  not a number: a card that closes on the 31st still closes
+                  in February. */}
+              <p className="day-pop-note">
+                {value > 28
+                  ? `The ${ordinalDay(value)} falls on the last day of a month too short for it.`
+                  : 'The same day every month, for as long as the card is open.'}
+              </p>
             </motion.div>
           )}
         </AnimatePresence>,

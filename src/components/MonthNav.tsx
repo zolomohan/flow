@@ -526,7 +526,7 @@ export function MonthNav({
                       transition={spring}
                     >
                       {anchor
-                        ? `From ${monthLabel(anchor)} — now pick the other end.`
+                        ? `From ${monthLabel(anchor)}. Now pick the other end.`
                         : 'Pick the first month of the range.'}
                     </motion.p>
                   )}

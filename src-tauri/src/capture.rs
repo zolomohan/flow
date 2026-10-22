@@ -59,6 +59,7 @@ pub const PEOPLE_SETTING: &str = "capture_people";
 /// appends nothing. It surfaces in Files and in Finder as iCloud Drive >
 /// Shortcuts, and it is the one place a Shortcut can write to on every
 /// device without being handed a permission first.
+#[cfg(not(target_os = "ios"))]
 fn default_inbox() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_default();
     PathBuf::from(home)
@@ -66,6 +67,24 @@ fn default_inbox() -> PathBuf {
         // The extension matches what a Shortcut actually writes, so it has no
         // reason to rename the file and every append lands on the same one.
         .join("midas-inbox.json")
+}
+
+/// The same drop on a phone, which cannot be the same path.
+///
+/// `$HOME` on iOS is the app's own sandbox container, so the Mac's default
+/// resolves to a directory that cannot exist — and an inbox that cannot exist
+/// reads as an inbox that is empty, silently and forever. Worse, one iOS app
+/// may not read another's iCloud container at all, so the Shortcuts folder is
+/// not a permission away from working here; it is closed.
+///
+/// What is open is our own Documents directory. With `UIFileSharingEnabled`
+/// and `LSSupportsOpeningDocumentsInPlace` set, it appears in Files as
+/// "On My iPhone > flow", which a Shortcut's *Save File* can be pointed at —
+/// the same append, the same queue, the same lines, one directory over.
+#[cfg(target_os = "ios")]
+fn default_inbox() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    PathBuf::from(home).join("Documents").join("midas-inbox.json")
 }
 
 pub fn inbox_path(conn: &Connection) -> PathBuf {
@@ -205,7 +224,7 @@ pub fn book_text(conn: &Connection) -> Result<String> {
 /// Transfers are left out: their merchant is bookkeeping — "Transfer",
 /// "Transfer (unmatched)" — rather than anybody you paid, and offering those
 /// as names to match against would only invite a coffee to become a transfer.
-fn known_merchants(conn: &Connection, limit: Option<usize>) -> Result<Vec<String>> {
+pub fn known_merchants(conn: &Connection, limit: Option<usize>) -> Result<Vec<String>> {
     let sql = format!(
         "SELECT merchant, COUNT(*) AS seen FROM transactions
          WHERE kind <> 'transfer' AND TRIM(merchant) <> ''
@@ -1051,6 +1070,46 @@ fn title_case(s: &str) -> String {
 
 /* --------------------------------------------------------------- the date */
 
+/// When the line was said, read from the timestamp the Shortcut wrote beside
+/// it — or nothing, when it wrote none or wrote it in a shape nobody here
+/// recognises.
+///
+/// Shortcuts' "Format Date" is a picker, and the picker has more than one
+/// right answer: ISO 8601 with the time on carries a zone, without it does
+/// not, and a custom pattern can leave out the `T` or the seconds. Every
+/// one of those is the same moment, so all of them are read. A wall-clock
+/// time without a zone is taken to be the phone's own, which is the only
+/// clock a person dictating to it was looking at.
+///
+/// What is *not* done is fall back to now: a capture whose time cannot be
+/// read is better filed at the moment it was read than at a guess dressed
+/// as a fact — but that fallback belongs to the caller, which knows which
+/// "now" it means.
+fn spoken_at(at: &str) -> Option<NaiveDateTime> {
+    let at = at.trim();
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(at) {
+        return Some(dt.with_timezone(&Local).naive_local());
+    }
+    const SHAPES: [&str; 6] = [
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+    ];
+    for shape in SHAPES {
+        if let Ok(dt) = NaiveDateTime::parse_from_str(at, shape) {
+            return Some(dt);
+        }
+    }
+    // A bare day, with no hour to keep. Noon, as elsewhere: the middle of
+    // the day it names, and on nobody's boundary.
+    NaiveDate::parse_from_str(at, "%Y-%m-%d")
+        .ok()
+        .and_then(|d| d.and_hms_opt(12, 0, 0))
+}
+
 fn weekday(word: &str) -> Option<Weekday> {
     Some(match word {
         "monday" => Weekday::Mon,
@@ -1135,11 +1194,14 @@ impl Resolved {
 
 fn resolve(conn: &Connection, spoken: &Spoken) -> Result<Resolved> {
     let said = &spoken.said;
+    // A line that does not say when it was said is taken to have been said
+    // now — which is when it was *read*, and only the same thing while the
+    // Shortcut and this book are on speaking terms. A Shortcut that writes
+    // `at` beside the sentence is the fix; this is the fallback.
     let spoken_at = spoken
         .at
         .as_deref()
-        .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
-        .map(|dt| dt.naive_local())
+        .and_then(spoken_at)
         .unwrap_or_else(|| Local::now().naive_local());
 
     // Whether to interpret at all.
@@ -1351,7 +1413,15 @@ fn read_into(conn: &Connection, raw: &str, file: &str, result: &mut CaptureSync)
 
         let r = resolve(conn, &spoken)?;
         let id = new_id();
-        let captured_at = spoken.at.clone().unwrap_or_else(now);
+        // Kept in one shape however the Shortcut wrote it, so the Inbox
+        // sorts by when things were said rather than by how they were spelt.
+        let captured_at = spoken
+            .at
+            .as_deref()
+            .and_then(spoken_at)
+            .and_then(|dt| dt.and_local_timezone(Local).single())
+            .map(|dt| dt.to_rfc3339())
+            .unwrap_or_else(now);
         conn.execute(
             "INSERT INTO captures
                 (id, digest, said, raw, source, captured_at, ingested_at, kind, amount,
@@ -1567,9 +1637,6 @@ mod tests {
                     opening_balance: 100_000_00,
                     color: "#000000".into(),
                     icon: "wallet".into(),
-                    credit_limit: 0,
-                    statement_day: 0,
-                    due_day: 0,
                 },
             )
             .unwrap();
@@ -2108,6 +2175,31 @@ mod tests {
         // A top-level category nobody has given children to is filed under by
         // its own name, because that is the whole of its path.
         assert!(category_named(&conn, "Health", "expense").unwrap().is_some());
+    }
+
+    /// Shortcuts' date picker has several right answers, and every one of
+    /// them is the moment the sentence was said — not the moment it was read.
+    #[test]
+    fn reads_the_time_however_the_shortcut_wrote_it() {
+        let noon = NaiveDate::from_ymd_opt(2026, 9, 19)
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap();
+        let half_past_two = noon.date().and_hms_opt(14, 32, 0).unwrap();
+        // The shapes without a zone are the phone's own clock, kept as is.
+        assert_eq!(spoken_at("2026-09-19T14:32:00"), Some(half_past_two));
+        assert_eq!(spoken_at("2026-09-19T14:32"), Some(half_past_two));
+        assert_eq!(spoken_at("2026-09-19 14:32:00"), Some(half_past_two));
+        assert_eq!(spoken_at(" 2026-09-19 14:32 "), Some(half_past_two));
+        assert_eq!(spoken_at("2026-09-19"), Some(noon));
+        // One with a zone is a definite instant; it reads as some local time
+        // on the same day, whatever clock this test happens to run under.
+        let zoned = spoken_at("2026-09-19T14:32:00+05:30").expect("rfc3339 reads");
+        let instant = chrono::DateTime::parse_from_rfc3339("2026-09-19T14:32:00+05:30").unwrap();
+        assert_eq!(zoned, instant.with_timezone(&Local).naive_local());
+        // And what is not a time at all is nothing, rather than now.
+        assert_eq!(spoken_at("yesterday"), None);
+        assert_eq!(spoken_at(""), None);
     }
 
     #[test]

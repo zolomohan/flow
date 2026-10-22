@@ -9,7 +9,7 @@ import {
 } from '../lib/format';
 import { itemVariants, listVariants, spring } from '../lib/motion';
 import { isDeposit } from '../lib/types';
-import type { Holding, InvestmentLot } from '../lib/types';
+import type { Holding, InvestmentLot, ValuePoint } from '../lib/types';
 
 /** 22K reads better than 9160 everywhere it is shown. */
 export function carats(purityE4: number | null) {
@@ -37,8 +37,11 @@ export function splitName(holding: Holding) {
 }
 
 /** Days between two ISO dates, as a readable span. */
-function heldFor(since: string) {
-  const days = Math.floor((Date.now() - new Date(since).getTime()) / 86_400_000);
+/** How long something was held. `until` for a holding that has ended; today
+ *  for one that has not. */
+function heldFor(since: string, until?: string) {
+  const end = until ? new Date(until).getTime() : Date.now();
+  const days = Math.floor((end - new Date(since).getTime()) / 86_400_000);
   if (days < 31) return `${days} ${days === 1 ? 'day' : 'days'}`;
   const months = Math.round(days / 30.44);
   if (months < 24) return `${months} ${months === 1 ? 'month' : 'months'}`;
@@ -67,9 +70,19 @@ export function HoldingDetail({
   // units, and its own words for what the entries against it are.
   const deposit = isDeposit(holding.kind);
 
-  const gain = holding.totalReturn;
+  // A position sold out of. Its market value is nothing and its NAV is
+  // somebody else's business now: what is left to say is what went in, what
+  // came back, and over how long.
+  const soldOut = holding.closed && !isGold && !deposit;
+  const realisedGain = holding.realised - holding.invested;
+
+  const gain = soldOut ? realisedGain : holding.totalReturn;
   const cost = holding.invested - holding.realised;
-  const gainPct = cost > 0 ? (gain / cost) * 100 : null;
+  // Against the money put in, for a holding that has given all of it back —
+  // net cost is nothing once you have sold out, and a return measured
+  // against nothing is not a percentage.
+  const base = soldOut ? holding.invested : cost;
+  const gainPct = base > 0 ? (gain / base) * 100 : null;
   const up = gain >= 0;
 
   const buys = holding.lots.filter((l) => l.kind === 'buy');
@@ -82,6 +95,23 @@ export function HoldingDetail({
   // money left the bank.
   const oldest = holding.lots[holding.lots.length - 1];
   const first = oldest ? oldest.allottedAt ?? oldest.occurredAt : null;
+  // The days it was actually held, which is what a closed holding's charts
+  // are worth drawing over: its line runs on to today at nothing otherwise.
+  const dayOf = (l: { allottedAt: string | null; occurredAt: string }) =>
+    (l.allottedAt ?? l.occurredAt).slice(0, 10);
+  const held = holding.lots.map(dayOf).sort();
+  const from = held[0];
+  const to = held[held.length - 1];
+  // The days it was held, with the tail of nothing taken off: on the day the
+  // last units go the holding is worth zero, and a line that ends on the
+  // floor reads as a collapse rather than as a sale.
+  const toTenure = (line: ValuePoint[]) => {
+    if (!soldOut || !from || !to) return line;
+    const inside = line.filter((p) => p.asOf >= from && p.asOf <= to);
+    let end = inside.length;
+    while (end > 0 && inside[end - 1].value === 0) end -= 1;
+    return inside.slice(0, end);
+  };
 
   const span = Math.max(cost, holding.marketValue, 1);
   const basePct = (Math.max(Math.min(cost, holding.marketValue), 0) / span) * 100;
@@ -140,15 +170,22 @@ export function HoldingDetail({
         <div className="detail-top">
           <div className="detail-hero-main">
             <span className="detail-label">
-              {deposit ? 'Worth today' : 'Market value'}
+              {soldOut ? 'Returned' : deposit ? 'Worth today' : 'Market value'}
             </span>
-            {deposit || priced ? (
+            {soldOut ? (
+              <BigMoney value={holding.realised} className="hero-amount" />
+            ) : deposit || priced ? (
               <BigMoney value={holding.marketValue} className="hero-amount" />
             ) : (
               <strong className="detail-unpriced">No price fetched yet</strong>
             )}
             <p className="detail-hero-sub">
-              {deposit ? (
+              {soldOut ? (
+                <>
+                  {money(holding.invested)} invested
+                  {from && to && ` · held ${dayLabel(from)} to ${dayLabel(to)}`}
+                </>
+              ) : deposit ? (
                 <>
                   {money(cost)} paid in
                   {holding.rateE4 ? ` at ${holding.rateE4 / 10_000}% a year` : ''}
@@ -166,16 +203,16 @@ export function HoldingDetail({
               )}
             </p>
           </div>
-          {(deposit || priced) && !isGold && (
+          {(deposit || priced || soldOut) && !isGold && (
             <div className={`detail-return ${up ? 'is-up' : 'is-down'}`}>
-              <small>Total return</small>
+              <small>{soldOut ? 'Realised' : 'Total return'}</small>
               <span>{money(gain, { sign: gain > 0 })}</span>
               {gainPct !== null && <em>{percent(gainPct, { sign: true })}</em>}
             </div>
           )}
         </div>
 
-        {priced && !isGold && !deposit && (
+        {priced && !isGold && !deposit && !soldOut && (
           <div
             className="holding-bar detail-bar"
             title={`Cost ${money(cost)} · now ${money(holding.marketValue)}`}
@@ -202,11 +239,11 @@ export function HoldingDetail({
           <Figure label={isGold ? 'Grams held' : 'Units held'} value={quantity(holding.unitsE4, unit)} />
           {isGold ? (
             <>
-              <Figure label="Purity" value={carats(holding.purityE4)} hint="what it is scaled by" />
+              <Figure label="Purity" value={carats(holding.purityE4)} />
               <Figure
                 label="Rate"
                 value={priced ? unitPrice(holding.priceE4!) : '—'}
-                hint="a gram today"
+                hint="per gram, today"
               />
             </>
           ) : (
@@ -228,14 +265,20 @@ export function HoldingDetail({
                   hint={`${sells.length} ${sells.length === 1 ? 'sale' : 'sales'}`}
                 />
               )}
-              <Figure label="Net cost" value={money(cost)} hint="what you are in for" />
+              {!soldOut && <Figure label="Net cost" value={money(cost)} hint="after sales" />}
             </>
           )}
           {share > 0.001 && (
             <Figure label="Allocation" value={percent(share * 100)} hint="of your holdings" />
           )}
           {!isGold && first && (
-            <Figure label="Held for" value={heldFor(first)} hint={`since ${dayLabel(first)}`} />
+            <Figure
+              label="Held for"
+              value={soldOut && from && to ? heldFor(from, to) : heldFor(first)}
+              hint={
+                soldOut && to ? `until ${dayLabel(to)}` : `since ${dayLabel(first)}`
+              }
+            />
           )}
           {isGold && (
             <Figure
@@ -257,7 +300,7 @@ export function HoldingDetail({
         <p className="page-note">
           <Icon name="clock" size={13} />
           {money(holding.pending)} paid in and not allotted yet. It is counted at
-          what it cost until the units land — open the entry and put them in when
+          what it cost until the units land. Open the entry and put them in when
           your statement shows them.
         </p>
       )}
@@ -268,11 +311,19 @@ export function HoldingDetail({
           is actually riding on. The scheme's NAV follows it below. */}
       {!deposit && (
         <PriceHistory
-          title="What it's worth"
-          hint={isGold ? 'your gold, day by day' : 'your units at each day’s NAV'}
+          title={soldOut ? 'What it was worth' : "What it's worth"}
+          hint={
+            soldOut
+              ? 'your units, over the months you held them'
+              : isGold
+                ? 'your gold, day by day'
+                : 'your units, day by day'
+          }
           tint={isGold ? 'var(--amber)' : 'var(--violet)'}
           kind="money"
-          load={(days) => api.holdingValueSeries(holding.id, days)}
+          // Sold out of: one window is worth drawing, and it is the tenure.
+          ranges={!soldOut}
+          load={(days) => api.holdingValueSeries(holding.id, days).then(toTenure)}
         />
       )}
 
@@ -285,18 +336,19 @@ export function HoldingDetail({
       {!deposit && !isGold && (
         <PriceHistory
           title="NAV"
-          hint="what one unit has been worth, day by day"
+          ranges={!soldOut}
+          hint={soldOut ? 'one unit, while you held it' : 'one unit, day by day'}
           tint="var(--violet)"
           load={(days) =>
             api
               .holdingSeries(holding.id, days)
-              .then((line) => line.map((p) => ({ asOf: p.asOf, value: p.priceE4 })))
+              .then((line) => toTenure(line.map((p) => ({ asOf: p.asOf, value: p.priceE4 }))))
           }
           reference={avgBuy ? avgBuy * 100 : null}
           referenceLabel={
             avgBuy ? `your average cost · ${money(avgBuy, { paise: true })}` : undefined
           }
-          footnote="AMFI publishes a scheme’s NAV once a day, after the market closes."
+          footnote="A scheme’s NAV is published once a day, after the market closes."
         />
       )}
 
@@ -315,9 +367,8 @@ export function HoldingDetail({
           {holding.lots.length === 0 ? (
             <div className="card-pad">
               <Empty
-                icon="inbox"
                 title="Nothing recorded yet"
-                body="Add what you bought and when, and this becomes the position's full history."
+                body="Add what you bought and when."
               />
             </div>
           ) : (
@@ -419,7 +470,7 @@ export function HoldingDetail({
             <p className="detail-note">
               Gold is weighed, not traded: change the grams on the holding itself
               and its value follows. Valued from international spot, converted at
-              the ECB's rupee rate and marked up for duty and GST — that markup is
+              the ECB's rupee rate and marked up for duty and GST. That markup is
               yours to set in Settings.
             </p>
           )}

@@ -93,7 +93,6 @@ export function Cards({
     return (
       <CardPage
         card={viewing}
-        label={label}
         span={span}
         onBack={() => setOpenId(null)}
         onEdit={() => editing(viewing.id)}
@@ -113,18 +112,16 @@ export function Cards({
             <p>What is owed on your credit cards, and when it falls due.</p>
           </div>
         </header>
-        <Card>
-          <Empty
-            icon="credit-card"
-            title="No credit cards yet"
-            body="Add one and the tab fills itself in: what is billed, what is not, and how much of the limit is gone."
-            action={
-              <Button tone="primary" icon="plus" onClick={onAddAccount}>
-                New account
-              </Button>
-            }
-          />
-        </Card>
+        <Empty
+          screen
+          title="No credit cards yet"
+          body="What is billed, what is due, and how much of your limit is left."
+          action={
+            <Button tone="primary" icon="plus" onClick={onAddAccount}>
+              New account
+            </Button>
+          }
+        />
       </div>
     );
   }
@@ -143,7 +140,7 @@ export function Cards({
             {!data
               ? 'What is owed on your credit cards, and when it falls due.'
               : !nextClose
-                ? `${cards.length} ${cards.length === 1 ? 'card' : 'cards'} · read by the calendar until you tell them when they bill`
+                ? `${cards.length} ${cards.length === 1 ? 'card' : 'cards'} · no billing cycle set yet`
                 : daysUntil(nextClose) <= 0
                   ? `${cards.length} ${cards.length === 1 ? 'card' : 'cards'} · a statement closes today`
                   : `${cards.length} ${cards.length === 1 ? 'card' : 'cards'} · next statement closes ${shortDayLabel(nextClose)}`}
@@ -169,7 +166,7 @@ export function Cards({
                       {percent(used * 100)} used
                     </>
                   ) : (
-                    'no limits set, so there is nothing to say about the room left'
+                    'no credit limits set'
                   )}
                 </p>
                 {/* Who owes what, as one rule. It reads at a glance even
@@ -247,7 +244,7 @@ export function Cards({
             <section className="cards-summary-chart">
               <SectionHead
                 title="What went on the cards"
-                hint="month by month, every card together"
+                hint="every card, month by month"
               />
               <SpendBars
                 points={data.monthly.map((m) => ({ bucket: m.bucket, value: m.expense }))}

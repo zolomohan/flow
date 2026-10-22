@@ -291,6 +291,7 @@ export function ImportSheet({ open: isOpen, onClose }: { open: boolean; onClose:
         settled: false,
       })),
       labels: [],
+      folders: [],
       // A row waiting to import gives nothing back and has had nothing
       // given back to it: it is not in the book yet to be refunded.
       refundOf: null,
@@ -438,7 +439,7 @@ export function ImportSheet({ open: isOpen, onClose }: { open: boolean; onClose:
       subtitle={
         rows
           ? `${fileName} → ${account?.name ?? ''}`
-          : 'A bank export, held against what the book already has'
+          : 'Bring in a bank statement'
       }
       width={760}
       full={!!rows}
@@ -455,7 +456,7 @@ export function ImportSheet({ open: isOpen, onClose }: { open: boolean; onClose:
                 <Button
                   onClick={() => doImport('all')}
                   disabled={busy !== null || taking.length === 0}
-                  title="Bring in the unreviewed ones too — they arrive labelled Triage"
+                  title="Includes unreviewed rows, which arrive labelled Triage"
                 >
                   {`Import all ${taking.length}`}
                 </Button>
@@ -468,7 +469,7 @@ export function ImportSheet({ open: isOpen, onClose }: { open: boolean; onClose:
                 title={
                   allReviewed
                     ? undefined
-                    : 'Filed by hand here, or by a rule you confirmed before — nothing left to check'
+                    : 'Rows you have reviewed here, or confirmed before'
                 }
               >
                 {busy === 'importing'
@@ -507,12 +508,11 @@ export function ImportSheet({ open: isOpen, onClose }: { open: boolean; onClose:
             {busy === 'parsing' ? 'Reading…' : 'Choose the statement file'}
           </Button>
           <p className="import-hint">
-            Rows already in the book are recognised and left alone, so a statement
-            can be imported again without doubling anything. New entries come in
-            marked <strong>Triage</strong>{triageLabel && triageLabel.count > 0
+            Rows already in your book are skipped, so the same statement can be
+            imported twice without doubling anything. New entries arrive labelled{' '}
+            <strong>Triage</strong>{triageLabel && triageLabel.count > 0
               ? ` (${triageLabel.count} waiting now)`
-              : ''} until you confirm how they are filed — and once confirmed, the
-            next statement files that counterparty by itself.
+              : ''} until you confirm how they are filed.
           </p>
         </div>
       ) : (
@@ -599,14 +599,13 @@ export function ImportSheet({ open: isOpen, onClose }: { open: boolean; onClose:
             </div>
             <p>
               {neutral.length === 0
-                ? 'Every entry moves the balance, as new money does.'
-                : `${neutral.length} of ${taking.length} recorded without moving anything — the opening balance absorbs ${money(openingShift, { sign: true })}.`}
+                ? 'Every entry moves the balance.'
+                : `${neutral.length} of ${taking.length} recorded without moving anything. The opening balance absorbs ${money(openingShift, { sign: true })}.`}
             </p>
           </div>
 
           {fresh.length === 0 ? (
             <Empty
-              icon="check-circle-2"
               title="Nothing new here"
               body="Every row of this statement is already in the book."
             />
@@ -650,7 +649,7 @@ export function ImportSheet({ open: isOpen, onClose }: { open: boolean; onClose:
                             {edited ? (
                               <em
                                 className="import-rule is-sure"
-                                title="Filed by hand here — it skips triage, and the next statement files this counterparty the same way"
+                                title="Reviewed by you. The next statement files this the same way"
                               >
                                 <Icon name="check" size={10} />
                                 reviewed
@@ -661,7 +660,7 @@ export function ImportSheet({ open: isOpen, onClose }: { open: boolean; onClose:
                                 title={
                                   r.ruleConfirmed
                                     ? 'Filed the way you confirmed it last time'
-                                    : 'A guess from your history — lands in triage'
+                                    : 'Guessed from your history, and needs a look'
                                 }
                               >
                                 <Icon name={r.ruleConfirmed ? 'check' : 'sparkles'} size={10} />
@@ -685,8 +684,8 @@ export function ImportSheet({ open: isOpen, onClose }: { open: boolean; onClose:
                           aria-pressed={affectsBalance(r, i)}
                           title={
                             affectsBalance(r, i)
-                              ? 'Moves the balance — click if this is already counted'
-                              : 'Already counted: recorded, but the balance stays put'
+                              ? 'Moves the balance. Click if this is already counted'
+                              : 'Already counted, so the balance stays put'
                           }
                           onClick={(e) => {
                             e.stopPropagation();

@@ -164,11 +164,56 @@ fn delete_transaction(db: State<Db>, id: String) -> R<()> {
 
 /// Reads a bank statement export into rows. Pure — nothing touches the book
 /// until the preview has been seen and the commit asked for.
+/// The days a card's terms changed, oldest first.
+#[tauri::command]
+fn card_terms(db: State<Db>, account_id: String) -> R<Vec<CardTerm>> {
+    with_db(&db, |c| cards::card_terms(c, &account_id))
+}
+
+/// Records what a card's terms became on a day — its limit, the day its
+/// statement closes, the day the bill is due, or any of them. One dated today
+/// also moves the card itself, so the two never disagree.
+#[tauri::command]
+fn save_card_term(
+    db: State<Db>,
+    account_id: String,
+    effective_on: String,
+    credit_limit: Option<Paise>,
+    statement_day: Option<i64>,
+    due_day: Option<i64>,
+    note: Option<String>,
+) -> R<CardTerm> {
+    with_db(&db, |c| {
+        cards::save_card_term(
+            c,
+            &account_id,
+            &effective_on,
+            credit_limit,
+            statement_day,
+            due_day,
+            note.as_deref(),
+        )
+    })
+}
+
+#[tauri::command]
+fn delete_card_term(db: State<Db>, id: String) -> R<()> {
+    with_db(&db, |c| cards::delete_card_term(c, &id))
+}
+
 /// Every credit card at once: what is owed, what has been billed, and what
 /// the window on screen was spent on.
 #[tauri::command]
-fn cards(db: State<Db>, month: String, span: Option<u32>) -> R<CardsOverview> {
-    with_db(&db, |c| cards::cards_overview(c, &month, span.unwrap_or(1)))
+fn cards(
+    db: State<Db>,
+    month: String,
+    span: Option<u32>,
+    from: Option<String>,
+    to: Option<String>,
+) -> R<CardsOverview> {
+    with_db(&db, |c| {
+        cards::cards_overview(c, &month, span.unwrap_or(1), from.as_deref(), to.as_deref())
+    })
 }
 
 /// A financial year of earnings, grouped by the head each is filed under —
@@ -245,6 +290,18 @@ fn save_label(db: State<Db>, input: LabelInput) -> R<Label> {
 #[tauri::command]
 fn delete_label(db: State<Db>, id: String) -> R<()> {
     with_db(&db, |c| db::delete_label(c, &id))
+}
+
+/// Pins one label across a selection, or takes it off. Answers with how many
+/// postings it actually changed.
+#[tauri::command]
+fn label_transactions(
+    db: State<Db>,
+    ids: Vec<String>,
+    label_id: String,
+    on: bool,
+) -> R<i64> {
+    with_db(&db, |c| db::label_transactions(c, &ids, &label_id, on))
 }
 
 /// Every folder, with what it holds already added up.
@@ -329,6 +386,13 @@ fn capture_history(db: State<Db>) -> R<Vec<Capture>> {
     with_db(&db, capture::history)
 }
 
+/// Everyone this book has paid or been paid by, most seen first — what the
+/// merchant field offers as you type.
+#[tauri::command]
+fn known_merchants(db: State<Db>) -> R<Vec<String>> {
+    with_db(&db, |c| capture::known_merchants(c, None))
+}
+
 /// Writes one waiting capture into the ledger, with whatever the Inbox
 /// filled in for what the resolver could not work out.
 #[tauri::command]
@@ -382,15 +446,10 @@ fn skip_plan(db: State<Db>, id: String) -> R<Plan> {
     with_db(&db, |c| plans::skip_plan(c, &id))
 }
 
-/// Writes the posting this cycle describes and points the plan at it.
+/// Writes the posting this cycle was reviewed into and points the plan at it.
 #[tauri::command]
-fn pay_plan(
-    db: State<Db>,
-    id: String,
-    amount: Option<i64>,
-    occurred_at: Option<String>,
-) -> R<Transaction> {
-    with_db(&db, |c| plans::pay_plan(c, &id, amount, occurred_at))
+fn pay_plan(db: State<Db>, id: String, input: TransactionInput) -> R<Transaction> {
+    with_db(&db, |c| plans::pay_plan(c, &id, input))
 }
 
 /// Every turn of every live plan between two dates, paid ones included.
@@ -457,6 +516,17 @@ fn save_debt_payment(db: State<Db>, input: DebtPaymentInput) -> R<()> {
 #[tauri::command]
 fn delete_debt_payment(db: State<Db>, id: String) -> R<()> {
     with_db(&db, |c| db::delete_debt_payment(c, &id))
+}
+
+/// More handed over against a debt already open.
+#[tauri::command]
+fn save_debt_addition(db: State<Db>, input: DebtAdditionInput) -> R<()> {
+    with_db(&db, |c| db::save_debt_addition(c, input))
+}
+
+#[tauri::command]
+fn delete_debt_addition(db: State<Db>, id: String) -> R<()> {
+    with_db(&db, |c| db::delete_debt_addition(c, &id))
 }
 
 #[tauri::command]
@@ -610,17 +680,30 @@ fn export_book(db: State<Db>, to: String) -> R<String> {
 }
 
 /// Reads one back over this book, keeping a copy of what was here beside it.
+///
+/// "Beside it" means beside the book being replaced, not beside the file
+/// being read. A picked file is somewhere we were handed rather than
+/// somewhere we own — on iOS it arrives as a security-scoped URL into another
+/// app's storage, which generally cannot be written next to at all, and even
+/// on the Mac it may be a read-only volume or a download folder that gets
+/// swept. The book's own directory is ours on every platform, and it is where
+/// somebody looking for what they just overwrote would think to look.
 #[tauri::command]
 fn import_book(db: State<Db>, from: String) -> R<String> {
     let source = std::path::PathBuf::from(&from);
-    let backup = source.with_file_name(format!(
+    let name = format!(
         "midas-replaced-{}.sqlite3",
         chrono::Local::now().format("%Y%m%d-%H%M%S")
-    ));
-    with_db(&db, |c| {
+    );
+    let backup = with_db(&db, |c| {
+        // The live connection knows where it was opened from; falling back on
+        // the source's own directory keeps the old behaviour for the case
+        // where it somehow does not.
+        let beside = c.path().map(std::path::PathBuf::from).unwrap_or(source.clone());
+        let backup = beside.with_file_name(&name);
         db::import_book(c, &source, &backup)?;
         let _ = capture::write_book(c);
-        Ok(())
+        Ok(backup)
     })?;
     Ok(backup.to_string_lossy().into_owned())
 }
@@ -682,6 +765,9 @@ pub fn run() {
             delete_transactions,
             overview,
             cards,
+            card_terms,
+            save_card_term,
+            delete_card_term,
             tax_year,
             tax_years,
             tax_map,
@@ -691,6 +777,7 @@ pub fn run() {
             preview_statement_import,
             commit_statement_import,
             list_labels,
+            label_transactions,
             save_label,
             delete_label,
             list_folders,
@@ -702,6 +789,7 @@ pub fn run() {
             sync_captures,
             list_captures,
             capture_history,
+            known_merchants,
             post_capture,
             dismiss_capture,
             capture_paths,
@@ -726,6 +814,8 @@ pub fn run() {
             debt_entries,
             save_debt_payment,
             delete_debt_payment,
+            save_debt_addition,
+            delete_debt_addition,
             list_holdings,
             save_holding,
             delete_holding,

@@ -156,7 +156,7 @@ export function FolderDetail({
             <h1>{folder.name}</h1>
             <p>
               {folder.count === 0
-                ? 'Empty — add the entries it is about'
+                ? 'Nothing in it yet'
                 : `${folder.count} ${folder.count === 1 ? 'entry' : 'entries'} · ${span}`}
               {folder.note && ` · ${folder.note}`}
             </p>
@@ -290,14 +290,8 @@ export function FolderDetail({
         ) : rows.length === 0 ? (
           <div className="card-pad">
             <Empty
-              icon="folder"
               title="Nothing in this folder yet"
-              body="Pick the entries it is about out of the ledger — search, filter, tick as many as you like. They stay exactly where they are; the folder only holds their names."
-              action={
-                <Button tone="primary" icon="plus" onClick={() => setAdding(true)}>
-                  Add entries
-                </Button>
-              }
+              body="Add transactions from anywhere in your ledger. They stay where they are."
             />
           </div>
         ) : (
@@ -325,7 +319,7 @@ export function FolderDetail({
                         {
                           icon: 'folder-minus',
                           label: 'Take out of folder',
-                          hint: 'the entry itself is untouched',
+                          hint: 'the transaction itself is untouched',
                           onClick: () => void removeFromFolder(folder.id, [tx.id]),
                         },
                       ]}
@@ -342,7 +336,7 @@ export function FolderDetail({
         open={adding}
         onClose={() => setAdding(false)}
         title={`Add to ${folder.name}`}
-        subtitle="Tick everything this folder is about — the whole ledger is here, search and filters and all"
+        subtitle="Search your ledger and tick anything you want in this folder"
         pickLabel="Add"
         onPickMany={async (ids) => {
           setAdding(false);
@@ -363,7 +357,7 @@ export function FolderDetail({
         {folder.count > 0
           ? `The ${folder.count} ${
               folder.count === 1 ? 'entry' : 'entries'
-            } in it stay in the ledger exactly as they are — a folder holds names, not money.`
+            } in it stay in the ledger exactly as they are. A folder holds names, not money.`
           : 'Nothing is in it.'}
       </Confirm>
     </div>

@@ -191,7 +191,7 @@ export function PlanSheet({
         subtitle={
           editing
             ? `${money(editing.amount)} ${cadenceSuffix(editing.cadence, editing.every)}`
-            : 'Something that comes round again — a rent, a subscription, a salary.'
+            : 'Something that comes round again: a rent, a subscription, a salary.'
         }
         footer={
           <>
@@ -335,9 +335,8 @@ export function PlanSheet({
               onChange={(e) => setMerchant(e.target.value)}
             />
             <p className="plan-matches">
-              Written on the postings this plan writes, and what the link
-              picker opens on. What the plan counts as paid is only ever what
-              you link to it.
+              Written on the transactions this plan creates, and used to suggest
+              matches when you link payments to it.
             </p>
           </Field>
 
@@ -360,7 +359,7 @@ export function PlanSheet({
         confirmLabel="Delete plan"
       >
         The plan goes. Every payment it has been watching stays exactly where
-        it is in the ledger — this only stops Midas expecting the next one.
+        it is in the ledger. This only stops flow expecting the next one.
       </Confirm>
     </>
   );

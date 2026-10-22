@@ -46,16 +46,18 @@ const TURN_LABEL: Record<Turn, string> = {
  * — none of that can be seen from a row in a list, and all of it is here.
  */
 export function PlanDetail({
-  plan, onBack, onEdit, onLink, onOpenTransaction,
+  plan, onBack, onEdit, onLink, onPay, onOpenTransaction,
 }: {
   plan: Plan;
   onBack: () => void;
   onEdit: () => void;
   /** Opens the sheet for saying which payments belong to this plan. */
   onLink: () => void;
+  /** Opens the cycle that is due, to be checked before it is written. */
+  onPay: () => void;
   onOpenTransaction: (transactionId: string) => void;
 }) {
-  const { revision, payPlan, skipPlan, setPlanArchived, unlinkPlanPosting } = useStore();
+  const { revision, skipPlan, setPlanArchived, unlinkPlanPosting } = useStore();
   const [timeline, setTimeline] = useState<PlanOccurrence[] | null>(null);
   const today = new Date().toISOString().slice(0, 10);
 
@@ -137,7 +139,7 @@ export function PlanDetail({
           <Button icon="link" onClick={onLink}>Link payments</Button>
           <Button icon="pencil" onClick={onEdit}>Edit</Button>
           {plan.status !== 'ended' && !plan.archived && (
-            <Button tone="primary" icon="check" onClick={() => payPlan(plan.id)}>
+            <Button tone="primary" icon="check" onClick={onPay}>
               Mark paid
             </Button>
           )}
@@ -257,10 +259,8 @@ export function PlanDetail({
             <div className="plan-history-loading" />
           ) : stats.count === 0 ? (
             <Empty
-              icon="link"
               title="No payments linked yet"
-              body="A plan counts what you tell it to. Link the payments you have already made and its history, its average and its next date all fill in."
-              action={<Button tone="primary" icon="link" onClick={onLink}>Link payments</Button>}
+              body="Link the payments you have already made to fill in its history."
             />
           ) : (
             <CycleBars occurrences={timeline} today={today} tint={tint} />
@@ -282,7 +282,7 @@ export function PlanDetail({
             <div className="plan-history-loading" />
           ) : timeline.length === 0 ? (
             <div className="card-pad">
-              <Empty icon="repeat" title="Nothing yet" body="No cycle has come round." />
+              <Empty title="Nothing yet" body="No cycle has come round." />
             </div>
           ) : (
             <motion.ul

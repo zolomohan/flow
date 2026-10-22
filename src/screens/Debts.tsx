@@ -1,25 +1,30 @@
 import { useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from '../components/Icon';
-import { Button, Card, Empty, Segmented, type SegmentOption } from '../components/ui';
+import { Button, Empty, Segmented, type SegmentOption } from '../components/ui';
 import { useStore } from '../lib/store';
 import { DebtDetail } from './DebtDetail';
 import { dayLabel, debtProgress, initials, isShareOfBill, money } from '../lib/format';
 import { itemVariants, listVariants, spring } from '../lib/motion';
-import type { Debt, DebtDirection, DebtPayment, Transaction } from '../lib/types';
+import type { Debt, DebtAddition, DebtDirection, DebtPayment, Transaction } from '../lib/types';
 
 /** Which side of the ledger you are looking at. What is done with is not a
  *  third place to look — it is folded under the side it happened on. */
 type DebtTab = DebtDirection;
 
 export function Debts({
-  onNewDebt, onEditDebt, onRecordPayment, onEditPayment, onOpenTransaction,
+  onNewDebt, onEditDebt, onRecordPayment, onEditPayment, onAddMore, onEditAddition,
+  onOpenTransaction,
 }: {
   onNewDebt: (direction: DebtDirection) => void;
   onEditDebt: (debt: Debt) => void;
   onRecordPayment: (debt: Debt) => void;
   /** Opens one of a debt's repayments to change or remove it. */
   onEditPayment: (debt: Debt, payment: DebtPayment) => void;
+  /** More handed over on top of a debt already open. */
+  onAddMore: (debt: Debt) => void;
+  /** Opens one of a debt's additions to change or remove it. */
+  onEditAddition: (debt: Debt, addition: DebtAddition) => void;
   /** Opens one of the entries behind a debt, from the debt itself. */
   onOpenTransaction: (tx: Transaction) => void;
 }) {
@@ -72,6 +77,8 @@ export function Debts({
         onEdit={() => onEditDebt(viewing)}
         onRecordPayment={() => onRecordPayment(viewing)}
         onEditPayment={(payment) => onEditPayment(viewing, payment)}
+        onAddMore={() => onAddMore(viewing)}
+        onEditAddition={(addition) => onEditAddition(viewing, addition)}
         onOpenTransaction={onOpenTransaction}
       />
     );
@@ -100,23 +107,11 @@ export function Debts({
       </header>
 
       {debts.length === 0 ? (
-        <Card>
-          <Empty
-            icon="arrow-left-right"
-            title="No debts tracked"
-            body="Record money you have lent or borrowed. Link it to an existing transaction, or add it on its own if it predates your ledger."
-            action={
-              <div className="welcome-actions">
-                <Button tone="primary" icon="arrow-up-right" onClick={() => onNewDebt('lent')}>
-                  I lent someone
-                </Button>
-                <Button icon="arrow-down-left" onClick={() => onNewDebt('borrowed')}>
-                  I borrowed
-                </Button>
-              </div>
-            }
-          />
-        </Card>
+        <Empty
+          screen
+          title="No debts tracked"
+          body="Money you have lent or borrowed, tracked until it is settled."
+        />
       ) : (
         <>
           <div className="screen-tabs">
@@ -133,26 +128,15 @@ export function Debts({
               transition={{ duration: 0.16 }}
             >
               {showing.length === 0 ? (
-                <Card>
-                  <Empty
-                    icon="arrow-left-right"
-                    title={
-                      tab === 'lent'
-                        ? 'Nobody owes you anything'
-                        : 'You owe nobody anything'
-                    }
-                    body="Record one and it will stand here until it is squared up."
-                    action={
-                      <Button
-                        tone="primary"
-                        icon={tab === 'lent' ? 'arrow-up-right' : 'arrow-down-left'}
-                        onClick={() => onNewDebt(tab)}
-                      >
-                        {tab === 'lent' ? 'I lent someone' : 'I borrowed'}
-                      </Button>
-                    }
-                  />
-                </Card>
+                <Empty
+                  screen
+                  title={
+                    tab === 'lent'
+                      ? 'Nobody owes you anything'
+                      : 'You owe nobody anything'
+                  }
+                  body="Add one and it stays here until it is settled."
+                />
               ) : (
                 <motion.div
                   className="debt-grid"
@@ -166,6 +150,7 @@ export function Debts({
                       debt={debt}
                       onOpen={() => setOpenId(debt.id)}
                       onRecordPayment={() => onRecordPayment(debt)}
+                      onAddMore={() => onAddMore(debt)}
                     />
                   ))}
                 </motion.div>
@@ -179,6 +164,7 @@ export function Debts({
                 debts={past}
                 onOpen={setOpenId}
                 onRecordPayment={onRecordPayment}
+                onAddMore={onAddMore}
               />
             </motion.div>
           </AnimatePresence>
@@ -193,11 +179,12 @@ export function Debts({
  * go, and the debts themselves — opened only when somebody asks for them.
  */
 function SettledSection({
-  debts, onOpen, onRecordPayment,
+  debts, onOpen, onRecordPayment, onAddMore,
 }: {
   debts: Debt[];
   onOpen: (id: string) => void;
   onRecordPayment: (debt: Debt) => void;
+  onAddMore: (debt: Debt) => void;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -267,6 +254,7 @@ function SettledSection({
                   delay={0.08 + i * 0.05}
                   onOpen={() => onOpen(debt.id)}
                   onRecordPayment={() => onRecordPayment(debt)}
+                  onAddMore={() => onAddMore(debt)}
                 />
               ))}
             </div>
@@ -301,11 +289,12 @@ function DebtBar({ bar }: { bar: ReturnType<typeof debtProgress> }) {
 }
 
 function DebtCard({
-  debt, onOpen, onRecordPayment, reveal, delay = 0,
+  debt, onOpen, onRecordPayment, onAddMore, reveal, delay = 0,
 }: {
   debt: Debt;
   onOpen: () => void;
   onRecordPayment: () => void;
+  onAddMore: () => void;
   /** Set inside a fold, which says when the card is on show. Left off in a
    *  plain list, where the list itself brings its cards in. */
   reveal?: boolean;
@@ -369,6 +358,11 @@ function DebtCard({
           {debt.dueOn && !debt.settled && !overdue && (
             <span className="debt-tag">Due {dayLabel(debt.dueOn)}</span>
           )}
+          {debt.additions.length > 0 && (
+            <span className="debt-tag">
+              {debt.additions.length} {debt.additions.length === 1 ? 'top-up' : 'top-ups'}
+            </span>
+          )}
           {debt.payments.length > 0 && (
             <span className="debt-tag">
               {debt.payments.length} {debt.payments.length === 1 ? 'repayment' : 'repayments'}
@@ -384,10 +378,16 @@ function DebtCard({
           )}
         </span>
         {!debt.settled && (
-          <button className="debt-repay" onClick={onRecordPayment}>
-            <Icon name="plus" size={13} strokeWidth={2.4} />
-            Repayment
-          </button>
+          <span className="debt-actions">
+            <button className="debt-repay" onClick={onAddMore}>
+              <Icon name={lent ? 'arrow-up-right' : 'arrow-down-left'} size={13} strokeWidth={2.4} />
+              {lent ? 'Lend more' : 'Borrow more'}
+            </button>
+            <button className="debt-repay" onClick={onRecordPayment}>
+              <Icon name="plus" size={13} strokeWidth={2.4} />
+              Repayment
+            </button>
+          </span>
         )}
       </div>
     </motion.article>

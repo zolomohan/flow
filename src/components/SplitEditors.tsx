@@ -259,7 +259,7 @@ export function SplitLinesEditor({
                     needsNote && !line.note.trim() && amounts[i] > 0 ? 'is-wanted' : ''
                   }`}
                   value={line.note}
-                  placeholder={needsNote ? 'Note — required' : 'Note — optional'}
+                  placeholder={needsNote ? 'Note (required)' : 'Note (optional)'}
                   onChange={(e) => patch(line.key, { note: e.target.value })}
                 />
               </div>
@@ -610,7 +610,7 @@ export function SplitPeopleEditor({
       <div className="person-add">
         <TextInput
           value={name}
-          placeholder="Add someone — Suhruth"
+          placeholder="Add someone"
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => {
             if (e.key !== 'Enter') return;
@@ -636,7 +636,7 @@ export function SplitPeopleEditor({
       {mine < 0 && (
         <p className="split-tally is-over">
           <Icon name="alert-circle" size={13} />
-          The others come to {money(owed)} — more than the {money(amount)} bill, so there is
+          The others come to {money(owed)}, more than the {money(amount)} bill, so there is
           nothing left for your own share.
         </p>
       )}

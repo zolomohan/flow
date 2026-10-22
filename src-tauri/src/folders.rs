@@ -201,9 +201,6 @@ mod tests {
                 opening_balance: opening,
                 color: "#000000".into(),
                 icon: "wallet".into(),
-                credit_limit: 0,
-                statement_day: 0,
-                due_day: 0,
             },
         )
         .unwrap()

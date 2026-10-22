@@ -6,7 +6,7 @@ import { Button, Card, CardHead, Confirm } from '../components/ui';
 import { api } from '../lib/api';
 import { useStore } from '../lib/store';
 import { dayLabel, debtProgress, initials, isShareOfBill, money } from '../lib/format';
-import type { Debt, DebtPayment, Transaction } from '../lib/types';
+import type { Debt, DebtAddition, DebtPayment, Transaction } from '../lib/types';
 
 /** Days between now and a date, said the way you would say it. */
 function since(day: string) {
@@ -24,7 +24,8 @@ function since(day: string) {
  * of hand-offs is the only place the money itself can be read.
  */
 export function DebtDetail({
-  debt, onBack, onEdit, onRecordPayment, onEditPayment, onOpenTransaction,
+  debt, onBack, onEdit, onRecordPayment, onEditPayment, onAddMore, onEditAddition,
+  onOpenTransaction,
 }: {
   debt: Debt;
   onBack: () => void;
@@ -32,6 +33,10 @@ export function DebtDetail({
   onRecordPayment: () => void;
   /** Opens one of the repayments to change or remove it. */
   onEditPayment: (payment: DebtPayment) => void;
+  /** More handed over on top of what is already owed. */
+  onAddMore: () => void;
+  /** Opens one of the additions to change or remove it. */
+  onEditAddition: (addition: DebtAddition) => void;
   onOpenTransaction: (tx: Transaction) => void;
 }) {
   const { revision, deleteDebt, saveDebt } = useStore();
@@ -65,28 +70,40 @@ export function DebtDetail({
 
   // A repayment and the posting that made it are one thing, not two: the row
   // stands for the repayment, and the posting behind it is a click away
-  // inside. Everything else is the money that was handed over in the first
-  // place — which is the whole of a debt written over a run of hand-offs.
+  // inside. An addition is the same, the other way round. Everything else is
+  // the money that was handed over in the first place — which is the whole of
+  // a debt written over a run of hand-offs.
   const byTransaction = new Map(
     debt.payments.filter((p) => p.transactionId).map((p) => [p.transactionId!, p]),
   );
+  const addedBy = new Map(
+    debt.additions.filter((a) => a.transactionId).map((a) => [a.transactionId!, a]),
+  );
+  const handedOver = lent ? 'Lent' : 'Borrowed';
+  const inLedger = (id: string | null) => !!id && (entries ?? []).some((tx) => tx.id === id);
   const rows = [
     ...(entries ?? []).map((tx) => {
       const payment = byTransaction.get(tx.id);
+      const addition = addedBy.get(tx.id);
       return {
         key: tx.id,
         day: tx.occurredAt,
-        amount: payment?.amount ?? tx.amount,
+        amount: payment?.amount ?? addition?.amount ?? tx.amount,
         what: tx.merchant || tx.categoryName || 'Entry',
         detail: tx.note ?? undefined,
-        tag: payment ? 'Repaid' : lent ? 'Lent' : 'Borrowed',
+        tag: payment ? 'Repaid' : handedOver,
         tone: payment ? 'back' : 'out',
-        open: () => (payment ? onEditPayment(payment) : onOpenTransaction(tx)),
+        open: () =>
+          payment
+            ? onEditPayment(payment)
+            : addition
+              ? onEditAddition(addition)
+              : onOpenTransaction(tx),
       };
     }),
     // A repayment recorded on its own, with no posting behind it.
     ...debt.payments
-      .filter((p) => !p.transactionId || !(entries ?? []).some((tx) => tx.id === p.transactionId))
+      .filter((p) => !inLedger(p.transactionId))
       .map((p) => ({
         key: p.id,
         day: p.occurredAt,
@@ -97,12 +114,36 @@ export function DebtDetail({
         tone: 'back' as const,
         open: () => onEditPayment(p),
       })),
+    // And more handed over the same way, in cash or before the ledger began.
+    ...debt.additions
+      .filter((a) => !inLedger(a.transactionId))
+      .map((a) => ({
+        key: a.id,
+        day: a.occurredAt,
+        amount: a.amount,
+        what: a.note ?? a.transactionLabel ?? (lent ? 'Lent more' : 'Borrowed more'),
+        detail: undefined,
+        tag: handedOver,
+        tone: 'out' as const,
+        open: () => onEditAddition(a),
+      })),
   ].sort((a, b) => b.day.localeCompare(a.day));
   const overdue =
     !debt.settled && !!debt.dueOn && debt.dueOn < new Date().toISOString().slice(0, 10);
   // Only worth offering while something is still outstanding: a debt paid to
   // the last rupee has nothing left to forgive.
   const canForgive = !debt.settled && debt.outstanding > 0;
+  // What deleting it takes with it, said in full.
+  const recorded = [
+    debt.payments.length &&
+      `${debt.payments.length} ${debt.payments.length === 1 ? 'repayment' : 'repayments'}`,
+    debt.additions.length &&
+      `${debt.additions.length} ${debt.additions.length === 1 ? 'top-up' : 'top-ups'}`,
+  ]
+    .filter(Boolean)
+    .join(' and ');
+  const addMore = lent ? 'Lend more' : 'Borrow more';
+  const addIcon = lent ? 'arrow-up-right' : 'arrow-down-left';
 
   const forgive = async () => {
     setForgiving(false);
@@ -110,7 +151,8 @@ export function DebtDetail({
       id: debt.id,
       direction: debt.direction,
       counterparty: debt.counterparty,
-      principal: debt.principal,
+      // What it opened at: the additions are their own rows, and stay so.
+      principal: debt.opening,
       openedOn: debt.openedOn,
       dueOn: debt.dueOn,
       note: debt.note,
@@ -131,11 +173,9 @@ export function DebtDetail({
         }}
         onCancel={() => setConfirming(false)}
       >
-        {debt.payments.length > 0
-          ? `${money(debt.principal)} with ${debt.counterparty}, and the ${debt.payments.length} ${
-              debt.payments.length === 1 ? 'repayment' : 'repayments'
-            } against it. The postings in your ledger stay. This cannot be undone.`
-          : `${money(debt.principal)} with ${debt.counterparty}. The postings in your ledger stay. This cannot be undone.`}
+        {recorded
+          ? `${money(debt.principal)} with ${debt.counterparty}, and the ${recorded} against it. The transactions in your ledger stay. This cannot be undone.`
+          : `${money(debt.principal)} with ${debt.counterparty}. The transactions in your ledger stay. This cannot be undone.`}
       </Confirm>
 
       <Confirm
@@ -175,6 +215,9 @@ export function DebtDetail({
             <Button icon="heart-handshake" onClick={() => setForgiving(true)}>
               {lent ? 'Forgive' : 'Write off'}
             </Button>
+          )}
+          {!debt.settled && (
+            <Button icon={addIcon} onClick={onAddMore}>{addMore}</Button>
           )}
           {!debt.settled && (
             <Button tone="primary" icon="plus" onClick={onRecordPayment}>
@@ -246,7 +289,15 @@ export function DebtDetail({
         </div>
 
         <div className="detail-figures">
-          <Figure label="Principal" value={money(debt.principal)} hint={lent ? 'you handed over' : 'they handed over'} />
+          <Figure
+            label="Principal"
+            value={money(debt.principal)}
+            hint={
+              debt.additions.length
+                ? `${money(debt.opening)}, then ${debt.additions.length} more`
+                : lent ? 'you handed over' : 'they handed over'
+            }
+          />
           <Figure label="Repaid" value={money(debt.paid)} hint={`${debt.payments.length} ${debt.payments.length === 1 ? 'payment' : 'payments'}`} />
           <Figure
             label={debt.settled ? 'Forgiven' : 'Outstanding'}
@@ -274,7 +325,10 @@ export function DebtDetail({
             }
             action={
               debt.settled ? undefined : (
-                <Button size="sm" icon="plus" onClick={onRecordPayment}>Repayment</Button>
+                <div className="head-actions">
+                  <Button size="sm" icon={addIcon} onClick={onAddMore}>{addMore}</Button>
+                  <Button size="sm" icon="plus" onClick={onRecordPayment}>Repayment</Button>
+                </div>
               )
             }
           />

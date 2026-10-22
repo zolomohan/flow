@@ -28,13 +28,19 @@ export interface Account {
   /** The book's own account rather than one of yours — the one every debt
    *  runs through. Not shown among your accounts, and not editable. */
   system: boolean;
-  /** Credit limit for a card, in paise. Zero means it isn't tracked. */
+  /**
+   * The card's terms as they stand today, all three derived from the changes
+   * recorded against it ([[CardTerm]]) — the account is where they are read
+   * from, never where they are written.
+   *
+   * Zero on any of them means it was never recorded: no limit tracked, or no
+   * cycle kept, in which case the card reads by the calendar month.
+   */
   creditLimit: Paise;
-  /** The day of the month a card's statement closes, 1–31; 0 means the cycle
-   *  isn't tracked and the card reads by calendar month. */
+  /** The day of the month the statement closes, 1–31. */
   statementDay: number;
   /** The day the bill has to be paid by, counted from the statement: the
-   *  first such day after the cycle closed. 0 means it isn't tracked. */
+   *  first such day after the cycle closed. */
   dueDay: number;
 }
 
@@ -46,10 +52,8 @@ export interface AccountInput {
   openingBalance: Paise;
   color: string;
   icon: string;
-  creditLimit: Paise;
-  /** Both only mean anything on a card; 0 on either leaves it untracked. */
-  statementDay?: number;
-  dueDay?: number;
+  // No limit and no cycle days: a card's terms are the dated changes recorded
+  // against it ([[CardTerm]]), and saving this form never touches them.
 }
 
 export interface Category {
@@ -110,6 +114,9 @@ export interface Transaction {
   shares: TransactionShare[];
   /** Labels pinned on top — "Triage" on unverified imports, say. */
   labels: TxLabel[];
+  /** The folders keeping this posting. A folder is a collection it belongs
+   *  to rather than a filing or a pin, so the row names them. */
+  folders: TxFolder[];
   /**
    * The posting this one gives back, when it is a refund. A refund undoes
    * what it names rather than being money of its own: the two cancel, and
@@ -125,6 +132,14 @@ export interface Transaction {
 }
 
 /** A label as it sits on a posting. */
+/** One folder, as a posting inside it knows it. */
+export interface TxFolder {
+  id: string;
+  name: string;
+  color: string;
+  icon: string;
+}
+
 export interface TxLabel {
   id: string;
   name: string;
@@ -270,6 +285,26 @@ export interface CardCycle {
   open: boolean;
 }
 
+/**
+ * A day a card's terms changed, and what they changed to. Recorded by hand —
+ * nothing in the book says what the limit was two years ago, or which day the
+ * statement closed on before the bank moved it, and without that every old
+ * cycle reads against the card as it stands today.
+ *
+ * A term left null is one this change said nothing about: it carries forward
+ * from whatever came before it.
+ */
+export interface CardTerm {
+  id: string;
+  accountId: string;
+  /** The plain day these terms began, and stood until the next. */
+  effectiveOn: string;
+  creditLimit: Paise | null;
+  statementDay: number | null;
+  dueDay: number | null;
+  note: string | null;
+}
+
 /** One card, and everything the tab says about it. */
 export interface CardStat {
   id: string;
@@ -284,6 +319,10 @@ export interface CardStat {
   creditLimit: Paise;
   /** Limit less outstanding. Zero when no limit is set. */
   available: Paise;
+  /** The limit as it stood at the end of the window this card was read over:
+   *  today's limit for a window running up to now, and the older figure for
+   *  one that has closed. */
+  windowCreditLimit: Paise;
   statementDay: number;
   dueDay: number;
   /** Null on a card whose cycle isn't tracked. */
@@ -530,12 +569,21 @@ export interface DebtPaymentInput {
   cashAccountId?: string | null;
 }
 
+/** More money handed over against a debt already open. Shaped exactly like
+ *  a repayment, and differing only in which way the money went. */
+export type DebtAddition = DebtPayment;
+export type DebtAdditionInput = DebtPaymentInput;
+
 export interface Debt {
   id: string;
   /** lent = they owe you · borrowed = you owe them */
   direction: DebtDirection;
   counterparty: string;
+  /** Everything handed over: what it opened at, and every addition since. */
   principal: Paise;
+  /** What the debt opened at, before anything was added to it — the figure
+   *  the form for editing the debt changes. */
+  opening: Paise;
   openedOn: string;
   dueOn: string | null;
   note: string | null;
@@ -546,9 +594,11 @@ export interface Debt {
   /** True when this debt is one person's share of a split bill. */
   fromSplit: boolean;
   paid: Paise;
+  added: Paise;
   outstanding: Paise;
   settled: boolean;
   payments: DebtPayment[];
+  additions: DebtAddition[];
 }
 
 export interface DebtInput {

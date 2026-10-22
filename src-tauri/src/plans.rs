@@ -565,54 +565,30 @@ pub fn skip_plan(conn: &Connection, id: &str) -> Result<Plan> {
     get_plan(conn, id)
 }
 
-/// Records the cycle as paid by writing the posting it describes, and links
-/// that posting to the plan — which is the only way anything ever counts.
-pub fn pay_plan(
-    conn: &Connection,
-    id: &str,
-    amount: Option<Paise>,
-    occurred_at: Option<String>,
-) -> Result<Transaction> {
-    let row = get_row(conn, id)?;
-    let plan = hydrate(conn, row)?;
-    let Some(account_id) = plan.account_id.clone() else {
-        return Err("Say which account this comes out of before paying it.".into());
-    };
-    // What the plan is for. Past payments being lower does not make the next
-    // one lower — that is the difference between what a thing costs and what
-    // it happened to cost.
-    let amount = amount.unwrap_or(plan.amount);
-    if amount <= 0 {
-        return Err("How much was it?".into());
+/// Records the cycle as paid by writing the posting it was reviewed into, and
+/// links that posting to the plan — which is the only way anything ever
+/// counts.
+///
+/// The posting arrives whole rather than being made up here from the plan.
+/// What a plan says it costs and what was actually paid are different things
+/// often enough — a bill that came in higher, a day it went out late, a
+/// subscription paid from another card this once — that writing the plan's
+/// version down unasked only meant correcting it afterwards. So the form opens
+/// on what the plan describes, and what is saved is whatever it says when it
+/// is confirmed. The two are written together: a posting the plan does not
+/// know about would leave the cycle looking unpaid with the money already
+/// gone.
+pub fn pay_plan(conn: &Connection, id: &str, input: TransactionInput) -> Result<Transaction> {
+    if input.id.is_some() {
+        return Err("Paying a plan writes a new transaction — link an existing one instead.".into());
     }
-    // The day it fell due, unless told otherwise — a bill paid on time is
-    // the ordinary case, and re-typing today's date for it is busywork.
-    let when = occurred_at
-        .or_else(|| plan.next_due.clone().map(|d| format!("{d}T09:00")))
-        .unwrap_or_else(|| Utc::now().format("%Y-%m-%dT%H:%M").to_string());
-
+    // The plan has to exist before anything is written for it.
+    get_row(conn, id)?;
     let guard = conn.unchecked_transaction().map_err(oops)?;
-    let tx = db::save_transaction(
-        conn,
-        TransactionInput {
-            id: None,
-            kind: plan.kind.clone(),
-            amount,
-            account_id,
-            to_account_id: plan.to_account_id.clone(),
-            category_id: plan.category_id.clone(),
-            merchant: if plan.merchant.is_empty() { plan.name.clone() } else { plan.merchant.clone() },
-            note: plan.note.clone(),
-            occurred_at: when,
-            splits: None,
-            shares: None,
-            label_ids: None,
-            refund_of: None,
-        },
-    )?;
+    let tx = db::save_transaction(conn, input)?;
     conn.execute(
         "INSERT INTO plan_entries (plan_id, transaction_id) VALUES (?1, ?2)",
-        params![plan.id, tx.id],
+        params![id, tx.id],
     )
     .map_err(oops)?;
     guard.commit().map_err(oops)?;
@@ -1073,5 +1049,76 @@ mod tests {
         assert!(!timeline[2].paid, "two payments do not fill three cycles");
         drop(conn);
         let _ = std::fs::remove_file(path);
+    }
+
+    /// Paying a plan writes what the review said, not what the plan said: a
+    /// bill that came in higher and went out a day late is saved as exactly
+    /// that, and still counts as the cycle it was for.
+    #[test]
+    fn paying_a_plan_writes_what_was_reviewed() {
+        let (conn, path) = book();
+        let account = seed_account(&conn);
+        let due = today();
+        let plan = save_plan(&conn, a_plan("Electricity", "BESCOM", 120_000, due)).unwrap();
+
+        let tx = pay_plan(
+            &conn,
+            &plan.id,
+            TransactionInput {
+                id: None,
+                kind: "expense".into(),
+                amount: 134_500,
+                account_id: account.clone(),
+                to_account_id: None,
+                category_id: None,
+                merchant: "BESCOM".into(),
+                note: Some("the summer bill".into()),
+                occurred_at: format!("{}T18:30", due + Duration::days(1)),
+                splits: None,
+                shares: None,
+                label_ids: None,
+                refund_of: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(tx.amount, 134_500);
+        assert_eq!(tx.note.as_deref(), Some("the summer bill"));
+        assert!(tx.occurred_at.starts_with(&(due + Duration::days(1)).to_string()));
+
+        // Linked as it was written, so the cycle reads as paid and the rise
+        // is there to be seen.
+        let plan = get_plan(&conn, &plan.id).unwrap();
+        assert_eq!(plan.paid_count, 1);
+        assert_eq!(plan.last_amount, 134_500);
+        assert_eq!(plan.next_due, Some(add_months(due, 1).to_string()));
+
+        // Paying with a posting that is already in the book is linking, and
+        // is refused here rather than quietly rewriting it.
+        let again = pay_plan(
+            &conn,
+            &plan.id,
+            TransactionInput { id: Some(tx.id.clone()), ..input_of(&tx) },
+        );
+        assert!(again.is_err());
+        drop(conn);
+        let _ = std::fs::remove_file(path);
+    }
+
+    fn input_of(tx: &Transaction) -> TransactionInput {
+        TransactionInput {
+            id: None,
+            kind: tx.kind.clone(),
+            amount: tx.amount,
+            account_id: tx.account_id.clone(),
+            to_account_id: tx.to_account_id.clone(),
+            category_id: tx.category_id.clone(),
+            merchant: tx.merchant.clone(),
+            note: tx.note.clone(),
+            occurred_at: tx.occurred_at.clone(),
+            splits: None,
+            shares: None,
+            label_ids: None,
+            refund_of: None,
+        }
     }
 }

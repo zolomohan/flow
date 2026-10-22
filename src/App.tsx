@@ -1,16 +1,17 @@
 import {
-  useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
+  useCallback, useEffect, useLayoutEffect, useRef, useState,
   type MutableRefObject, type ReactNode,
 } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { INVESTMENT_TABS, Sidebar, isInvestmentRoute, type Route } from './components/Sidebar';
+import { MobileBar, MoreSheet, TabBar } from './components/MobileChrome';
 import { api } from './lib/api';
 import { CommandPalette } from './components/CommandPalette';
 import {
   TransactionSheet, type SplitFocus, type TxDraft,
 } from './components/TransactionSheet';
 import { AccountSheet } from './components/AccountSheet';
-import { DebtSheet, DebtPaymentSheet } from './components/DebtSheet';
+import { DebtSheet, DebtPaymentSheet, type DebtMovement } from './components/DebtSheet';
 import { HoldingSheet, LotSheet } from './components/HoldingSheet';
 import { PlanSheet, type PlanDraft } from './components/PlanSheet';
 import { PlanLinkSheet } from './components/PlanLinkSheet';
@@ -31,6 +32,7 @@ import { Labels } from './screens/Labels';
 import { Templates } from './screens/Templates';
 import { Settings } from './screens/Settings';
 import { StoreProvider, useStore } from './lib/store';
+import { usePhone } from './lib/media';
 import { screenVariants } from './lib/motion';
 import type {
   Account,
@@ -187,11 +189,19 @@ function ScrollPane({
   );
 }
 
+/* How long the splash stays: 140ms before the first stroke, 1150ms writing,
+   then a beat to read it. Kept in step with the keyframes in index.html. */
+const SPLASH_MS = 1850;
+const SPLASH_EXIT_MS = 420;
+
 function Shell() {
-  const { ready, fatal, accounts, labels } = useStore();
+  const { ready, fatal, accounts } = useStore();
   const {
     route, stop, marks, navigate: setRoute, back, forward, canBack, canForward,
   } = useHistory('overview');
+  // Which shell is drawing: a sidebar down the side, or a bar top and bottom.
+  const phone = usePhone();
+  const [moreOpen, setMoreOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [txOpen, setTxOpen] = useState(false);
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
@@ -202,9 +212,14 @@ function Shell() {
   const [debtOpen, setDebtOpen] = useState(false);
   const [editingDebt, setEditingDebt] = useState<Debt | null>(null);
   const [debtDirection, setDebtDirection] = useState<DebtDirection>('lent');
-  // The repayment sheet's subject: whose debt, and which repayment when one
-  // is being changed rather than added.
-  const [paying, setPaying] = useState<{ debt: Debt; payment: DebtPayment | null } | null>(null);
+  // The repayment sheet's subject: whose debt, which way the money went —
+  // back, or more of it handed over — and which entry when one is being
+  // changed rather than added.
+  const [paying, setPaying] = useState<{
+    debt: Debt;
+    kind: DebtMovement;
+    payment: DebtPayment | null;
+  } | null>(null);
   // The plan sheet's subject: the one being changed, or nothing when a new
   // one is being written.
   const [planOpen, setPlanOpen] = useState(false);
@@ -299,6 +314,16 @@ function Shell() {
     setTxOpen(true);
   }, []);
 
+  // Paying a plan is a new transaction too, opened as the plan describes the
+  // cycle — and written only once somebody has checked it against what was
+  // actually paid.
+  const payPlan = useCallback(
+    (plan: Plan) => {
+      newTransaction({ plan });
+    },
+    [newTransaction],
+  );
+
   // A template is a new transaction with the form already filled in — the
   // same sheet, opened on a shape somebody kept.
   const useTemplate = useCallback(
@@ -323,18 +348,21 @@ function Shell() {
     setRoute('transactions');
   }, [setRoute]);
 
+  // A focus is an instruction given on the way to a screen, not a setting the
+  // screen holds. Once the ledger has acted on one it is dropped, so coming
+  // back later opens on the filters you left rather than on the ones you were
+  // sent with — and cleared before that.
+  const forgetFocus = useCallback(() => {
+    const spend = (f: { token: number }) => f.token !== 0;
+    setAccountFocus((f) => (spend(f) ? { ids: [], token: 0 } : f));
+    setCategoryFocus((f) => (spend(f) ? { ids: [], token: 0 } : f));
+    setLabelFocus((f) => (spend(f) ? { ids: [], token: 0 } : f));
+  }, []);
+
   const openLabelTransactions = useCallback((labelId: string) => {
     setLabelFocus((f) => ({ ids: [labelId], token: f.token + 1 }));
     setRoute('transactions');
   }, [setRoute]);
-
-  // Every spoken posting keeps the Siri label, so "what I said out loud" is
-  // one label away from anywhere that asks.
-  const siriLabel = labels.find((l) => l.name === 'Siri');
-  const openSiriLabel = useMemo(
-    () => (siriLabel ? () => openLabelTransactions(siriLabel.id) : undefined),
-    [siriLabel, openLabelTransactions],
-  );
 
   // Each sleeve is a route of its own, so arriving from a gold card lands on
   // gold and the sidebar says so.
@@ -424,55 +452,145 @@ function Shell() {
     return () => window.removeEventListener('keydown', onKey);
   }, [newTransaction, setRoute, back, forward]);
 
+  /* Back, by dragging in from the left edge — the gesture every iOS app has,
+     pointed at the trail ⌘[ already walks. It is deliberately narrow-minded:
+     the drag has to start within 22pt of the edge, travel mostly sideways,
+     and finish before the thumb has had time to mean something else. A screen
+     with its own horizontal scrolling — a rail of chips, a wide table — sits
+     past that 22pt strip and is never in the running. */
+  useEffect(() => {
+    if (!phone) return;
+    let from: { x: number; y: number; at: number } | null = null;
+
+    const onStart = (e: TouchEvent) => {
+      const touch = e.touches[0];
+      from = touch && touch.clientX <= 22
+        ? { x: touch.clientX, y: touch.clientY, at: performance.now() }
+        : null;
+    };
+    const onEnd = (e: TouchEvent) => {
+      const start = from;
+      from = null;
+      const touch = e.changedTouches[0];
+      if (!start || !touch) return;
+      const dx = touch.clientX - start.x;
+      const dy = Math.abs(touch.clientY - start.y);
+      if (dx > 68 && dy < 46 && performance.now() - start.at < 700) back();
+    };
+
+    window.addEventListener('touchstart', onStart, { passive: true });
+    window.addEventListener('touchend', onEnd, { passive: true });
+    return () => {
+      window.removeEventListener('touchstart', onStart);
+      window.removeEventListener('touchend', onEnd);
+    };
+  }, [phone, back]);
+
+  /* How much of the window the keyboard is sitting on, published as `--kb`.
+     WKWebView does not resize the viewport when the keyboard comes up — the
+     page keeps its full height and the bottom of it is simply covered — so a
+     sheet's footer, and the field being typed into, end up underneath it.
+     `visualViewport` is the only thing that knows, and this is the only place
+     that has to ask. */
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const root = document.documentElement;
+    const sync = () => {
+      const covered = window.innerHeight - vv.height - vv.offsetTop;
+      root.style.setProperty('--kb', `${Math.max(0, Math.round(covered))}px`);
+    };
+    sync();
+    vv.addEventListener('resize', sync);
+    vv.addEventListener('scroll', sync);
+    return () => {
+      vv.removeEventListener('resize', sync);
+      vv.removeEventListener('scroll', sync);
+      root.style.removeProperty('--kb');
+    };
+  }, []);
+
+  /* The splash painted by index.html hands over to the app. The book usually
+     opens faster than the wordmark finishes writing itself, so the splash is
+     held to its full length rather than cut off mid-stroke. It is dismissed on
+     `fatal` too, so an error is never left sitting behind it. */
+  useEffect(() => {
+    if (!ready && !fatal) return;
+    const splash = document.getElementById('splash');
+    if (!splash) return;
+
+    /* performance.now() is time since the document loaded, which is when the
+       splash first painted — so it is the elapsed time without a global. */
+    const wait = Math.max(0, SPLASH_MS - performance.now());
+    let bail = 0;
+    const done = () => splash.remove();
+
+    const leave = window.setTimeout(() => {
+      splash.classList.add('is-gone');
+      splash.addEventListener('transitionend', done, { once: true });
+      bail = window.setTimeout(done, SPLASH_EXIT_MS + 200);
+    }, wait);
+
+    return () => {
+      window.clearTimeout(leave);
+      window.clearTimeout(bail);
+    };
+  }, [ready, fatal]);
+
   if (!ready) {
     return (
       <div className="boot">
-        <motion.span
-          className="boot-mark"
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.4 }}
-        >
-          M
-        </motion.span>
+        <span className="boot-mark">flow</span>
       </div>
     );
   }
 
   if (fatal) {
     return (
-      <div className="boot">
+      <div className="boot boot-failed">
         <div className="boot-error">
-          <Empty icon="alert-circle" title="Midas could not open your book" body={fatal} />
+          <Empty title="flow could not open your book" body={fatal} />
         </div>
       </div>
     );
   }
 
   return (
-    <div className="app">
-      <Sidebar
-        route={route}
-        onNavigate={setRoute}
-        onBack={back}
-        onForward={forward}
-        canBack={canBack}
-        canForward={canForward}
-        onAdd={() => newTransaction()}
-        onSearch={() => setPaletteOpen(true)}
-      />
+    <div className={`app ${phone ? 'is-phone' : ''}`}>
+      {phone ? (
+        <MobileBar
+          onBack={back}
+          onForward={forward}
+          canBack={canBack}
+          canForward={canForward}
+          onSearch={() => setPaletteOpen(true)}
+        />
+      ) : (
+        <Sidebar
+          route={route}
+          onNavigate={setRoute}
+          onBack={back}
+          onForward={forward}
+          canBack={canBack}
+          canForward={canForward}
+          onAdd={() => newTransaction()}
+          onSearch={() => setPaletteOpen(true)}
+        />
+      )}
 
       <main className="main">
-        <div className="titlebar-drag main-drag" data-tauri-drag-region />
+        {/* A strip the window is dragged by, which a phone has no use for —
+            and which would otherwise sit over the top of every screen
+            swallowing the taps meant for it. */}
+        {!phone && <div className="titlebar-drag main-drag" data-tauri-drag-region />}
         <AnimatePresence mode="wait">
           <ScrollPane key={stop} stop={stop} marks={marks}>
             {accounts.length === 0 && route !== 'settings' ? (
               <div className="screen">
                 <div className="welcome">
                   <Empty
-                    icon="sparkles"
-                    title="Welcome to Midas"
-                    body="Start with an account of your own, or bring a book you have already kept somewhere else."
+                    title="Welcome to flow"
+                    body="A bank, a card, a wallet: wherever your money sits."
                     action={
                       <div className="welcome-actions">
                         <Button tone="primary" icon="plus" onClick={newAccount}>
@@ -505,12 +623,14 @@ function Shell() {
                 accountFocus={accountFocus}
                 categoryFocus={categoryFocus}
                 labelFocus={labelFocus}
+                onFocusUsed={forgetFocus}
               />
             ) : route === 'planned' ? (
               <Planned
                 onNewPlan={newPlan}
                 onEditPlan={editPlan}
                 onLinkPlan={setLinkingPlan}
+                onPayPlan={payPlan}
                 onOpenTransaction={openTransactionById}
               />
             ) : route === 'accounts' ? (
@@ -529,8 +649,12 @@ function Shell() {
               <Debts
                 onNewDebt={newDebt}
                 onEditDebt={editDebt}
-                onRecordPayment={(debt) => setPaying({ debt, payment: null })}
-                onEditPayment={(debt, payment) => setPaying({ debt, payment })}
+                onRecordPayment={(debt) => setPaying({ debt, kind: 'repayment', payment: null })}
+                onEditPayment={(debt, payment) => setPaying({ debt, kind: 'repayment', payment })}
+                onAddMore={(debt) => setPaying({ debt, kind: 'addition', payment: null })}
+                onEditAddition={(debt, addition) =>
+                  setPaying({ debt, kind: 'addition', payment: addition })
+                }
                 onOpenTransaction={openTransaction}
               />
             ) : isInvestmentRoute(route) ? (
@@ -542,7 +666,7 @@ function Shell() {
                 onEditLot={(holding, lot) => setLotTarget({ holding, lot })}
               />
             ) : route === 'siri' ? (
-              <Siri onShowInLedger={openSiriLabel} onOpenTransaction={openTransactionById} />
+              <Siri onOpenTransaction={openTransactionById} />
             ) : route === 'categories' ? (
               <Categories onOpenCategory={openCategoryTransactions} />
             ) : route === 'labels' ? (
@@ -589,6 +713,7 @@ function Shell() {
         open={!!paying}
         onClose={() => setPaying(null)}
         debt={paying?.debt ?? null}
+        kind={paying?.kind}
         editing={paying?.payment ?? null}
         onOpenTransaction={openTransactionById}
       />
@@ -615,6 +740,27 @@ function Shell() {
         holding={lotTarget?.holding ?? null}
         editing={lotTarget?.lot}
       />
+      {phone && (
+        <>
+          <TabBar
+            route={route}
+            onNavigate={(next) => {
+              setMoreOpen(false);
+              setRoute(next);
+            }}
+            onAdd={() => newTransaction()}
+            onMore={() => setMoreOpen((open) => !open)}
+            moreOpen={moreOpen}
+          />
+          <MoreSheet
+            open={moreOpen}
+            onClose={() => setMoreOpen(false)}
+            route={route}
+            onNavigate={setRoute}
+          />
+        </>
+      )}
+
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}

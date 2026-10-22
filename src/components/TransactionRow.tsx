@@ -186,6 +186,21 @@ export function TransactionRow({
                 {givenBack === 'all' ? 'Refunded' : `${money(tx.refunded)} back`}
               </span>
             )}
+          </span>
+          <span className="tx-sub">
+            {subtitle}
+            {tx.note && (
+              <span className="tx-note" title={tx.note}>
+                {tx.note}
+              </span>
+            )}
+          </span>
+        </span>
+        {/* Pins and collections sit beside the figure rather than beside the
+            payee: they are things put on a posting afterwards, and a name
+            that has to end early to make room for them is the row's own
+            words giving way to somebody's filing. */}
+        <span className="tx-tags">
             {/* Silent labels are pinned and filterable, and drawn nowhere:
                 they are a way of asking the ledger a question, not a mark to
                 be read off a row. */}
@@ -198,15 +213,20 @@ export function TransactionRow({
                 {label.name}
               </span>
             ))}
-          </span>
-          <span className="tx-sub">
-            {subtitle}
-            {tx.note && (
-              <span className="tx-note" title={tx.note}>
-                {tx.note}
+            {/* A folder is a collection rather than a pin, so it is squared
+                off where a label is rounded — the shapes say which is which
+                before the words are read. */}
+            {tx.folders.map((folder) => (
+              <span
+                key={folder.id}
+                className="tx-folder"
+                style={{ ['--tint' as any]: folder.color }}
+                title={`In ${folder.name}`}
+              >
+                <Icon name={folder.icon || 'folder'} size={10} strokeWidth={2.4} />
+                {folder.name}
               </span>
-            )}
-          </span>
+            ))}
         </span>
         <span className="tx-right">
           <Amount value={tx.amount} kind={tx.kind} />
@@ -247,7 +267,7 @@ export function TransactionRow({
               ? [{
                   icon: 'undo-2',
                   label: 'Refund it',
-                  hint: 'give it back — neither will count',
+                  hint: 'record a refund, neither will count',
                   onClick: onRefund,
                 }]
               : []),

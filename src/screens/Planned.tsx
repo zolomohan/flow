@@ -19,15 +19,18 @@ const tint = (plan: Plan) =>
   plan.categoryColor ?? (plan.kind === 'income' ? 'var(--green)' : 'var(--ink-3)');
 
 export function Planned({
-  onNewPlan, onEditPlan, onLinkPlan, onOpenTransaction,
+  onNewPlan, onEditPlan, onLinkPlan, onPayPlan, onOpenTransaction,
 }: {
   onNewPlan: (draft?: PlanDraft) => void;
   onEditPlan: (plan: Plan) => void;
   /** Opens the sheet for saying which payments belong to a plan. */
   onLinkPlan: (plan: Plan) => void;
+  /** Opens the cycle that is due, filled in from the plan, to be checked
+   *  before anything is written. */
+  onPayPlan: (plan: Plan) => void;
   onOpenTransaction: (transactionId: string) => void;
 }) {
-  const { plans, revision, skipPlan, payPlan, setPlanArchived } = useStore();
+  const { plans, revision, skipPlan, setPlanArchived } = useStore();
   // Held by id rather than by object, so the open page follows the plan
   // through every write the store makes.
   const [openId, setOpenId] = useState<string | null>(null);
@@ -62,6 +65,7 @@ export function Planned({
         onBack={() => setOpenId(null)}
         onEdit={() => onEditPlan(viewing)}
         onLink={() => onLinkPlan(viewing)}
+        onPay={() => onPayPlan(viewing)}
         onOpenTransaction={onOpenTransaction}
       />
     );
@@ -75,7 +79,7 @@ export function Planned({
           <p>
             {live.length
               ? `${live.length} running · ${money(committed)} a month committed · ${money(yearly)} a year`
-              : 'Rent, subscriptions, EMIs — the money that comes round again.'}
+              : 'Rent, subscriptions, EMIs: the money that comes round again.'}
           </p>
         </div>
         <div className="head-actions">
@@ -95,12 +99,11 @@ export function Planned({
                 : `${lapsed.length} plans look finished`}
             </strong>
             <p>
-              {lapsed.length === 1 ? 'It was' : 'They were'} being paid, and
-              then three cycles went by with nothing against{' '}
-              {lapsed.length === 1 ? 'it' : 'them'}. Putting{' '}
+              Nothing has been paid against{' '}
+              {lapsed.length === 1 ? 'it' : 'them'} for three cycles. Putting{' '}
               {lapsed.length === 1 ? 'it' : 'them'} away stops{' '}
-              {lapsed.length === 1 ? 'it' : 'them'} counting toward what you
-              owe each month.
+              {lapsed.length === 1 ? 'it' : 'them'} counting toward your monthly
+              total.
             </p>
           </div>
           <Button
@@ -113,18 +116,11 @@ export function Planned({
       )}
 
       {plans.length === 0 ? (
-        <Card>
-          <Empty
-            icon="repeat"
-            title="Nothing planned yet"
-            body="Write down what comes round again — the rent, a subscription, the SIP — then link the payments you have already made to it."
-            action={
-              <Button tone="primary" icon="plus" onClick={() => onNewPlan()}>
-                Add a planned payment
-              </Button>
-            }
-          />
-        </Card>
+        <Empty
+          screen
+          title="Nothing planned yet"
+          body="Rent, a subscription, an EMI: the money that comes round again."
+        />
       ) : (
         <>
           <Card padded={false} className="plan-cal-card">
@@ -142,7 +138,7 @@ export function Planned({
             onOpen={setOpenId}
             onEdit={onEditPlan}
             onLink={onLinkPlan}
-            onPay={(plan) => payPlan(plan.id)}
+            onPay={onPayPlan}
             onSkip={(plan) => skipPlan(plan.id)}
             onArchive={(plan) => setPlanArchived(plan.id, true)}
             onOpenTransaction={onOpenTransaction}
@@ -196,13 +192,11 @@ function Upcoming({
 
   if (!shelves.length) {
     return (
-      <Card>
-        <Empty
-          icon="check-check"
-          title="Nothing coming"
-          body="Every plan you keep is either finished or put away."
-        />
-      </Card>
+      <Empty
+        screen
+        title="Nothing coming"
+        body="Every plan you keep is either finished or put away."
+      />
     );
   }
 

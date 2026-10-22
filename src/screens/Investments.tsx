@@ -33,8 +33,7 @@ const TITLES: Record<InvestmentTab, string> = {
 const BLURBS: Record<InvestmentTab, string> = {
   fund: 'Units valued at their latest NAV.',
   gold: "Weighed by the gram, valued at today's rate.",
-  deposit:
-    'Fixed and recurring deposits, earning at the rate you were quoted — compounded quarterly, and stopping at maturity.',
+  deposit: 'Fixed and recurring deposits, earning until they mature.',
 };
 
 /** Which finenesses the rate can be read at. Jewellery is bought at 22K, so
@@ -89,10 +88,23 @@ export function Investments({
   const backfilled = useRef(false);
   useEffect(() => {
     let live = true;
-    api
-      .holdingValueSeriesAll(CARD_DAYS)
-      .then((lines) => {
+    // The year for everything, and the whole line for anything closed. A
+    // holding sold out of two years ago has nothing inside a one-year window,
+    // and a card that says "a line appears once prices are fetched" about a
+    // fund with three thousand prices behind it is blaming the wrong thing.
+    const shut = holdings.filter((h) => h.closed).map((h) => h.id);
+    Promise.all([
+      api.holdingValueSeriesAll(CARD_DAYS),
+      shut.length
+        ? api.holdingValueSeriesAll(null)
+        : Promise.resolve({} as Record<string, ValuePoint[]>),
+    ])
+      .then(([recent, everything]) => {
         if (!live) return;
+        const lines = { ...recent };
+        for (const id of shut) {
+          if (everything[id]?.length) lines[id] = everything[id];
+        }
         setSeries(lines);
         const bare = Object.values(lines).every((line) => line.length < 2);
         if (bare && holdings.length && !backfilled.current) {
@@ -105,6 +117,7 @@ export function Investments({
     return () => {
       live = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revision, holdings.length, refreshPrices]);
 
   // The rate behind the gold tile, at whatever fineness it is being read at.
@@ -227,23 +240,11 @@ export function Investments({
       </header>
 
       {holdings.length === 0 ? (
-        <Card>
-          <Empty
-            icon="piggy-bank"
-            title="Nothing tracked yet"
-            body="Add gold by the gram, or a mutual fund by its scheme. Midas fetches the price and values it alongside your accounts."
-            action={
-              <div className="welcome-actions">
-                <Button icon="trending-up" tone="primary" onClick={() => onNewHolding('fund')}>
-                  Add a fund
-                </Button>
-                <Button icon="coins" onClick={() => onNewHolding('gold')}>
-                  Add gold
-                </Button>
-              </div>
-            }
-          />
-        </Card>
+        <Empty
+          screen
+          title="Nothing tracked yet"
+          body="Gold by the gram, or a mutual fund by its scheme. Both priced daily."
+        />
       ) : (
         <AnimatePresence mode="wait" initial={false}>
           <motion.div
@@ -327,7 +328,7 @@ export function Investments({
                 title="Your gold"
                 hint={
                   purity === null
-                    ? 'what the metal you hold has been worth, day by day'
+                    ? 'your gold, day by day'
                     : `what your ${carats(purity)} has been worth, day by day`
                 }
                 tint="var(--amber)"
@@ -348,29 +349,29 @@ export function Investments({
                     />
                   ) : undefined
                 }
-                footnote="Each piece counted from the day it was acquired, at the weight it is today, over London's daily fix — converted at the ECB's rupee rate and marked up for duty and GST."
+                footnote="Priced at the daily gold rate in rupees, including duty and GST."
               />
             )}
 
             {tab === 'fund' && open.length > 0 && (
               <PriceHistory
                 title="Your funds"
-                hint="what the units you hold have been worth, day by day"
+                hint="your units, day by day"
                 tint="var(--violet)"
                 kind="money"
                 load={(days) => api.sleeveValueSeries('fund', days)}
-                footnote="Every fund counted from the day its units were allotted, at that day's NAV — your money rather than the schemes', which ran long before you bought any."
+                footnote="Counted from the day each purchase was allotted, at that day's NAV."
               />
             )}
 
             {tab === 'deposit' && open.length > 0 && (
               <PriceHistory
                 title="Your deposits"
-                hint="what has been put in, and what it has earned since"
+                hint="what you have put in, and what it has earned"
                 tint="var(--blue)"
                 kind="money"
                 load={(days) => api.sleeveValueSeries('deposit', days)}
-                footnote="Each deposit from the day it was funded, compounded quarterly at the rate you were quoted, and stopping at maturity. A curve rather than a market — nothing here is quoted by anyone."
+                footnote="Compounded quarterly at the rate you were quoted, up to maturity."
               />
             )}
 
@@ -386,26 +387,15 @@ export function Investments({
             )}
 
             {open.length === 0 ? (
-              <Card>
-                <Empty
-                  icon={tab === 'gold' ? 'coins' : 'trending-up'}
-                  title={tab === 'gold' ? 'No gold tracked' : 'No funds tracked'}
-                  body={
-                    tab === 'gold'
-                      ? 'Weigh what you have — coins, a chain, bangles — and Midas values it at the day’s rate.'
-                      : 'Add a scheme and record what you have bought. Midas fetches its NAV each day.'
-                  }
-                  action={
-                    <Button tone="primary" icon="plus" onClick={() => onNewHolding(newKind)}>
-                      {tab === 'gold'
-                        ? 'Add gold'
-                        : tab === 'deposit'
-                          ? 'Add a deposit'
-                          : 'Add a fund'}
-                    </Button>
-                  }
-                />
-              </Card>
+              <Empty
+                screen
+                title={tab === 'gold' ? 'No gold tracked' : 'No funds tracked'}
+                body={
+                  tab === 'gold'
+                    ? 'Coins, a chain, bangles: weighed, and valued at the day’s rate.'
+                    : 'Add a scheme and what you bought. Its NAV is fetched daily.'
+                }
+              />
             ) : (
               <motion.div
                 className="holding-cards"
@@ -428,46 +418,71 @@ export function Investments({
             )}
 
             {closed.length > 0 && (
-              <section className="account-group">
-                <button className="archived-toggle" onClick={() => setShowClosed((c) => !c)}>
+              /* The same fold the settled debts and the Siri history use:
+                 a thing you have finished with, kept because it is the only
+                 place this sleeve's history can be read. */
+              <section className="fold">
+                <button
+                  type="button"
+                  className={`fold-head ${showClosed ? 'is-open' : ''}`}
+                  onClick={() => setShowClosed((c) => !c)}
+                  aria-expanded={showClosed}
+                >
                   <motion.span animate={{ rotate: showClosed ? 90 : 0 }} transition={spring}>
                     <Icon name="chevron-right" size={15} />
                   </motion.span>
-                  Closed · {closed.length}
+                  <strong>Closed</strong>
+                  <span className="fold-count">
+                    {closed.length} {closed.length === 1 ? 'holding' : 'holdings'}
+                  </span>
+                  <em>{money(closed.reduce((sum, h) => sum + h.realised, 0))} realised</em>
                 </button>
-                <AnimatePresence initial={false}>
-                  {showClosed && (
+
+                <motion.div
+                  className="fold-body"
+                  initial={false}
+                  // In the page either way, so `auto` is a height that can be
+                  // measured when the fold is asked to open.
+                  animate={{ height: showClosed ? 'auto' : 0 }}
+                  transition={{ duration: 0.42, ease: [0.22, 1, 0.36, 1] }}
+                  aria-hidden={!showClosed}
+                  inert={!showClosed}
+                >
+                  <div className="fold-inner">
+                    {/* The cards carry an entrance variant, and a variant
+                        only acts on a child that inherits the label naming
+                        it — so the list says the words itself rather than
+                        leaving them at the opacity the variant starts on. */}
                     <motion.div
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: 'auto' }}
-                      exit={{ opacity: 0, height: 0 }}
-                      transition={spring}
-                      style={{ overflow: 'hidden' }}
+                      className="holding-cards"
+                      variants={listVariants}
+                      initial="initial"
+                      animate="animate"
                     >
-                      <div className="holding-cards">
-                        {closed.map((holding) => (
-                          <HoldingCard
-                            key={holding.id}
-                            holding={holding}
-                            tint="var(--ink-4)"
-                            line={series?.[holding.id] ?? []}
-                            loading={series === null}
-                            share={0}
-                            onOpen={() => setOpenId(holding.id)}
-                          />
-                        ))}
-                      </div>
+                      {closed.map((holding) => (
+                        <HoldingCard
+                          key={holding.id}
+                          holding={holding}
+                          tint="var(--ink-4)"
+                          line={series?.[holding.id] ?? []}
+                          loading={series === null}
+                          share={0}
+                          onOpen={() => setOpenId(holding.id)}
+                        />
+                      ))}
                     </motion.div>
-                  )}
-                </AnimatePresence>
+                  </div>
+                </motion.div>
               </section>
             )}
 
-            {asOf && (
+            {/* Only gold explains itself: a spot price converted and marked
+                up is arithmetic worth showing your working for. Where a NAV
+                comes from is not something the tab has to keep saying. */}
+            {asOf && tab === 'gold' && (
               <p className="price-footnote">
-                {tab === 'gold'
-                  ? `Spot gold, converted at the ECB’s rupee rate and marked up for duty and GST. Last priced ${dayLabel(asOf)}.`
-                  : `NAVs come from AMFI, published once a day. Last priced ${dayLabel(asOf)}.`}
+                Spot gold, converted at the ECB’s rupee rate and marked up for duty
+                and GST. Last priced {dayLabel(asOf)}.
               </p>
             )}
           </motion.div>
@@ -485,7 +500,7 @@ export function Investments({
       >
         <PriceHistory
           title={`A gram of ${carats(ratePurity)}`}
-          hint="the rate every piece is valued at"
+          hint="used to value your gold"
           tint="var(--amber)"
           load={(days) =>
             api
@@ -502,7 +517,7 @@ export function Investments({
               name="rate-purity"
             />
           }
-          footnote="Spot gold, converted at the ECB’s rupee rate and marked up for duty and GST."
+          footnote="Spot gold in rupees, including duty and GST."
         />
       </Sheet>
     </div>
@@ -515,6 +530,33 @@ export function Investments({
  * open the holding to read. Everything past that — the lot history, the ledger
  * links, the full chart — still lives one click away on its own page.
  */
+/**
+ * A holding's line over the days it was actually held.
+ *
+ * Bounded by its first and last entry, and with the tail of nothing taken
+ * off: on the day the last units go, the holding is worth zero, and a line
+ * that ends on the floor reads as a collapse rather than as a sale.
+ */
+function whileHeld(line: ValuePoint[], from: string, to: string) {
+  const inside = line.filter((p) => p.asOf >= from && p.asOf <= to);
+  let end = inside.length;
+  while (end > 0 && inside[end - 1].value === 0) end -= 1;
+  return inside.slice(0, end);
+}
+
+/** How long something was held, in the coarsest unit that still says it. */
+function monthsBetween(from: string, to: string) {
+  const days = Math.max(
+    0,
+    Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000),
+  );
+  if (days < 31) return `${days} ${days === 1 ? 'day' : 'days'}`;
+  const months = Math.round(days / 30.44);
+  if (months < 18) return `${months} ${months === 1 ? 'month' : 'months'}`;
+  const years = months / 12;
+  return `${years.toFixed(years < 10 ? 1 : 0)} years`;
+}
+
 function HoldingCard({
   holding, tint, line, share, onOpen, loading = false,
 }: {
@@ -541,15 +583,48 @@ function HoldingCard({
   const boughtE4 = buys.reduce((sum, l) => sum + l.quantityE4, 0);
   const avgBuy = boughtE4 ? perUnit(holding.invested, boughtE4) : 0;
 
+  const deposit = isDeposit(holding.kind);
+
+  // A position that has been sold out of. Its market value is nothing, its
+  // NAV is somebody else's business now, and the only figures that still mean
+  // anything are what went in, what came back, and the difference.
+  const soldOut = holding.closed && !isGold && !deposit;
+  const realisedGain = holding.realised - holding.invested;
+  const realisedPct =
+    holding.invested > 0 ? (realisedGain / holding.invested) * 100 : null;
+
+  // The days it was actually held, from the first entry to the last. A closed
+  // holding's line runs on to today at nothing, and a chart that spends most
+  // of its width along the floor says nothing about the years above it.
+  const days = holding.lots.map((l) => l.occurredAt.slice(0, 10)).sort();
+  const from = days[0];
+  const to = days[days.length - 1];
+  const held = soldOut && from && to ? whileHeld(line, from, to) : line;
+  const heldFor = from && to ? monthsBetween(from, to) : null;
+
   // Which way the holding has gone over the window — what it is worth now
   // against what it was worth then, instalments and all.
-  const move = line.length > 1 ? line[line.length - 1].value - line[0].value : 0;
-  const up = gain >= 0;
+  const move = held.length > 1 ? held[held.length - 1].value - held[0].value : 0;
+  const up = (soldOut ? realisedGain : gain) >= 0;
 
   // The rate is already under the value on a gold card, so its third figure
   // goes to something the card doesn't otherwise say.
-  const deposit = isDeposit(holding.kind);
-  const figures: { label: string; value: string; hint?: string }[] = deposit
+  const figures: { label: string; value: string; hint?: string }[] = soldOut
+    ? [
+        { label: 'Invested', value: money(holding.invested) },
+        { label: 'Returned', value: money(holding.realised) },
+        {
+          label: realisedGain >= 0 ? 'Profit' : 'Loss',
+          value: money(Math.abs(realisedGain)),
+          hint: realisedPct !== null ? percent(Math.abs(realisedPct)) : undefined,
+        },
+        {
+          label: 'Held',
+          value: heldFor ?? '—',
+          hint: to ? `to ${shortDayLabel(to)}` : undefined,
+        },
+      ]
+    : deposit
     ? [
         { label: 'Paid in', value: money(cost) },
         {
@@ -633,11 +708,21 @@ function HoldingCard({
 
       <span className="hc-body">
         <span className="hc-worth">
-          <small>{deposit ? 'Worth today' : 'Market value'}</small>
+          <small>{soldOut ? 'Returned' : deposit ? 'Worth today' : 'Market value'}</small>
           <strong>
-            {deposit || priced ? money(holding.marketValue) : 'No price yet'}
+            {soldOut
+              ? money(holding.realised)
+              : deposit || priced
+                ? money(holding.marketValue)
+                : 'No price yet'}
           </strong>
-          {deposit ? (
+          {soldOut ? (
+            <span className={`hc-move ${up ? 'is-up' : 'is-down'}`}>
+              <Icon name={up ? 'arrow-up-right' : 'arrow-down-left'} size={13} strokeWidth={2.4} />
+              {realisedPct !== null ? percent(realisedPct, { sign: true }) : '—'}
+              <em>{money(realisedGain, { sign: realisedGain > 0 })} realised</em>
+            </span>
+          ) : deposit ? (
             <span className={`hc-move ${gain > 0 ? 'is-up' : 'is-quiet'}`}>
               {gain > 0 ? (
                 <>
@@ -669,23 +754,32 @@ function HoldingCard({
           <span className="hc-line">
             {loading ? (
               <Sparkline values={[]} height={56} loading />
-            ) : line.length > 1 ? (
+            ) : held.length > 1 ? (
               <>
                 <Sparkline
-                  values={line.map((p) => p.value)}
+                  values={held.map((p) => p.value)}
                   height={56}
-                  stroke={move >= 0 ? 'var(--green)' : 'var(--red)'}
+                  // A holding sold out of is coloured by what it made, not by
+                  // where its line happens to end: the last days of one are
+                  // the sale, and a sale is not a fall.
+                  stroke={
+                    (soldOut ? realisedGain : move) >= 0 ? 'var(--green)' : 'var(--red)'
+                  }
                 />
                 {/* The window the line covers, rather than its last price —
                     the NAV is already among the figures below. */}
                 <span className="hc-line-foot">
-                  <i>{shortDayLabel(line[0].asOf)}</i>
-                  <i>{shortDayLabel(line[line.length - 1].asOf)}</i>
+                  <i>{shortDayLabel(held[0].asOf)}</i>
+                  <i>{shortDayLabel(held[held.length - 1].asOf)}</i>
                 </span>
               </>
             ) : (
               <span className="hc-line-empty">
-                {priced ? 'Its line builds as NAVs are fetched' : 'No NAV fetched yet'}
+                {soldOut
+                  ? 'No prices from the months it was held'
+                  : priced
+                    ? 'A line appears once prices are fetched'
+                    : 'No NAV fetched yet'}
               </span>
             )}
           </span>

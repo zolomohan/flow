@@ -1,15 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from '../components/Icon';
-import { ImportSheet } from '../components/ImportSheet';
 import { TransactionRow } from '../components/TransactionRow';
 import {
-  Button, Card, Chip, Confirm, Empty, Segmented, Select, TextInput,
+  Button, Card, Chip, Confirm, Empty, IconButton, Segmented, Select, TextInput,
   type SegmentOption, type SelectOption,
 } from '../components/ui';
 import { MonthNav, periodLabel } from '../components/MonthNav';
 import { useStore } from '../lib/store';
-import { dayKey, dayLabel, money, shiftMonth } from '../lib/format';
+import { dayKey, dayLabel, money, monthWindowBounds } from '../lib/format';
 import { itemVariants, listVariants, popover, spring } from '../lib/motion';
 import type {
   Transaction, TransactionPatch, TransactionSummary, TxKind,
@@ -70,23 +69,9 @@ const PAGE = 300;
 const STAGGER_UP_TO = 120;
 const PLAIN_LIST = { initial: {}, animate: { transition: { staggerChildren: 0 } } };
 
-/** The first and last day a window of `span` months ending at `month` covers.
- *  A span of nothing is all of time, which has no bounds to give. */
-function rangeBounds(span: number, month: string) {
-  if (span <= 0) return { from: null, to: null };
-  const back = span - 1;
-  const [y, m] = shiftMonth(month, -back).split('-').map(Number);
-  const [ey, em] = month.split('-').map(Number);
-  const end = new Date(ey, em, 0);
-  return {
-    from: `${y}-${String(m).padStart(2, '0')}-01`,
-    to: `${ey}-${String(em).padStart(2, '0')}-${String(end.getDate()).padStart(2, '0')}`,
-  };
-}
-
 export function Transactions({
   onOpenTransaction, onSplitTransaction, onOweTransaction, onRefundTransaction,
-  onAddTransaction, accountFocus, categoryFocus, labelFocus,
+  onAddTransaction, accountFocus, categoryFocus, labelFocus, onFocusUsed,
   picking, pickMany, initialSearch,
 }: {
   onOpenTransaction: (tx: Transaction) => void;
@@ -104,6 +89,13 @@ export function Transactions({
   categoryFocus?: { ids: string[]; token: number; span?: number };
   /** Set when arriving from a label on the Labels screen. */
   labelFocus?: { ids: string[]; token: number };
+  /**
+   * Says the focus has been acted on, so it is not handed over again. A focus
+   * is an instruction given on the way here, not a setting: without this, a
+   * filter you cleared comes back every time you leave the ledger and return,
+   * because the screen remounts and reads the same instruction afresh.
+   */
+  onFocusUsed?: () => void;
   /**
    * Rendered inside the link-a-record modal. The screen's own title and the
    * running totals belong to the page rather than the task, and choosing a row
@@ -123,7 +115,7 @@ export function Transactions({
   initialSearch?: string;
 }) {
   const {
-    accounts, categories, labels, folders, addToFolder,
+    accounts, categories, labels, folders, addToFolder, labelTransactions,
     month, setMonth, listTransactions, transactionSummary,
     revision, updateTransactions, deleteTransactions, confirmTriage, toast,
   } = useStore();
@@ -139,7 +131,6 @@ export function Transactions({
   const [side, setSide] = useState<Side>('either');
   const [categoryIds, setCategoryIds] = useState<string[]>([]);
   const [labelIds, setLabelIds] = useState<string[]>([]);
-  const [importOpen, setImportOpen] = useState(false);
   const [catQuery, setCatQuery] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [rows, setRows] = useState<Transaction[]>([]);
@@ -163,6 +154,7 @@ export function Transactions({
   useEffect(() => {
     if (!accountFocus?.token) return;
     setAccountIds(accountFocus.ids);
+    onFocusUsed?.();
   }, [accountFocus?.token]);
 
   // Arriving from a breakdown. One that was about a period — the dashboard's
@@ -180,6 +172,7 @@ export function Transactions({
     setAccountIds([]);
     setSearch('');
     setDebounced('');
+    onFocusUsed?.();
   }, [categoryFocus?.token]);
 
   // Arriving from a label: the same idea, over all time and with nothing
@@ -193,6 +186,7 @@ export function Transactions({
     setCategoryIds([]);
     setSearch('');
     setDebounced('');
+    onFocusUsed?.();
   }, [labelFocus?.token]);
 
   // A selected group stands for itself plus every category filed under it.
@@ -223,7 +217,7 @@ export function Transactions({
   }, [debounced, kind, months, accountIds, side, expandedCategoryIds, labelIds, month]);
 
   useEffect(() => {
-    const bounds = rangeBounds(months, month);
+    const bounds = monthWindowBounds(months, month);
     setLoading(true);
     const query = {
       search: debounced || null,
@@ -396,13 +390,30 @@ export function Transactions({
     setSide('either');
   };
 
-  // Escape drops a selection, the way it dismisses everything else.
+  // Escape drops a selection, the way it dismisses everything else. ⌘A takes
+  // the whole ledger as it currently reads — the filters and the search are
+  // how you say what "all" means, and taking everything the book holds
+  // regardless would ignore what you just typed.
+  //
+  // Not while the cursor is in a field: ⌘A there is select-all-text, and
+  // stealing it would be taking a key back off the person using it.
   useEffect(() => {
-    if (!picked.length) return;
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && clearPicked();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && picked.length) return clearPicked();
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') {
+        const at = document.activeElement;
+        const typing =
+          at instanceof HTMLInputElement ||
+          at instanceof HTMLTextAreaElement ||
+          (at instanceof HTMLElement && at.isContentEditable);
+        if (typing || !rows.length) return;
+        e.preventDefault();
+        setPicked(rows.map((r) => r.id));
+      }
+    };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [picked.length]);
+  }, [picked.length, rows]);
 
   // What a change can be applied to, which is not always everything picked:
   // a transfer has no category, and a split bill takes its own from its parts.
@@ -423,6 +434,56 @@ export function Transactions({
       })),
     [folders],
   );
+
+  // Pins, on and off. Only labels something in the selection already wears
+  // can be taken off — offering the whole list would be offering to do
+  // nothing, dressed up as an action.
+  const bulkLabels = useMemo<SelectOption[]>(
+    () =>
+      labels.map((l) => ({
+        value: l.id,
+        label: l.name,
+        color: l.color,
+        hint: l.count ? `on ${l.count}` : 'unused',
+      })),
+    [labels],
+  );
+  const wornByChosen = useMemo<SelectOption[]>(() => {
+    const counts = new Map<string, number>();
+    for (const row of chosen) {
+      for (const label of row.labels) {
+        counts.set(label.id, (counts.get(label.id) ?? 0) + 1);
+      }
+    }
+    return labels
+      .filter((l) => counts.has(l.id))
+      .map((l) => ({
+        value: l.id,
+        label: l.name,
+        color: l.color,
+        hint: `on ${counts.get(l.id)} of ${chosen.length}`,
+      }));
+  }, [labels, chosen]);
+
+  const pinLabel = async (labelId: string, on: boolean) => {
+    setWorking(true);
+    try {
+      const name = labels.find((l) => l.id === labelId)?.name ?? 'Label';
+      const changed = await labelTransactions([...pickedSet], labelId, on);
+      toast(
+        changed === 0
+          ? on
+            ? `Every one already wore ${name}`
+            : `None of them wore ${name}`
+          : `${name} ${on ? 'pinned on' : 'taken off'} ${changed}`,
+      );
+      clearPicked();
+    } catch {
+      /* the store has already said what went wrong */
+    } finally {
+      setWorking(false);
+    }
+  };
 
   const fileInFolder = async (folderId: string) => {
     setWorking(true);
@@ -535,9 +596,6 @@ export function Transactions({
           {months > 0 && <MonthNav month={month} onChange={setMonth} span={months} />}
           {!picking && (
             <>
-              <Button icon="file-up" onClick={() => setImportOpen(true)}>
-                Import
-              </Button>
               <Button tone="primary" icon="plus" onClick={onAddTransaction}>
                 Add transaction
               </Button>
@@ -626,7 +684,7 @@ export function Transactions({
                   {accountIds.length > 0 && side !== 'either' && (
                     <p className="filter-note">
                       {side === 'from' ? 'Money leaving' : 'Money arriving in'}{' '}
-                      {accountIds.length === 1 ? 'that account' : 'those accounts'} — which only
+                      {accountIds.length === 1 ? 'that account' : 'those accounts'}, which only
                       narrows transfers, since income and expenses touch one side.
                     </p>
                   )}
@@ -810,7 +868,7 @@ export function Transactions({
             <span className="triage-banner-text">
               <Icon name="inbox" size={15} />
               <strong>{triage.count}</strong> imported {triage.count === 1 ? 'entry' : 'entries'} waiting
-              for a look — confirm how they're filed and future imports will file them alike.
+              for a look. Confirm how they're filed and future imports will file them alike.
             </span>
             <Button size="sm" tone="primary" onClick={reviewTriage}>
               Review
@@ -830,44 +888,44 @@ export function Transactions({
         />
       </div>}
 
-      <Card padded={false} className="ledger">
-        {loading && rows.length === 0 ? (
+      {loading && rows.length === 0 ? (
+        <Card padded={false} className="ledger">
           <div className="skeletons">
             {Array.from({ length: 6 }).map((_, i) => (
               <div key={i} className="skeleton-row" style={{ animationDelay: `${i * 60}ms` }} />
             ))}
           </div>
-        ) : days.length === 0 ? (
-          <div className="card-pad">
-            <Empty
-              icon="search"
-              title="Nothing matches"
-              body={
-                months
-                  ? `No entries in ${periodLabel(month, months)} that fit these filters — there may be some further back.`
-                  : 'Nothing here fits those filters.'
-              }
-              action={
-                <div className="welcome-actions">
-                  {months > 0 && (
-                    <Button tone="primary" onClick={() => setRange('all')}>
-                      Search all time
-                    </Button>
-                  )}
-                  <Button
-                    tone="secondary"
-                    onClick={() => {
-                      setSearch(''); setKind('all'); setRange('all');
-                      setAccountIds([]); setCategoryIds([]); setLabelIds([]);
-                    }}
-                  >
-                    Clear filters
-                  </Button>
-                </div>
-              }
-            />
-          </div>
-        ) : (
+        </Card>
+      ) : days.length === 0 ? (
+        <Empty
+          screen
+          title="Nothing matches"
+          body={
+            months
+              ? `Nothing in ${periodLabel(month, months)} fits these filters.`
+              : 'Nothing here fits those filters.'
+          }
+          action={
+            <div className="welcome-actions">
+              {months > 0 && (
+                <Button tone="primary" onClick={() => setRange('all')}>
+                  Search all time
+                </Button>
+              )}
+              <Button
+                tone="secondary"
+                onClick={() => {
+                  setSearch(''); setKind('all'); setRange('all');
+                  setAccountIds([]); setCategoryIds([]); setLabelIds([]);
+                }}
+              >
+                Clear filters
+              </Button>
+            </div>
+          }
+        />
+      ) : (
+        <Card padded={false} className="ledger">
           <motion.div
             // Rows that can be ticked get a column for their boxes, which the
             // day heads and the split strips line up with.
@@ -927,8 +985,8 @@ export function Transactions({
               </section>
             ))}
           </motion.div>
-        )}
-      </Card>
+        </Card>
+      )}
 
       {remaining > 0 && (
         <div className="ledger-more">
@@ -1030,14 +1088,34 @@ export function Transactions({
                 searchPlaceholder="Find an account"
                 disabled={working}
               />
-              {folders.length > 0 && (
+              <Select
+                options={bulkFolders}
+                value={null}
+                onChange={(id) => id && void fileInFolder(id)}
+                placeholder={folders.length ? 'Into a folder' : 'No folders yet'}
+                searchable
+                searchPlaceholder="Find a folder"
+                disabled={working || folders.length === 0}
+              />
+              {labels.length > 0 && (
                 <Select
-                  options={bulkFolders}
+                  options={bulkLabels}
                   value={null}
-                  onChange={(id) => id && void fileInFolder(id)}
-                  placeholder="Into a folder"
+                  onChange={(id) => id && void pinLabel(id, true)}
+                  placeholder="Pin a label"
                   searchable
-                  searchPlaceholder="Find a folder"
+                  searchPlaceholder="Find a label"
+                  disabled={working}
+                />
+              )}
+              {wornByChosen.length > 0 && (
+                <Select
+                  options={wornByChosen}
+                  value={null}
+                  onChange={(id) => id && void pinLabel(id, false)}
+                  placeholder="Take a label off"
+                  searchable
+                  searchPlaceholder="Find a label"
                   disabled={working}
                 />
               )}
@@ -1065,26 +1143,30 @@ export function Transactions({
                   All {rows.length.toLocaleString('en-IN')}
                 </Button>
               )}
-              <Button
-                size="sm"
-                tone="danger"
+              {/* The two that need no naming: a bin and a cross, where six
+                  controls are already competing for the width. Deleting still
+                  asks first, so the glyph alone cannot lose anything. */}
+              <IconButton
                 icon="trash-2"
+                label={`Delete ${pickedSet.size}`}
+                tone="danger"
+                size={30}
                 onClick={() => setConfirmingDelete(true)}
                 disabled={working}
-              >
-                Delete
-              </Button>
-              <Button size="sm" tone="ghost" onClick={clearPicked} disabled={working}>
-                Cancel
-              </Button>
+              />
+              <IconButton
+                icon="x"
+                label="Clear selection"
+                size={30}
+                onClick={clearPicked}
+                disabled={working}
+              />
             </div>
               </>
             )}
           </motion.div>
         )}
       </AnimatePresence>
-
-      <ImportSheet open={importOpen} onClose={() => setImportOpen(false)} />
 
       <Confirm
         open={confirmingDelete}

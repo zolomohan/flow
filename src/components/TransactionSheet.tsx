@@ -13,16 +13,17 @@ import {
   owedInFull, peopleFor, peopleToInput, restOf, shareAmounts,
   type SplitLine, type SplitPeople,
 } from './SplitEditors';
-import { LAST_ACCOUNT, REQUIRE_NOTE, useStore } from '../lib/store';
+import { api } from '../lib/api';
+import { REQUIRE_NOTE, useStore } from '../lib/store';
 import {
-  amountChars, money, paiseToRupeeString, rupeesToPaise, settleAmount, sumPreview,
+  amountChars, dayLabel, money, paiseToRupeeString, rupeesToPaise, settleAmount, sumPreview,
   toLocalInput,
 } from '../lib/format';
 import { itemVariants, listVariants, pageVariants, popover, press, spring } from '../lib/motion';
 import { RecordPicker } from './RecordPicker';
 import { asksFor, describeTemplate, spoken } from '../lib/templates';
 import type {
-  Account, Category, Paise, Transaction, TransactionInput, TxKind,
+  Account, Category, Paise, Plan, Transaction, TransactionInput, TxKind,
   TxTemplate, TxTemplateInput,
 } from '../lib/types';
 
@@ -322,7 +323,7 @@ function TemplateMenu({
               ))}
             {canApply && templates.length === 0 && (
               <p className="tpl-none">
-                Nothing saved yet. Fill this one in and keep it — the next one like
+                Nothing saved yet. Fill this one in and keep it. The next one like
                 it is then a single click.
               </p>
             )}
@@ -372,7 +373,7 @@ function TemplateMenu({
                 </span>
                 <span className="split-section-title">
                   Save as template
-                  <em>The form as it stands, blanks and all, under a name</em>
+                  <em>Save this form, blanks and all, under a name</em>
                 </span>
               </button>
             )}
@@ -380,7 +381,7 @@ function TemplateMenu({
               <p className="tpl-none">
                 {clash
                   ? `Replaces the template already called “${clash.name}”.`
-                  : 'Give it a name you will recognise in a hurry.'}
+                  : 'Give it a name you will recognise.'}
               </p>
             )}
           </motion.div>
@@ -438,6 +439,10 @@ export interface TxDraft {
   /** Opened to give a posting back: the sheet arrives as the other side of
    *  it, for whatever is still standing on it. */
   refund?: Transaction;
+  /** Opened to pay a plan's cycle: the sheet arrives as the plan describes
+   *  it, dated the day it falls due, and what is saved is linked to the plan.
+   *  Nothing is written until it is confirmed. */
+  plan?: Plan;
 }
 
 /**
@@ -535,7 +540,7 @@ export function TransactionSheet({
 }) {
   const {
     accounts, categories, labels, saveTransaction, deleteTransaction, toast, settings,
-    saveSetting, templates, saveTemplate, markTemplateUsed,
+    templates, saveTemplate, markTemplateUsed, payPlan,
   } = useStore();
   const live = useMemo(() => accounts.filter((a) => !a.archived && !a.system), [accounts]);
   // The account every debt runs through, named by the book itself.
@@ -561,6 +566,12 @@ export function TransactionSheet({
   const [toAccountId, setToAccountId] = useState<string | null>(null);
   const [categoryId, setCategoryId] = useState<string | null>(null);
   const [merchant, setMerchant] = useState('');
+  // Everyone the book has paid before, most seen first, read once per
+  // opening: the list is the whole ledger's, not this month's, and it is
+  // small enough to hold rather than ask about on every keystroke.
+  const [known, setKnown] = useState<string[]>([]);
+  // Whether those names are on offer under the field.
+  const [suggesting, setSuggesting] = useState(false);
   const [note, setNote] = useState('');
   const [occurredAt, setOccurredAt] = useState(toLocalInput());
   const [error, setError] = useState<string | null>(null);
@@ -583,6 +594,10 @@ export function TransactionSheet({
   // owed, its name belongs in the heading, and the count against it goes up
   // once the posting is actually written — not before.
   const [fromTemplate, setFromTemplate] = useState<TxTemplate | null>(null);
+  // The plan whose cycle this pays, when it was opened from one. It is held
+  // apart from the form: the form says what was paid, and this says what it
+  // was paid against, whatever the form ends up saying.
+  const [payingPlan, setPayingPlan] = useState<Plan | null>(null);
   // Dividing a bill is a job of its own — a screenful of rows, each with a
   // category or a person on it — so it gets a page of the sheet rather than a
   // drawer under the form. Null is the transaction itself.
@@ -593,10 +608,6 @@ export function TransactionSheet({
   // nothing has been typed into them — so merely looking never splits a bill.
   const [seeded, setSeeded] = useState(false);
   const amountRef = useRef<HTMLInputElement>(null);
-  // Read through a ref rather than a dependency: writing the setting must
-  // not re-run the reset below and wipe a form that is being filled in.
-  const lastAccount = useRef<string | null>(null);
-  lastAccount.current = settings[LAST_ACCOUNT] ?? null;
 
   // Where a refund files itself. It counts for nothing either way — a refund
   // is netted off the posting it undoes — but the row still wants a colour
@@ -607,6 +618,25 @@ export function TransactionSheet({
       ? (categories.find((c) => c.kind === 'income' && !c.parentId && c.name === 'Refunds')?.id ??
          null)
       : null;
+
+  useEffect(() => {
+    if (!open) return;
+    setSuggesting(false);
+    let stale = false;
+    api.knownMerchants().then((names) => !stale && setKnown(names)).catch(() => {});
+    return () => { stale = true; };
+  }, [open]);
+
+  // What is worth offering: the names this one could still turn into. A name
+  // already typed in full is not a suggestion, it is what you have. A
+  // transfer's field is a description, and the list is of people you paid.
+  const suggestions = useMemo(() => {
+    if (kind === 'transfer') return [];
+    const term = merchant.trim().toLowerCase();
+    return known
+      .filter((name) => name.toLowerCase().includes(term) && name.toLowerCase() !== term)
+      .slice(0, 6);
+  }, [known, merchant, kind]);
 
   // Reset the form each time the sheet opens, from the edited row or the draft.
   useEffect(() => {
@@ -632,6 +662,7 @@ export function TransactionSheet({
       setLabelIds(editing.labels.map((l) => l.id));
       setSeeded(false);
       setFromTemplate(null);
+      setPayingPlan(null);
       // What it refunds, as far as the row knows it. How much of the bill is
       // still standing takes any other refund into account, which this side
       // cannot see — the book is the referee, and says so on save.
@@ -647,13 +678,10 @@ export function TransactionSheet({
           : null,
       );
     } else {
-      // Where it was asked for, then wherever the last one was written, then
-      // whatever comes first — an account that has since gone or been
-      // archived falls through rather than opening on nothing.
-      const remembered = liveRef.current.some((a) => a.id === lastAccount.current)
-        ? lastAccount.current
-        : null;
-      const fallback = draft?.accountId ?? remembered ?? liveRef.current[0]?.id ?? null;
+      // Only where it was asked for. Guessing — the last account used, or
+      // whichever comes first — meant a posting could be saved against an
+      // account nobody chose, so a new one opens with none and the form asks.
+      const fallback = draft?.accountId ?? null;
       // Opened on a template — from the Templates screen, say — the form
       // arrives filled in, on today's date.
       const shape = draft?.template ? shapeOf(draft.template, liveRef.current) : null;
@@ -672,6 +700,26 @@ export function TransactionSheet({
       setLabelIds(shape ? shape.labelIds : []);
       setSeeded(false);
       setFromTemplate(draft?.template ?? null);
+      // Opened to pay a plan — Mark paid. The form arrives as the plan says
+      // the cycle should go, on the day it fell due, and anything about it
+      // can be put right before it is written: a bill that came in higher, a
+      // day it went out late, a card it was paid from this once.
+      const plan = draft?.plan ?? null;
+      setPayingPlan(plan);
+      if (plan) {
+        setKind(plan.kind);
+        setAmount(paiseToRupeeString(plan.amount));
+        // An account the plan names that has since been closed falls back
+        // like any other, rather than opening on nothing.
+        if (plan.accountId && liveRef.current.some((a) => a.id === plan.accountId)) {
+          setAccountId(plan.accountId);
+        }
+        setToAccountId(plan.kind === 'transfer' ? plan.toAccountId : null);
+        setCategoryId(plan.kind === 'transfer' ? null : plan.categoryId);
+        setMerchant(plan.merchant || plan.name);
+        setNote(plan.note ?? '');
+        if (plan.nextDue) setOccurredAt(`${plan.nextDue}T09:00`);
+      }
       // Opened to give a posting back — the Refund action on a row. The form
       // arrives as the other side of it, for whatever is still standing.
       const giving = draft?.refund ? targetOf(draft.refund) : null;
@@ -783,7 +831,7 @@ export function TransactionSheet({
   // Naming what this gives back. The form turns round to face it: a refund
   // of a bill is money coming in, for what is still standing on the bill.
   const attachRefund = (tx: Transaction) => {
-    if (tx.id === editing?.id) return setError('A posting cannot refund itself.');
+    if (tx.id === editing?.id) return setError('A transaction cannot refund itself.');
     if (tx.kind === 'transfer')
       return setError(
         'A transfer moves money between your own accounts, so there is nothing to refund.',
@@ -793,7 +841,7 @@ export function TransactionSheet({
     // is spending, or it is a debt.
     if (tx.kind === 'income')
       return setError('Only something you spent can be given back to you.');
-    if (tx.refundOf) return setError('That posting is itself a refund.');
+    if (tx.refundOf) return setError('That transaction is itself a refund.');
     const target = targetOf(tx);
     setRefund(target);
     setKind(refundKind(target.kind));
@@ -904,7 +952,7 @@ export function TransactionSheet({
     const asks = asksFor(template);
     toast(
       asks.length
-        ? `Filled in from “${template.name}” — it asks for ${spoken(asks)}`
+        ? `Filled in from “${template.name}”. It asks for ${spoken(asks)}`
         : `Filled in from “${template.name}”`,
     );
   };
@@ -946,7 +994,7 @@ export function TransactionSheet({
     if (!paise) return setError('Enter an amount.');
     if (!accountId) return setError('Pick an account.');
     if (needsNote && !split && !note.trim())
-      return setError('Add a note — this book asks for one.');
+      return setError('Add a note. This book requires one.');
     if (kind === 'transfer' && toAccountId === accountId)
       return setError('A transfer needs two different accounts.');
 
@@ -966,16 +1014,16 @@ export function TransactionSheet({
     if (needsNote && parts.length && parts.some((part) => !part.note)) {
       setBack(false);
       setPage('categories');
-      return setPartsError('Every part needs a note — this book asks for one.');
+      return setPartsError('Every part needs a note.');
     }
     if (owed > paise)
-      return setError(`The shares come to ${money(owed)} — more than the bill.`);
+      return setError(`The shares come to ${money(owed)}, more than the bill.`);
     // A refund can only hand back what is still standing, and money lent is
     // not money given back: a posting is one or the other.
     if (refund && paise > refund.remaining)
       return setError(`${refund.merchant} has ${money(refund.remaining)} left to give back.`);
     if (refund && lentInFull)
-      return setError('A refund comes home to you, so it cannot be owed back as well.');
+      return setError('A refund comes back to you, so it cannot be owed as well.');
 
     // Lending is not spending. If none of a bill is yours — every paisa of it
     // owed back — then it is money that left your accounts and is coming
@@ -1018,24 +1066,24 @@ export function TransactionSheet({
 
     setSaving(true);
     try {
-      await saveTransaction(input);
-      // Where the next new one will start. Only what you just added counts:
-      // correcting the account on something from March says nothing about
-      // where you are spending from now.
-      if (isNew && accountId !== lastAccount.current) {
-        void saveSetting(LAST_ACCOUNT, accountId);
-      }
+      // Paying a plan writes the posting and links it in the one step, so a
+      // cycle can never be left looking unpaid with the money already gone.
+      if (payingPlan) await payPlan(payingPlan.id, input);
+      else await saveTransaction(input);
       // A template counts as used once something has actually been written
       // from it — opening one and thinking better of it is not a use.
       if (isNew && fromTemplate) void markTemplateUsed(fromTemplate.id);
+      const done = payingPlan
+        ? 'Marked as paid'
+        : editing
+          ? 'Transaction updated'
+          : 'Transaction added';
       toast(
         owing.length
-          ? `${editing ? 'Transaction updated' : 'Transaction added'} · ${owing.length} ${
-              owing.length === 1 ? 'debt' : 'debts'
-            } ${directionFor(kind) === 'lent' ? 'owed to you' : 'you owe'}`
-          : editing
-            ? 'Transaction updated'
-            : 'Transaction added',
+          ? `${done} · ${owing.length} ${owing.length === 1 ? 'debt' : 'debts'} ${
+              directionFor(kind) === 'lent' ? 'owed to you' : 'you owe'
+            }`
+          : done,
       );
       onClose();
     } catch {
@@ -1204,11 +1252,51 @@ export function TransactionSheet({
       </div>
 
       <Field label={kind === 'transfer' ? 'Description' : 'Merchant or payee'}>
-        <TextInput
-          value={merchant}
-          placeholder={kind === 'income' ? 'Monthly salary' : 'Swiggy'}
-          onChange={(e) => setMerchant(e.target.value)}
-        />
+        {/* The same listbox the debt sheet hangs under its name field: the
+            browser's datalist draws its own menu, in its own colours. */}
+        <div className="suggest">
+          <TextInput
+            value={merchant}
+            placeholder={kind === 'income' ? 'Monthly salary' : 'Swiggy'}
+            autoComplete="off"
+            onChange={(e) => {
+              setMerchant(e.target.value);
+              setSuggesting(true);
+            }}
+            onFocus={() => setSuggesting(true)}
+            onBlur={() => setSuggesting(false)}
+            onKeyDown={(e) => e.key === 'Escape' && setSuggesting(false)}
+          />
+          <AnimatePresence>
+            {suggesting && suggestions.length > 0 && (
+              <motion.div
+                className="select-menu suggest-menu"
+                variants={popover}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+              >
+                {suggestions.map((name) => (
+                  <button
+                    key={name}
+                    type="button"
+                    className="select-option"
+                    // Taking the click without taking the focus: a blur
+                    // would close the menu out from under the pointer.
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      setMerchant(name);
+                      setSuggesting(false);
+                    }}
+                  >
+                    <Icon name="store" size={14} />
+                    <span className="select-option-label">{name}</span>
+                  </button>
+                ))}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
       </Field>
 
       <Field label="When">
@@ -1317,8 +1405,8 @@ export function TransactionSheet({
         {debtor.name.trim()
           ? `The whole ${money(paise)} is ${debtor.name.trim()}'s to pay back. It leaves ${
               live.find((a) => a.id === accountId)?.name ?? 'the account'
-            } and stays out of your spending until it comes home.`
-          : 'Say whose it is and the whole of it becomes their debt — money out of your account with nowhere of yours to go.'}
+            } and stays out of your spending until it is paid back.`
+          : 'Say whose it is and the whole amount becomes their debt.'}
       </p>
     </div>
   );
@@ -1338,10 +1426,10 @@ export function TransactionSheet({
     <p className="page-note tx-note-refund">
       <Icon name="undo-2" size={13} />
       {paise >= refund.remaining
-        ? `Nothing of ${refund.merchant} is left standing: it drops out of your ${
+        ? `${refund.merchant} is fully refunded: neither it nor this counts toward your ${
             refund.kind === 'expense' ? 'spending' : 'income'
-          } and this drops out with it. The money still moved, so both accounts keep it.`
-        : `${money(paise)} of ${money(refund.amount)} comes off ${refund.merchant} — ${money(
+          }. The money still moved, so both accounts keep it.`
+        : `${money(paise)} of ${money(refund.amount)} comes off ${refund.merchant}. ${money(
             refund.remaining - paise,
           )} of it still stands.`}
     </p>
@@ -1380,12 +1468,16 @@ export function TransactionSheet({
                 : 'Everyone else’s share becomes a debt of its own',
           }
         : {
-            title: isNew ? 'New transaction' : 'Edit transaction',
-            // Opened from a template, the heading says which one.
-            subtitle: fromTemplate
+            title: payingPlan ? 'Mark as paid' : isNew ? 'New transaction' : 'Edit transaction',
+            // Opened from a plan or a template, the heading says which one.
+            subtitle: payingPlan
+              ? `${payingPlan.name}${
+                  payingPlan.nextDue ? ` · due ${dayLabel(payingPlan.nextDue)}` : ''
+                }. Check it against what was actually paid`
+              : fromTemplate
               ? `From “${fromTemplate.name}”`
               : refund
-                ? `Giving back ${refund.merchant} — neither will count as ${
+                ? `Giving back ${refund.merchant}. Neither will count as ${
                     refund.kind === 'expense' ? 'spending' : 'income'
                   }`
                 : kind === 'transfer'
@@ -1531,7 +1623,7 @@ export function TransactionSheet({
                   type="button"
                   className={`split-menu-trigger ${refund ? 'is-on' : ''}`}
                   onClick={() => setRefundPicking(true)}
-                  title={refund ? 'Choose a different posting' : 'Say what this gives back'}
+                  title={refund ? 'Choose a different transaction' : 'Say what this gives back'}
                 >
                   <span><Icon name="undo-2" size={14} strokeWidth={2.1} /></span>
                   {refund ? `Refund of ${refund.merchant}` : 'Mark as refund'}
@@ -1555,7 +1647,7 @@ export function TransactionSheet({
             </Button>
             {/* The shortcut belongs on the thing it presses. */}
             <Button tone="primary" onClick={submit} disabled={saving}>
-              {isNew ? 'Add transaction' : 'Save changes'}
+              {payingPlan ? 'Mark paid' : isNew ? 'Add transaction' : 'Save changes'}
               <span className="btn-keys">
                 <kbd>⌘</kbd>
                 <kbd>↵</kbd>
@@ -1598,7 +1690,7 @@ export function TransactionSheet({
                       <p className="page-note">
                         <Icon name="arrow-left-right" size={13} />
                         None of this is yours, so it is money lent rather than money
-                        spent — it will be saved as a transfer out of{' '}
+                        spent. It will be saved as a transfer out of{' '}
                         {live.find((a) => a.id === accountId)?.name ?? 'the account'} and
                         stay out of your spending until it comes back.
                       </p>
@@ -1795,7 +1887,7 @@ export function TransactionSheet({
         open={refundPicking}
         onClose={() => setRefundPicking(false)}
         title="What is this giving back?"
-        subtitle="The posting it undoes. Neither of them will count toward what you earned or spent."
+        subtitle="The transaction it undoes. Neither will count toward what you earned or spent"
         onPick={(tx) => {
           attachRefund(tx);
           setRefundPicking(false);

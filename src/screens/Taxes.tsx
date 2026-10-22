@@ -61,7 +61,7 @@ function Head({
         <span className="tax-head-name">
           <b>{tag.label}</b>
           <em>
-            {head.count} {head.count === 1 ? 'posting' : 'postings'}
+            {head.count} {head.count === 1 ? 'transaction' : 'transactions'}
             {head.categories.length > 0 && ` · ${head.categories.length} ${head.categories.length === 1 ? 'category' : 'categories'}`}
           </em>
         </span>
@@ -158,7 +158,7 @@ function TagSheet({
     <Sheet
       open={open}
       onClose={onClose}
-      title="What each category is, to a return"
+      title="How each category is filed"
       subtitle={`${done} of ${rows.length} ${side === 'income' ? 'income' : 'expense'} categories filed`}
       width={640}
     >
@@ -174,8 +174,8 @@ function TagSheet({
 
         <p className="tax-sheet-note">
           {side === 'income'
-            ? 'A head is a decision, not a guess — nothing here is inferred from a category’s name. Anything left blank shows up on the tab as unfiled, which is the honest answer until you make it.'
-            : 'Only tag what a return would actually ask you to prove. Everything else is simply spending, and does not belong on this side.'}
+            ? 'Nothing here is guessed from a category’s name. Anything left blank shows as unfiled until you decide.'
+            : 'Only tag what your return would ask you to prove. Everything else is simply spending.'}
         </p>
 
         <div className="tax-sheet-rows">
@@ -260,7 +260,7 @@ export function Taxes({ onOpenTransaction }: { onOpenTransaction: (tx: Transacti
     try {
       const csv = await api.taxExport(data.fy);
       await navigator.clipboard.writeText(csv);
-      toast(`${data.label} copied as CSV — paste it wherever it needs to go`);
+      toast(`${data.label} copied as CSV. Paste it wherever it needs to go`);
     } catch {
       toast('Could not put that on the clipboard', 'error');
     }
@@ -296,8 +296,8 @@ export function Taxes({ onOpenTransaction }: { onOpenTransaction: (tx: Transacti
         <div>
           <h1>Taxes</h1>
           <p>
-            Every rupee that came in, sorted the way a return asks — and nothing about
-            what it costs. Midas will not guess a liability.
+            Every rupee that came in, sorted the way a return asks, and nothing about
+            what it costs. flow will not guess a liability.
           </p>
         </div>
         <div className="tax-nav">
@@ -321,13 +321,11 @@ export function Taxes({ onOpenTransaction }: { onOpenTransaction: (tx: Transacti
       </header>
 
       {!loading && data && data.income === 0 && data.unclassifiedCount === 0 ? (
-        <Card>
-          <Empty
-            icon="scroll-text"
-            title={`Nothing came in during ${data.label}`}
-            body="Once the ledger has income in this year, it lands here grouped by the head you file it under."
-          />
-        </Card>
+        <Empty
+          screen
+          title={`Nothing came in during ${data.label}`}
+          body="Income for this year appears here, grouped by head."
+        />
       ) : (
         data && (
           <>
@@ -338,7 +336,7 @@ export function Taxes({ onOpenTransaction }: { onOpenTransaction: (tx: Transacti
                   <strong className="tax-total">{money(data.income)}</strong>
                   <p className="tax-summary-sub">
                     1 April {data.fy} to 31 March {data.fy + 1}
-                    {!data.closed && ' · the year is still open, so this is a running total'}
+                    {!data.closed && ' · a running total, the year is still open'}
                     {data.prevIncome > 0 &&
                       ` · ${percentDelta(data.income, data.prevIncome)! > 0 ? 'up' : 'down'} ${percent(Math.abs(percentDelta(data.income, data.prevIncome)!))} on FY ${data.fy - 1}-${String((data.fy) % 100).padStart(2, '0')}`}
                   </p>
@@ -366,7 +364,7 @@ export function Taxes({ onOpenTransaction }: { onOpenTransaction: (tx: Transacti
                   hint={
                     data.unclassified === 0
                       ? 'every rupee has a head'
-                      : `${data.unclassifiedCount} postings · ${data.untaggedCategories} categories to decide`
+                      : `${data.unclassifiedCount} transactions · ${data.untaggedCategories} categories to decide`
                   }
                   tone={data.unclassified === 0 ? 'good' : 'warn'}
                 />
@@ -389,8 +387,8 @@ export function Taxes({ onOpenTransaction }: { onOpenTransaction: (tx: Transacti
                   <div>
                     <b>{money(data.unclassified)} has no head yet</b>
                     <span>
-                      Every figure on this page is incomplete until this is empty. One tag
-                      against a category files every posting under it at once.
+                      Every figure on this page is incomplete until this is empty.
+                      Tagging a category files everything under it at once.
                     </span>
                   </div>
                   <Button tone="primary" icon="tags" onClick={() => setTagging(true)}>
@@ -434,10 +432,9 @@ export function Taxes({ onOpenTransaction }: { onOpenTransaction: (tx: Transacti
                   />
                   <p>
                     {compactMoney(PRESUMPTIVE['44ADA'].base - professional.total)} of headroom
-                    under the ₹50 lakh limit — {compactMoney(PRESUMPTIVE['44ADA'].extended - professional.total)}{' '}
-                    if cash receipts stayed within 5% of the total, which the ledger cannot
-                    tell you. Past either, presumptive filing stops being available and books
-                    and an audit take over.
+                    under the ₹50 lakh limit, or {compactMoney(PRESUMPTIVE['44ADA'].extended - professional.total)}{' '}
+                    if cash receipts stayed within 5% of the total. Past either,
+                    presumptive filing is no longer available.
                   </p>
                 </div>
               </Card>
@@ -454,7 +451,7 @@ export function Taxes({ onOpenTransaction }: { onOpenTransaction: (tx: Transacti
                   />
                   <p>
                     {gifts.total > GIFT_LIMIT
-                      ? 'Past ₹50,000 for the year. Once the aggregate crosses, the whole of it is taxable — not the excess. Anything from a relative as the Act defines one, or received on your marriage, is exempt whatever the amount, and should be tagged elsewhere.'
+                      ? 'Past ₹50,000 for the year, so the whole amount is taxable, not just the excess. Gifts from close relatives, or received on your marriage, are exempt and belong elsewhere.'
                       : `${money(GIFT_LIMIT - gifts.total)} before the year’s aggregate crosses ₹50,000, at which point the whole of it becomes taxable rather than the excess.`}
                   </p>
                 </div>
@@ -465,7 +462,7 @@ export function Taxes({ onOpenTransaction }: { onOpenTransaction: (tx: Transacti
               <>
                 <SectionHead
                   title="Interest, by account"
-                  hint="the shape AIS reports it in — tick it off line by line"
+                  hint="matches how AIS reports it"
                 />
                 <Card padded={false}>
                   {data.interest.map((row) => (
@@ -489,7 +486,7 @@ export function Taxes({ onOpenTransaction }: { onOpenTransaction: (tx: Transacti
 
             <SectionHead
               title="Advance tax"
-              hint="what had landed by each date — the instalment itself needs a figure Midas won't invent"
+              hint="income received by each due date"
             />
             <Card padded={false}>
               <div className="tax-quarters">
@@ -512,7 +509,7 @@ export function Taxes({ onOpenTransaction }: { onOpenTransaction: (tx: Transacti
                   title="What you are sheltering"
                   hint={
                     lens
-                      ? '115BAC takes back everything marked — this is the input to the regime question, not the answer'
+                      ? 'The new regime takes back everything marked'
                       : `${money(forfeit)} of it exists only under the old regime`
                   }
                 />
@@ -547,7 +544,7 @@ export function Taxes({ onOpenTransaction }: { onOpenTransaction: (tx: Transacti
               <>
                 <SectionHead
                   title="Waiting on a decision"
-                  hint={`${data.unclassifiedCount} postings${data.unfiled.length < data.unclassifiedCount ? ` · newest ${data.unfiled.length}` : ''}`}
+                  hint={`${data.unclassifiedCount} transactions${data.unfiled.length < data.unclassifiedCount ? ` · newest ${data.unfiled.length}` : ''}`}
                 />
                 <Card padded={false}>
                   {data.unfiled.map((tx) => (
@@ -558,9 +555,8 @@ export function Taxes({ onOpenTransaction }: { onOpenTransaction: (tx: Transacti
             )}
 
             <p className="tax-footnote">
-              Nothing on this page is a tax computation, and nothing on it is advice. It is
-              your ledger, grouped the way a return asks its questions — so that the person
-              who does the arithmetic starts from facts rather than from memory.
+              Your ledger, grouped the way a return asks its questions. This is not a
+              tax computation, and it is not advice.
             </p>
           </>
         )

@@ -4,7 +4,7 @@ import { Icon, SiriMark } from '../components/Icon';
 import { Button, Card, Empty, Field, Segmented, Select, Sheet, TextInput } from '../components/ui';
 import type { SelectOption } from '../components/ui';
 import { useStore } from '../lib/store';
-import { itemVariants, listVariants } from '../lib/motion';
+import { itemVariants, listVariants, spring } from '../lib/motion';
 import { dayLabel, money, paiseToRupeeString, rupeesToPaise, timeLabel } from '../lib/format';
 import type { Capture, TransactionInput, TxKind } from '../lib/types';
 
@@ -22,8 +22,6 @@ const MISSING: Record<string, string> = {
   category: 'no category',
 };
 
-type Tab = 'waiting' | 'history';
-
 /**
  * Everything said out loud, in two halves.
  *
@@ -37,17 +35,9 @@ type Tab = 'waiting' | 'history';
  * what they became, and reads the figures off the posting rather than off
  * what was heard — correct the transaction and the record of it follows.
  */
-export function Siri({
-  onShowInLedger,
-  onOpenTransaction,
-}: {
-  /** Opens the ledger filtered to the Siri label. */
-  onShowInLedger?: () => void;
-  onOpenTransaction?: (id: string) => void;
-}) {
+export function Siri({ onOpenTransaction }: { onOpenTransaction?: (id: string) => void }) {
   const { captures, captureHistory, lastCaptureSync, syncCaptures } = useStore();
   const [checking, setChecking] = useState(false);
-  const [tab, setTab] = useState<Tab>('waiting');
 
   const check = async () => {
     setChecking(true);
@@ -59,52 +49,29 @@ export function Siri({
   };
 
   return (
-    <div className="screen">
+    <div className="screen has-fold">
       <header className="screen-head">
         <div>
           <h1>Siri</h1>
-          <p>Said out loud — what landed, and what needs a hand.</p>
+          <p>Transactions you dictated to your phone.</p>
         </div>
         <div className="head-actions">
-          {onShowInLedger && (
-            <Button tone="ghost" icon="bookmark" onClick={onShowInLedger}>
-              Show in ledger
-            </Button>
-          )}
           <Button tone="secondary" icon="refresh-cw" onClick={check} disabled={checking}>
             {checking ? 'Checking…' : 'Check again'}
           </Button>
         </div>
       </header>
 
-      <Segmented
-        options={[
-          {
-            value: 'waiting' as Tab,
-            label: captures.length > 0 ? `Waiting (${captures.length})` : 'Waiting',
-            icon: 'inbox',
-          },
-          { value: 'history' as Tab, label: 'History', icon: 'check-check' },
-        ]}
-        value={tab}
-        onChange={setTab}
-        name="siri-tab"
-      />
-
-      {tab === 'history' ? (
-        <History rows={captureHistory} onOpenTransaction={onOpenTransaction} />
-      ) : captures.length === 0 ? (
-        <Card>
-          <Empty
-            icon="inbox"
-            title="Nothing waiting"
-            body={
-              lastCaptureSync
-                ? 'Every capture so far went straight into the ledger — look under History. Say another one to your phone and it will be here when iCloud catches up.'
-                : 'Point a Shortcut at the drop file below and dictate a transaction to it.'
-            }
-          />
-        </Card>
+      {captures.length === 0 ? (
+        <Empty
+          screen
+          title="Nothing waiting"
+          body={
+            lastCaptureSync
+              ? 'Everything you have said so far is in your ledger.'
+              : 'Point a Shortcut at the drop file, then dictate a transaction.'
+          }
+        />
       ) : (
         <motion.div
           className="capture-list"
@@ -118,6 +85,18 @@ export function Siri({
         </motion.div>
       )}
 
+      {/* Everything that did land, folded away at the foot of the screen. A
+          tab made the two halves equals, which they are not: what is waiting
+          is work, and what went in is a record you look up. */}
+      <History
+        rows={captureHistory}
+        onOpenTransaction={onOpenTransaction}
+        // Only when something above it is not already claiming the space. An
+        // empty state fills the screen on its own, and a spacer growing
+        // beside it splits the room between them — which reads as the words
+        // sitting too high rather than as the fold sitting too low.
+        spacer={captures.length > 0}
+      />
     </div>
   );
 }
@@ -133,27 +112,66 @@ export function Siri({
 function History({
   rows,
   onOpenTransaction,
+  spacer = true,
 }: {
   rows: Capture[];
   onOpenTransaction?: (id: string) => void;
+  /** Whether the fold has to push itself to the foot of the screen. */
+  spacer?: boolean;
 }) {
   // Held by id rather than by value: the list refreshes under the sheet on
   // every sync, and a copy taken when it opened would go stale in place.
   const [showing, setShowing] = useState<string | null>(null);
   const capture = rows.find((r) => r.id === showing) ?? null;
 
-  if (rows.length === 0) {
-    return (
-      <Card>
-        <Empty
-          icon="check-check"
-          title="Nothing said yet"
-          body="Dictate a transaction to your phone. Once it lands in the ledger it is listed here, alongside the words that made it."
-        />
-      </Card>
-    );
-  }
+  const [open, setOpen] = useState(false);
+  // Nothing said yet is not worth a fold saying so — the screen above it
+  // already has an empty state, and two of them is the screen apologising.
+  if (rows.length === 0) return null;
+
   return (
+    <>
+      {/* The empty page between the list and the fold, so a screen with
+          little waiting still holds the fold at its foot. Opening winds it
+          back to nothing and walks the row up to the list above. */}
+      <motion.div
+        className="fold-gap"
+        initial={false}
+        animate={{ flexGrow: open || !spacer ? 0 : 1 }}
+        transition={{ duration: 0.42, ease: [0.22, 1, 0.36, 1] }}
+        aria-hidden
+      />
+
+      <section className="fold">
+        <button
+          type="button"
+          className={`fold-head ${open ? 'is-open' : ''}`}
+          onClick={() => setOpen((was) => !was)}
+          aria-expanded={open}
+        >
+          <motion.span animate={{ rotate: open ? 90 : 0 }} transition={spring}>
+            <Icon name="chevron-right" size={15} />
+          </motion.span>
+          <strong>History</strong>
+          <span className="fold-count">
+            {rows.length} {rows.length === 1 ? 'capture' : 'captures'}
+          </span>
+          <em>latest {dayLabel(rows[0].capturedAt)}</em>
+        </button>
+
+        <motion.div
+          className="fold-body"
+          initial={false}
+          // The list is in the page either way, so `auto` is a height that
+          // can actually be measured when the fold is asked to open.
+          animate={{ height: open ? 'auto' : 0 }}
+          transition={{ duration: 0.42, ease: [0.22, 1, 0.36, 1] }}
+          // Shut, it is still in the page: nothing inside should answer a Tab
+          // or be read out to anyone.
+          aria-hidden={!open}
+          inert={!open}
+        >
+          <div className="fold-inner">
     <Card padded={false}>
       <motion.div
         className="spoken-list"
@@ -209,7 +227,7 @@ function History({
                 onOpenTransaction(id);
               }}
             >
-              Open the posting
+              Open the transaction
             </Button>
           ) : undefined
         }
@@ -262,6 +280,10 @@ function History({
         )}
       </Sheet>
     </Card>
+          </div>
+        </motion.div>
+      </section>
+    </>
   );
 }
 

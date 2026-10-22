@@ -38,8 +38,17 @@ export const INVESTMENT_TABS = {
 export const isInvestmentRoute = (route: Route): route is keyof typeof INVESTMENT_TABS =>
   route in INVESTMENT_TABS;
 
-/** The day's work first, then the two lists the rest of it is filed against. */
-const NAV: { id: Route; label: string; icon: string }[] = [
+export interface NavItem {
+  id: Route;
+  label: string;
+  icon: string;
+}
+
+/** The day's work first, then the two lists the rest of it is filed against.
+ *  Exported because the phone's More sheet is this same list with the
+ *  destinations that earned a tab taken out of it — one order, one place to
+ *  change it, whichever shell is drawing it. */
+export const NAV: NavItem[] = [
   { id: 'overview', label: 'Overview', icon: 'layout-dashboard' },
   { id: 'transactions', label: 'Transactions', icon: 'list-filter' },
   { id: 'siri', label: 'Siri', icon: 'sparkles' },
@@ -70,8 +79,7 @@ export function Sidebar({
   canForward: boolean;
 }) {
   const { overview, theme, toggleTheme, settings, captures } = useStore();
-  // Whose book this is, as set under Settings › Your data. The mark takes its
-  // letter from the name, so the two never disagree.
+  // Whose book this is, as set under Settings › Your data.
   const owner = settings[OWNER_NAME]?.trim() || OWNER_FALLBACK;
 
   return (
@@ -107,7 +115,6 @@ export function Sidebar({
       </div>
 
       <div className="brand">
-        <span className="brand-mark">{owner.charAt(0).toUpperCase()}</span>
         <div className="brand-text">
           <strong>{owner}</strong>
           <span>{overview ? money(overview.netWorth) : '—'}</span>

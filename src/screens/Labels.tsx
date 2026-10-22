@@ -53,9 +53,8 @@ export function Labels({
         <div>
           <h1>Labels</h1>
           <p>
-            Pins on top of postings — a filing lives in categories, a label is temporary by
-            nature. A silent one is pinned the same way and never drawn: you filter by it, you
-            don’t read it.
+            Tags you can put on any transaction and filter your ledger by. A silent
+            one works the same way, but never shows on a row.
           </p>
         </div>
       </header>
@@ -75,14 +74,8 @@ export function Labels({
         {labels.length === 0 ? (
           <div className="card-pad">
             <Empty
-              icon="bookmark"
               title="No labels yet"
-              body="Make one — or import a statement, which pins Triage on whatever needs a look."
-              action={
-                <Button tone="primary" icon="plus" onClick={() => open(null)}>
-                  New label
-                </Button>
-              }
+              body="Tag any transaction, then filter your ledger by it."
             />
           </div>
         ) : (
@@ -94,7 +87,7 @@ export function Labels({
                   type="button"
                   className="label-name"
                   onClick={() => onOpenLabel?.(label.id)}
-                  title={`Show the ${label.count} ${label.count === 1 ? 'posting' : 'postings'} wearing it`}
+                  title={`Show the ${label.count} ${label.count === 1 ? 'transaction' : 'transactions'} wearing it`}
                 >
                   <span className="label-name-line">
                     {label.name}
@@ -144,10 +137,10 @@ export function Labels({
       >
         {(() => {
           const going = labels.find((l) => l.id === confirming);
-          if (!going) return 'The postings wearing it stay; they simply stop wearing it.';
+          if (!going) return 'The transactions wearing it stay; they simply stop wearing it.';
           return going.count > 0
             ? `${going.name} comes off the ${going.count} ${
-                going.count === 1 ? 'posting' : 'postings'
+                going.count === 1 ? 'transaction' : 'transactions'
               } wearing it. Nothing else about them changes.`
             : `${going.name} goes. Nothing is wearing it.`;
         })()}
@@ -213,8 +206,8 @@ function LabelSheet({
       title={editing ? 'Edit label' : 'New label'}
       subtitle={
         editing
-          ? 'Renaming keeps it on every posting it is pinned to'
-          : 'A pin you can put on any posting, and filter the ledger by'
+          ? 'Renaming keeps it on every transaction wearing it'
+          : 'A tag you can put on any transaction, and filter your ledger by'
       }
       width={430}
       footer={
@@ -274,8 +267,8 @@ function LabelSheet({
           label="Silent"
           hint={
             silent
-              ? 'In the pickers and the filters only — no chip on a row'
-              : 'Shows wherever the posting shows'
+              ? 'Filter by it, but never show it on a row'
+              : 'Shows on every transaction wearing it'
           }
         />
       </div>

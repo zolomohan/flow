@@ -58,7 +58,7 @@ export function PlanLinkSheet({
         // under something else can still be found.
         search={plan?.merchant || plan?.name}
         title={`Link payments to ${plan?.name ?? 'this plan'}`}
-        subtitle="Tick the payments that belong to it. Nothing counts for a plan until you say so."
+        subtitle="Tick the payments that belong to this plan"
       />
 
       <Confirm

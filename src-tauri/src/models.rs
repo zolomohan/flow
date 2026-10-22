@@ -54,13 +54,9 @@ pub struct AccountInput {
     pub opening_balance: Paise,
     pub color: String,
     pub icon: String,
-    pub credit_limit: Paise,
-    /// Both only mean anything on a card, and zero on either means that half
-    /// of the cycle isn't known.
-    #[serde(default)]
-    pub statement_day: i64,
-    #[serde(default)]
-    pub due_day: i64,
+    // No limit and no cycle days: a card's terms are the run of days they
+    // changed on, kept in `card_terms`, and the account's own figures are
+    // derived from those. Saving this form must never touch them.
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,6 +119,10 @@ pub struct Transaction {
     /// The labels pinned to this posting — "Triage" on anything an import
     /// brought in that hasn't been looked over yet.
     pub labels: Vec<TxLabel>,
+    /// The folders keeping this posting. A folder is not a filing and not a
+    /// pin — it is a collection something belongs to — so the row says which
+    /// ones by name rather than leaving you to open it and find out.
+    pub folders: Vec<TxFolder>,
     /// The posting this one gives back, when it is a refund. A refund undoes
     /// what it names rather than being money of its own: the two cancel, and
     /// neither is counted as earned or spent. The money still moved, so both
@@ -139,6 +139,16 @@ pub struct Transaction {
 
 /// A label as it sits on a posting. The count lives on `Label`, which is the
 /// list view's business, not the row's.
+/// One folder, as a posting inside it knows it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TxFolder {
+    pub id: String,
+    pub name: String,
+    pub color: String,
+    pub icon: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TxLabel {
@@ -542,6 +552,36 @@ pub struct Overview {
 
 // --------------------------------------------------------------------- cards
 
+/// A day a card's terms changed, and what they changed to. Recorded by hand:
+/// nothing in the book says what the limit was two years ago, or which day
+/// the statement closed on before the bank moved it, and without that every
+/// reading of an old cycle is against the card as it stands today.
+///
+/// `None` on a term is one this change said nothing about — it carries
+/// forward from whatever came before it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardTerm {
+    pub id: String,
+    pub account_id: String,
+    /// The plain day these terms began, and stood until the next.
+    pub effective_on: String,
+    pub credit_limit: Option<Paise>,
+    pub statement_day: Option<i64>,
+    pub due_day: Option<i64>,
+    pub note: Option<String>,
+}
+
+/// What a card's terms came to on one day, with every change up to it folded
+/// in. Zero on any of them means it was never known.
+#[derive(Debug, Clone, Copy)]
+pub struct Terms {
+    pub credit_limit: Paise,
+    pub statement_day: i64,
+    pub due_day: i64,
+}
+
+
 /// One billing cycle of a card: what it came to, and what was paid against
 /// it. The cycle still running is `open`, and its `closed_on` is a date in
 /// the future — the day the statement will be cut.
@@ -579,6 +619,10 @@ pub struct CardStat {
     /// Limit less outstanding. Zero when no limit is set, since nothing is
     /// known about how much room is left.
     pub available: Paise,
+    /// The limit as it stood at the end of the window this card was read
+    /// over — which is `credit_limit` for a window running up to today, and
+    /// the older, usually smaller figure for a window that has closed.
+    pub window_credit_limit: Paise,
     pub statement_day: i64,
     pub due_day: i64,
     /// The day the last statement closed, and the day it has to be paid by.
@@ -668,6 +712,12 @@ pub struct DebtPaymentInput {
     pub cash_account_id: Option<String>,
 }
 
+/// More money handed over against a debt already open. It has the shape of
+/// a repayment exactly — an amount, a day, and how the money met the ledger —
+/// and differs only in which way the money went.
+pub type DebtAddition = DebtPayment;
+pub type DebtAdditionInput = DebtPaymentInput;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Debt {
@@ -675,7 +725,12 @@ pub struct Debt {
     /// lent = they owe you · borrowed = you owe them
     pub direction: String,
     pub counterparty: String,
+    /// Everything handed over: what the debt opened at, and every addition
+    /// since. What is outstanding is measured against this.
     pub principal: Paise,
+    /// What the debt opened at, before anything was added to it — the figure
+    /// the form for editing the debt changes.
+    pub opening: Paise,
     pub opened_on: String,
     pub due_on: Option<String>,
     pub note: Option<String>,
@@ -689,9 +744,12 @@ pub struct Debt {
     pub from_split: bool,
     // Derived.
     pub paid: Paise,
+    pub added: Paise,
     pub outstanding: Paise,
     pub settled: bool,
     pub payments: Vec<DebtPayment>,
+    /// More handed over after it opened, oldest last like the repayments.
+    pub additions: Vec<DebtAddition>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

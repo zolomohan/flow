@@ -67,6 +67,18 @@ export const sheetPanel: Variants = {
 };
 
 /**
+ * The same sheet on a phone, where it is a bottom sheet: it slides up off the
+ * bottom edge rather than growing out of the middle of the window. Nothing
+ * scales — a panel that is already as wide as the screen has no room to come
+ * up from, and scaling one only makes its corners crawl.
+ */
+export const sheetPhone: Variants = {
+  initial: { y: '100%' },
+  animate: { y: 0, transition: springSoft },
+  exit: { y: '100%', transition: { duration: 0.2, ease: [0.4, 0, 1, 1] } },
+};
+
+/**
  * A sheet opened on top of another sheet — the ledger you pick a record from,
  * over the form asking for one. It comes up further and settles slower than a
  * sheet opened over the page: what it covers is already a panel, so a small
@@ -95,3 +107,17 @@ export const popover: Variants = {
 };
 
 export const press = { scale: 0.97 };
+
+/**
+ * The empty state. The card stack lands first and the words come up under
+ * it, so the eye is taken to the glyph before it is asked to read anything.
+ */
+export const emptyStack: Variants = {
+  initial: {},
+  animate: { transition: { staggerChildren: 0.055, delayChildren: 0.04 } },
+};
+
+export const emptyLine: Variants = {
+  initial: { opacity: 0, y: 7 },
+  animate: { opacity: 1, y: 0, transition: spring },
+};

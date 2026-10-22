@@ -80,7 +80,9 @@ export function DebtSheet({
     if (editing) {
       setDirection(editing.direction);
       setCounterparty(editing.counterparty);
-      setAmount(paiseToRupeeString(editing.principal));
+      // What it opened at. Whatever was added since is kept apart, each
+      // addition its own, and is changed from the debt's page.
+      setAmount(paiseToRupeeString(editing.opening));
       setOpenedOn(editing.openedOn.slice(0, 10));
       setDueOn(editing.dueOn?.slice(0, 10) ?? '');
       setNote(editing.note ?? '');
@@ -270,7 +272,12 @@ export function DebtSheet({
               </AnimatePresence>
             </div>
           </Field>
-          <Field label="Amount">
+          {/* Once more has been added, this is no longer the whole of it —
+              only where it started, and it says so. */}
+          <Field
+            label={editing?.added ? 'Opened at' : 'Amount'}
+            hint={editing?.added ? `+ ${money(editing.added)} since` : undefined}
+          >
             <div className="rupee-input">
               <span>₹</span>
               <TextInput
@@ -375,16 +382,16 @@ export function DebtSheet({
                           <>
                             Saving this moves {money(rupeesToPaise(amount))} out of{' '}
                             {live.find((a) => a.id === writeAccount)?.name ?? 'the account'} on{' '}
-                            {dayLabel(openedOn)} and into {holding?.name ?? 'Debts'} — a
-                            transfer, not spending — with {counterparty.trim() || 'their'} debt
+                            {dayLabel(openedOn)} and into {holding?.name ?? 'Debts'} as a
+                            transfer rather than spending, with {counterparty.trim() || 'their'} debt
                             standing against it.
                           </>
                         ) : (
                           <>
                             Saving this brings {money(rupeesToPaise(amount))} into{' '}
                             {live.find((a) => a.id === writeAccount)?.name ?? 'the account'} on{' '}
-                            {dayLabel(openedOn)} from {holding?.name ?? 'Debts'} — a transfer,
-                            not earnings — with what you owe {counterparty.trim() || 'them'}{' '}
+                            {dayLabel(openedOn)} from {holding?.name ?? 'Debts'} as a transfer
+                            rather than earnings, with what you owe {counterparty.trim() || 'them'}{' '}
                             standing against it.
                           </>
                         )}
@@ -415,19 +422,30 @@ export function DebtSheet({
   );
 }
 
-/** Recording a repayment against an existing debt. */
+/** Which way money moved against a debt after it opened: some of it back, or
+ *  more of it handed over. */
+export type DebtMovement = 'repayment' | 'addition';
+
+/**
+ * Recording a repayment against an existing debt — or more handed over on top
+ * of it, which is the same form asking the same questions about money going
+ * the other way.
+ */
 export function DebtPaymentSheet({
-  open, onClose, debt, editing, onOpenTransaction,
+  open, onClose, debt, kind = 'repayment', editing, onOpenTransaction,
 }: {
   open: boolean;
   onClose: () => void;
   debt: Debt | null;
-  /** The repayment being changed, when one is. */
+  kind?: DebtMovement;
+  /** The repayment or addition being changed, when one is. */
   editing?: DebtPayment | null;
-  /** Opens the posting this repayment names, when it names one. */
+  /** Opens the posting this entry names, when it names one. */
   onOpenTransaction?: (id: string) => void;
 }) {
-  const { accounts, saveDebtPayment, deleteDebtPayment } = useStore();
+  const {
+    accounts, saveDebtPayment, deleteDebtPayment, saveDebtAddition, deleteDebtAddition,
+  } = useStore();
   const live = useMemo(() => accounts.filter((a) => !a.archived && !a.system), [accounts]);
   const accountOptions: SelectOption[] = live.map((a) => ({
     value: a.id,
@@ -456,8 +474,15 @@ export function DebtPaymentSheet({
   useEffect(() => {
     if (!open || !debt) return;
     // A repayment being changed opens as it stands; a new one opens on what
-    // is left, which is what is usually being paid.
-    setAmount(paiseToRupeeString(editing ? editing.amount : debt.outstanding));
+    // is left, which is what is usually being paid. More handed over has no
+    // figure it is likely to be, so it opens empty.
+    setAmount(
+      editing
+        ? paiseToRupeeString(editing.amount)
+        : kind === 'addition'
+          ? ''
+          : paiseToRupeeString(debt.outstanding),
+    );
     setOccurredAt((editing?.occurredAt ?? toLocalInput()).slice(0, 10));
     setNote(editing?.note ?? '');
     setTxId(editing?.transactionId ?? null);
@@ -470,18 +495,25 @@ export function DebtPaymentSheet({
     );
     setError(null);
     setWriteError(null);
-  }, [open, debt, editing]);
+  }, [open, debt, editing, kind]);
 
   if (!debt) return null;
+
+  const adding = kind === 'addition';
+  const lent = debt.direction === 'lent';
+  const linkQuestion = adding
+    ? lent
+      ? 'Which record was the money you lent?'
+      : 'Which record was the money you borrowed?'
+    : 'Which record was this repayment?';
 
   const submit = async () => {
     const value = rupeesToPaise(amount);
     if (value <= 0) return setError('Enter an amount.');
     if (recordWay === 'write' && !cashId)
       return setWriteError('Which account did the money move through?');
-    if (recordWay === 'link' && !txId)
-      return setWriteError('Which record was this repayment?');
-    await saveDebtPayment({
+    if (recordWay === 'link' && !txId) return setWriteError(linkQuestion);
+    await (adding ? saveDebtAddition : saveDebtPayment)({
       id: editing?.id ?? null,
       debtId: debt.id,
       amount: value,
@@ -497,13 +529,23 @@ export function DebtPaymentSheet({
     <Sheet
       open={open}
       onClose={onClose}
-      title={editing ? 'Edit repayment' : 'Record a repayment'}
+      title={
+        adding
+          ? editing
+            ? lent ? 'Edit money lent' : 'Edit money borrowed'
+            : lent ? `Lend ${debt.counterparty} more` : `Borrow more from ${debt.counterparty}`
+          : editing ? 'Edit repayment' : 'Record a repayment'
+      }
       subtitle={
         editing
           ? `${debt.counterparty} · recorded ${dayLabel(editing.occurredAt)}`
-          : debt.direction === 'lent'
-            ? `${debt.counterparty} paying you back · ${money(debt.outstanding)} outstanding`
-            : `Paying ${debt.counterparty} back · ${money(debt.outstanding)} outstanding`
+          : adding
+            ? lent
+              ? `On top of the ${money(debt.outstanding)} they already owe you`
+              : `On top of the ${money(debt.outstanding)} you already owe them`
+            : lent
+              ? `${debt.counterparty} paying you back · ${money(debt.outstanding)} outstanding`
+              : `Paying ${debt.counterparty} back · ${money(debt.outstanding)} outstanding`
       }
       width={470}
       footer={
@@ -518,7 +560,11 @@ export function DebtPaymentSheet({
           <div className="foot-actions">
             <Button tone="ghost" onClick={onClose}>Cancel</Button>
             <Button tone="primary" onClick={submit}>
-              {editing ? 'Save changes' : 'Record repayment'}
+              {editing
+                ? 'Save changes'
+                : adding
+                  ? lent ? 'Lend more' : 'Borrow more'
+                  : 'Record repayment'}
             </Button>
           </div>
         </>
@@ -550,7 +596,7 @@ export function DebtPaymentSheet({
         <Field label="Note" hint="optional">
           <TextInput
             value={note}
-            placeholder="Anything worth remembering"
+            placeholder={adding ? 'What it was for' : 'Anything worth remembering'}
             onChange={(e) => setNote(e.target.value)}
           />
         </Field>
@@ -579,8 +625,9 @@ export function DebtPaymentSheet({
               {recordWay === 'none' && (
                 <p className="page-note is-quiet">
                   <Icon name="circle-dashed" size={13} />
-                  The repayment comes off the debt, and nothing goes into the
-                  ledger. For money that changed hands in cash.
+                  {adding
+                    ? 'The amount goes onto the debt, and nothing goes into the ledger. For money that changed hands in cash.'
+                    : 'The repayment comes off the debt, and nothing goes into the ledger. For money that changed hands in cash.'}
                 </p>
               )}
 
@@ -589,7 +636,7 @@ export function DebtPaymentSheet({
                   <TransactionPicker
                     value={txId}
                     label={txLabel}
-                    title="Which record was this repayment?"
+                    title={linkQuestion}
                     subtitle={`${debt.counterparty} · search and filter your whole ledger`}
                     browseLabel="Link record"
                     onChange={(id, label) => {
@@ -622,18 +669,20 @@ export function DebtPaymentSheet({
       <Confirm
         stacked
         open={confirming}
-        title="Delete this repayment?"
+        title={adding ? 'Take this off the debt?' : 'Delete this repayment?'}
         onConfirm={async () => {
           if (!editing) return;
           setConfirming(false);
-          await deleteDebtPayment(editing.id);
+          await (adding ? deleteDebtAddition : deleteDebtPayment)(editing.id);
           onClose();
         }}
         onCancel={() => setConfirming(false)}
       >
-        {editing
-          ? `${money(editing.amount)} comes off what has been repaid, and the debt stands that much higher again. Any posting behind it stays in your ledger.`
-          : 'The debt stands that much higher again.'}
+        {adding
+          ? `${money(editing?.amount ?? 0)} comes off what was ${lent ? 'lent' : 'borrowed'}, so the debt stands that much lower. A record this wrote goes with it; one you linked stays in your ledger.`
+          : editing
+            ? `${money(editing.amount)} comes off what has been repaid, so the debt stands that much higher again. Any transaction behind it stays in your ledger.`
+            : 'The debt stands that much higher again.'}
       </Confirm>
     </Sheet>
   );

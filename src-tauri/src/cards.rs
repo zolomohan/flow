@@ -181,33 +181,95 @@ fn last_used(conn: &Connection, card: &str) -> Result<Option<String>> {
     .map_err(oops)
 }
 
+/// The day the statement closes for a cycle that opened on `from`.
+///
+/// Forwards rather than backwards, because a statement day is only knowable
+/// forwards: a bank that moves the closing day from the 5th to the 20th on
+/// the 24th of May does not go back and cut a statement on the 20th of May —
+/// it cuts the next one on the 20th of June, and the cycle across the change
+/// is a long one. Walking back from today would put that statement a month
+/// early and a fortnight of charges on the wrong bill.
+///
+/// `None` where the card keeps no cycle from here on, which is the one case
+/// with no answer to give.
+fn close_after(from: NaiveDate, terms: &[CardTerm], live: Terms) -> Option<NaiveDate> {
+    let day_on = |d: NaiveDate| terms_on(terms, &iso(d), live).statement_day;
+    let mut open = from;
+    let mut day = day_on(open);
+    if day == 0 {
+        // No cycle kept when this one would have opened: the card's cycles
+        // start at the change that first gives it one.
+        let next = terms
+            .iter()
+            .filter(|t| t.statement_day.unwrap_or(0) > 0 && t.effective_on > iso(open))
+            .map(|t| t.effective_on.as_str())
+            .min()?;
+        open = NaiveDate::parse_from_str(next, "%Y-%m-%d").ok()?;
+        day = day_on(open);
+        if day == 0 {
+            return None;
+        }
+    }
+    let mut close = first_after(open - Duration::days(1), day);
+    // A day moved inside the cycle moves the statement with it: the close is
+    // then the first one on the new day, counted from the change.
+    loop {
+        let moved = terms.iter().find(|t| {
+            t.statement_day.is_some_and(|d| d != day)
+                && t.effective_on > iso(open)
+                && t.effective_on <= iso(close)
+        });
+        let Some(change) = moved else { break };
+        day = change.statement_day.unwrap_or(day);
+        if day == 0 {
+            return None;
+        }
+        open = NaiveDate::parse_from_str(&change.effective_on, "%Y-%m-%d").ok()?;
+        close = first_after(open - Duration::days(1), day);
+    }
+    Some(close)
+}
+
 /// The cycles a card has been through, oldest first, with the one still
 /// running last. Empty when the card keeps no cycle: there is nothing to
 /// divide the months into, and inventing a division would be a lie.
-fn cycles_of(days: &[(NaiveDate, Movement)], statement_day: i64, on: NaiveDate) -> Vec<CardCycle> {
-    if statement_day == 0 {
+///
+/// Built forwards from well before the dozen that are kept, so a statement
+/// day the bank moved splits the cycles where it actually moved.
+fn cycles_of(
+    days: &[(NaiveDate, Movement)],
+    terms: &[CardTerm],
+    live: Terms,
+    on: NaiveDate,
+) -> Vec<CardCycle> {
+    if terms_on(terms, &iso(on), live).statement_day == 0 {
         return Vec::new();
     }
-    // The open cycle runs from the day after the last statement to the next
-    // one, which has not happened yet.
-    let last = last_on_or_before(on, statement_day);
-    let mut closes: Vec<NaiveDate> = Vec::new();
-    let mut walk = last;
-    for _ in 0..CYCLES_BACK {
-        closes.push(walk);
-        walk = last_on_or_before(walk - Duration::days(1), statement_day);
+    // Far enough back that the dozen kept are all properly bounded — the
+    // first cycle of the walk opens on an arbitrary day and is dropped.
+    let mut from = on - Duration::days(31 * (CYCLES_BACK + 3));
+    let mut runs: Vec<(NaiveDate, NaiveDate)> = Vec::new();
+    for _ in 0..(CYCLES_BACK + 8) {
+        let Some(close) = close_after(from, terms, live) else { break };
+        // A cycle that opened before the card kept one starts where the
+        // statement it ends with does.
+        let opened = from.min(close);
+        runs.push((opened, close));
+        if close > on {
+            break;
+        }
+        from = close + Duration::days(1);
     }
-    closes.reverse();
-    closes.push(first_after(on, statement_day));
+    // The one still running is the last, and the dozen before it the rest.
+    let keep = (CYCLES_BACK + 1) as usize;
+    let cut = runs.len().saturating_sub(keep);
 
-    closes
+    runs[cut..]
         .iter()
-        .map(|close| {
-            let from = last_on_or_before(*close - Duration::days(1), statement_day)
-                + Duration::days(1);
-            let m = between(days, from, *close);
+        .map(|(opened, close)| {
+            let m = between(days, *opened, *close);
             CardCycle {
-                from: iso(from),
+                from: iso(*opened),
                 closed_on: iso(*close),
                 spend: m.charged - m.credited,
                 paid: m.paid,
@@ -217,23 +279,39 @@ fn cycles_of(days: &[(NaiveDate, Movement)], statement_day: i64, on: NaiveDate) 
         .collect()
 }
 
-/// One card, whole.
+/// One card, whole, read over `start`..`end` — and, for the comparison the
+/// tab makes, over `prev`, the window of the same shape immediately before it.
+/// A window with nothing before it (all of time) has no comparison to make.
 fn stat_of(
     conn: &Connection,
     card: &Account,
-    month: &str,
-    span: i32,
     start: &str,
     end: &str,
+    prev: Option<(&str, &str)>,
 ) -> Result<CardStat> {
     let now = today();
     let days = movements(conn, &card.id)?;
 
+    // The card's terms are the changes recorded against it; what the account
+    // row carries is a copy kept in step for the screens that read it in
+    // passing. Everything here reads them from the changes, so a card is
+    // never read on terms its own history disagrees with.
+    let terms = card_terms(conn, &card.id)?;
+    let live = Terms {
+        credit_limit: card.credit_limit,
+        statement_day: card.statement_day,
+        due_day: card.due_day,
+    };
+    let standing = terms_on(&terms, &iso(now), live);
+    // …and as they stood when the window ended, so an old cycle is read
+    // against the card as it was then rather than as it is now.
+    let window_credit_limit = terms_on(&terms, &end[..10.min(end.len())], live).credit_limit;
+
     // What is owed, and what is left of the limit. A card sitting in credit
     // owes nothing and has its whole limit — plus the credit — to spend.
     let owed = (-card.balance).max(0);
-    let available = if card.credit_limit > 0 {
-        (card.credit_limit - owed).max(0)
+    let available = if standing.credit_limit > 0 {
+        (standing.credit_limit - owed).max(0)
     } else {
         0
     };
@@ -241,15 +319,15 @@ fn stat_of(
     // The statement, worked backwards from the balance. Everything that has
     // happened since it closed is taken back off, which leaves what it said.
     let (statement_on, due_on, statement_total, billed, unbilled, paid_since) =
-        if card.statement_day > 0 {
-            let closed = last_on_or_before(now, card.statement_day);
+        if standing.statement_day > 0 {
+            let closed = last_on_or_before(now, standing.statement_day);
             let since = between(&days, closed + Duration::days(1), now);
             let statement = owed + since.credited - since.charged + since.paid;
             // Payments since the statement pay the bill off first, which is
             // what a bank does with them and what anybody paying one means.
             let still_due = (statement - since.paid).clamp(0, owed);
-            let due = if card.due_day > 0 {
-                Some(iso(first_after(closed, card.due_day)))
+            let due = if standing.due_day > 0 {
+                Some(iso(first_after(closed, standing.due_day)))
             } else {
                 None
             };
@@ -268,17 +346,10 @@ fn stat_of(
         };
 
     let (spend, charges) = netted_spend(conn, &card.id, start, end)?;
-    // The window immediately before this one, of the same length, so a year
-    // is compared against a year rather than against a single month.
-    let prev_month = shift_month(month, -span)?;
-    let (pstart, _) = month_bounds(&shift_month(&prev_month, -(span - 1))?)?;
-    let (_, pend) = month_bounds(&prev_month)?;
-    let (prev_spend, _) = netted_spend(
-        conn,
-        &card.id,
-        &pstart.format("%Y-%m-%d").to_string(),
-        &format!("{}T23:59:59", pend.format("%Y-%m-%d")),
-    )?;
+    let prev_spend = match prev {
+        Some((pstart, pend)) => netted_spend(conn, &card.id, pstart, pend)?.0,
+        None => 0,
+    };
 
     let window = between(
         &days,
@@ -294,10 +365,11 @@ fn stat_of(
         icon: card.icon.clone(),
         outstanding: owed,
         balance: card.balance,
-        credit_limit: card.credit_limit,
+        credit_limit: standing.credit_limit,
         available,
-        statement_day: card.statement_day,
-        due_day: card.due_day,
+        window_credit_limit,
+        statement_day: standing.statement_day,
+        due_day: standing.due_day,
         statement_on,
         due_on,
         statement_total,
@@ -309,7 +381,7 @@ fn stat_of(
         paid: window.paid,
         charges,
         last_used: last_used(conn, &card.id)?,
-        cycles: cycles_of(&days, card.statement_day, now),
+        cycles: cycles_of(&days, &terms, live, now),
         top_categories: db::spend_by_category_in(conn, start, end, Some(&card.id))?,
         top_merchants: top_merchants(conn, &card.id, start, end)?,
     })
@@ -358,21 +430,268 @@ fn monthly_flow(conn: &Connection, cards: &[String], from: &str, to: &str) -> Re
         .collect())
 }
 
+/// Every change of terms recorded against a card, oldest first.
+pub fn card_terms(conn: &Connection, account: &str) -> Result<Vec<CardTerm>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, account_id, effective_on, credit_limit, statement_day, due_day, note
+             FROM card_terms WHERE account_id = ?1 ORDER BY effective_on",
+        )
+        .map_err(oops)?;
+    let rows = stmt
+        .query_map(params![account], |r| {
+            Ok(CardTerm {
+                id: r.get(0)?,
+                account_id: r.get(1)?,
+                effective_on: r.get(2)?,
+                credit_limit: r.get(3)?,
+                statement_day: r.get(4)?,
+                due_day: r.get(5)?,
+                note: r.get(6)?,
+            })
+        })
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?;
+    Ok(rows)
+}
+
+/// The terms in force on a day: every change up to it folded forward, one
+/// term at a time, since a change that only moved the limit says nothing
+/// about the statement day and must not be read as having cleared it.
+///
+/// A term nothing was recorded for before that day falls back to the
+/// earliest figure on file — the book only knows what it became later, and
+/// that is still a better answer than today's, which is the one that made
+/// the old cycle read wrong in the first place. A card with nothing recorded
+/// at all is simply on the terms it is on now.
+fn terms_on(rows: &[CardTerm], day: &str, live: Terms) -> Terms {
+    let mut terms = Terms { credit_limit: 0, statement_day: 0, due_day: 0 };
+    let mut known = (false, false, false);
+    for row in rows.iter().filter(|r| r.effective_on.as_str() <= day) {
+        if let Some(limit) = row.credit_limit {
+            terms.credit_limit = limit;
+            known.0 = true;
+        }
+        if let Some(day) = row.statement_day {
+            terms.statement_day = day;
+            known.1 = true;
+        }
+        if let Some(day) = row.due_day {
+            terms.due_day = day;
+            known.2 = true;
+        }
+    }
+    // Whatever the changes up to that day never mentioned: the earliest the
+    // book has, and failing that the card as it stands.
+    //
+    // Only changes that have actually happened can stand in like that. One
+    // dated into next year says nothing about any day before it — least of
+    // all about today, when the card is plainly not on those terms yet.
+    let now = iso(today());
+    let started = |r: &&CardTerm| r.effective_on <= now;
+    if !known.0 {
+        terms.credit_limit = rows
+            .iter()
+            .filter(started)
+            .find_map(|r| r.credit_limit)
+            .unwrap_or(live.credit_limit);
+    }
+    if !known.1 {
+        terms.statement_day = rows
+            .iter()
+            .filter(started)
+            .find_map(|r| r.statement_day)
+            .unwrap_or(live.statement_day);
+    }
+    if !known.2 {
+        terms.due_day = rows
+            .iter()
+            .filter(started)
+            .find_map(|r| r.due_day)
+            .unwrap_or(live.due_day);
+    }
+    terms
+}
+
+/// Records what a card's terms became on a day. A change dated today or
+/// earlier moves the card itself too, so the account never disagrees with
+/// its own history.
+pub fn save_card_term(
+    conn: &Connection,
+    account: &str,
+    effective_on: &str,
+    credit_limit: Option<Paise>,
+    statement_day: Option<i64>,
+    due_day: Option<i64>,
+    note: Option<&str>,
+) -> Result<CardTerm> {
+    if credit_limit.is_none() && statement_day.is_none() && due_day.is_none() {
+        return Err(oops("a change has to change something"));
+    }
+    conn.execute(
+        "INSERT INTO card_terms
+             (id, account_id, effective_on, credit_limit, statement_day, due_day, note, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(account_id, effective_on)
+         DO UPDATE SET credit_limit = excluded.credit_limit,
+                       statement_day = excluded.statement_day,
+                       due_day = excluded.due_day,
+                       note = excluded.note",
+        params![
+            db::new_id(),
+            account,
+            effective_on,
+            credit_limit,
+            statement_day,
+            due_day,
+            note,
+            db::now()
+        ],
+    )
+    .map_err(oops)?;
+    sync_live_terms(conn, account)?;
+    card_terms(conn, account)?
+        .into_iter()
+        .find(|t| t.effective_on == effective_on)
+        .ok_or_else(|| oops("the change was not saved"))
+}
+
+/// Takes a recorded change back out. Whatever is left standing on today is
+/// what the card is on, exactly as after a change is saved.
+pub fn delete_card_term(conn: &Connection, id: &str) -> Result<()> {
+    let account: Option<String> = conn
+        .query_row("SELECT account_id FROM card_terms WHERE id = ?1", params![id], |r| r.get(0))
+        .ok();
+    conn.execute("DELETE FROM card_terms WHERE id = ?1", params![id])
+        .map_err(oops)?;
+    if let Some(account) = account {
+        sync_live_terms(conn, &account)?;
+    }
+    Ok(())
+}
+
+/// Moves the account onto the terms standing today. Changes dated ahead are
+/// terms that have not started yet, and the card is not on them.
+fn sync_live_terms(conn: &Connection, account: &str) -> Result<()> {
+    let rows = card_terms(conn, account)?;
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let live = live_terms(conn, account)?;
+    let now = terms_on(&rows, &iso(today()), live);
+    conn.execute(
+        "UPDATE accounts SET credit_limit = ?2, statement_day = ?3, due_day = ?4 WHERE id = ?1",
+        params![account, now.credit_limit, now.statement_day, now.due_day],
+    )
+    .map_err(oops)?;
+    Ok(())
+}
+
+/// The terms as the account itself has them — where a card with nothing
+/// recorded stands, and the floor under everything above.
+fn live_terms(conn: &Connection, account: &str) -> Result<Terms> {
+    conn.query_row(
+        "SELECT credit_limit, statement_day, due_day FROM accounts WHERE id = ?1",
+        params![account],
+        |r| {
+            Ok(Terms {
+                credit_limit: r.get(0)?,
+                statement_day: r.get(1)?,
+                due_day: r.get(2)?,
+            })
+        },
+    )
+    .map_err(oops)
+}
+
+/// The window a card view is read over, and the one before it that the tab
+/// compares against.
+struct Window {
+    start: String,
+    end: String,
+    /// None where nothing came before — a window that reaches back to the
+    /// start of the book has no earlier self to be measured against.
+    prev: Option<(String, String)>,
+}
+
+/// The days a card view covers. Usually that is the months on the tab's own
+/// strip; a card read over its billing cycle, or over the whole book, says so
+/// in days instead, because neither is a run of calendar months.
+///
+/// The comparison follows the window it is made about: whole months back a
+/// whole month, and an arbitrary run of days back the same number of days.
+fn window_of(month: &str, span: i32, from: Option<&str>, to: Option<&str>) -> Result<Window> {
+    let day_end = |d: NaiveDate| format!("{}T23:59:59", d.format("%Y-%m-%d"));
+
+    let day = |d: &str| {
+        NaiveDate::parse_from_str(&d[..10.min(d.len())], "%Y-%m-%d")
+            .map_err(|_| oops(format!("{d} is not a day")))
+    };
+
+    if from.is_none() && to.is_none() {
+        // The months on screen, and the same number of months before them, so
+        // a year is compared against a year rather than a single month.
+        let (start, _) = month_bounds(&shift_month(month, -(span - 1))?)?;
+        let (_, end) = month_bounds(month)?;
+        let prev_month = shift_month(month, -span)?;
+        let (pstart, _) = month_bounds(&shift_month(&prev_month, -(span - 1))?)?;
+        let (_, pend) = month_bounds(&prev_month)?;
+        return Ok(Window {
+            start: start.format("%Y-%m-%d").to_string(),
+            end: day_end(end),
+            prev: Some((pstart.format("%Y-%m-%d").to_string(), day_end(pend))),
+        });
+    }
+
+    let end = match to {
+        Some(t) => day(t)?,
+        None => today(),
+    };
+    // No opening day is all of time up to `to`: everything the card has ever
+    // done, which has nothing before it to be compared against.
+    let Some(from) = from else {
+        return Ok(Window {
+            start: "0001-01-01".to_string(),
+            end: day_end(end),
+            prev: None,
+        });
+    };
+    let start = day(from)?;
+    // The run of days immediately before this one, the same length: the cycle
+    // before this cycle, near enough, however the bank's dates fall.
+    let days = (end - start).num_days().max(0);
+    let prev_end = start - Duration::days(1);
+    let prev_start = prev_end - Duration::days(days);
+    Ok(Window {
+        start: start.format("%Y-%m-%d").to_string(),
+        end: day_end(end),
+        prev: Some((prev_start.format("%Y-%m-%d").to_string(), day_end(prev_end))),
+    })
+}
+
 /// Every card in the book, in the order the accounts screen keeps them.
 /// Archived cards are left out: a card you have closed is history, and the
 /// Accounts screen is where history is kept.
-pub fn cards_overview(conn: &Connection, month: &str, span: u32) -> Result<CardsOverview> {
+pub fn cards_overview(
+    conn: &Connection,
+    month: &str,
+    span: u32,
+    from: Option<&str>,
+    to: Option<&str>,
+) -> Result<CardsOverview> {
     let span = span.max(1) as i32;
-    let first_month = shift_month(month, -(span - 1))?;
-    let (start, _) = month_bounds(&first_month)?;
-    let (_, end) = month_bounds(month)?;
-    let start_s = start.format("%Y-%m-%d").to_string();
-    let end_s = format!("{}T23:59:59", end.format("%Y-%m-%d"));
+    let window = window_of(month, span, from, to)?;
+    let (start_s, end_s) = (window.start.clone(), window.end.clone());
+    let prev = window
+        .prev
+        .as_ref()
+        .map(|(a, b)| (a.as_str(), b.as_str()));
 
     let accounts = db::list_accounts(conn)?;
     let mut cards = Vec::new();
     for card in accounts.iter().filter(|a| a.kind == "credit" && !a.archived) {
-        cards.push(stat_of(conn, card, month, span, &start_s, &end_s)?);
+        cards.push(stat_of(conn, card, &start_s, &end_s, prev)?);
     }
 
     // A year of months, or the window when it reaches back further — and
@@ -442,6 +761,17 @@ mod tests {
         id
     }
 
+    /// The terms as the account row itself carries them: the copy the rest
+    /// of the app reads in passing.
+    fn row_of(conn: &Connection, card: &str) -> (Paise, i64, i64) {
+        conn.query_row(
+            "SELECT credit_limit, statement_day, due_day FROM accounts WHERE id = ?1",
+            params![card],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap()
+    }
+
     fn post(
         conn: &Connection,
         kind: &str,
@@ -470,7 +800,7 @@ mod tests {
     /// enough to hold what the test wrote whatever day the test is run.
     fn only_card(conn: &Connection) -> CardStat {
         let month = Utc::now().format("%Y-%m").to_string();
-        cards_overview(conn, &month, 2).unwrap().cards.remove(0)
+        cards_overview(conn, &month, 2, None, None).unwrap().cards.remove(0)
     }
 
     /// A cycle day the month is too short for falls on the last day it has,
@@ -581,6 +911,231 @@ mod tests {
         assert_eq!(last_closed.spend, 1_000_00);
     }
 
+    /// A window given in days is read as days: only what falls inside it
+    /// counts, and what it is compared against is the same run of days
+    /// immediately before — which is how a cycle is read against the cycle
+    /// before it, whatever days the bank's own dates fall on.
+    #[test]
+    fn a_window_given_in_days_counts_only_those_days() {
+        let (conn, _path) = book();
+        let card = account(&conn, "credit", 0, 0, 0);
+        let day = today();
+        post(&conn, "expense", 500_00, &card, None, day - Duration::days(15), None);
+        post(&conn, "expense", 300_00, &card, None, day - Duration::days(5), None);
+
+        let month = Utc::now().format("%Y-%m").to_string();
+        let from = iso(day - Duration::days(9));
+        let to = iso(day);
+        let stat = cards_overview(&conn, &month, 1, Some(&from), Some(&to))
+            .unwrap()
+            .cards
+            .remove(0);
+        // The last ten days hold one charge; the ten before them hold the other.
+        assert_eq!(stat.spend, 300_00);
+        assert_eq!(stat.charges, 1);
+        assert_eq!(stat.prev_spend, 500_00);
+
+        // No opening day is the whole of the card's life, and nothing came
+        // before it to compare against.
+        let all = cards_overview(&conn, &month, 1, None, Some("9999-12-31"))
+            .unwrap()
+            .cards
+            .remove(0);
+        assert_eq!(all.spend, 800_00);
+        assert_eq!(all.charges, 2);
+        assert_eq!(all.prev_spend, 0);
+    }
+
+    /// A limit that has been raised is read as it stood at the time: the
+    /// window that closed before the raise is against the old figure, and
+    /// what the card is on now follows the newest change dated today or
+    /// before.
+    #[test]
+    fn a_window_is_read_against_the_limit_of_its_own_day() {
+        let (conn, _path) = book();
+        let card = account(&conn, "credit", 50_000_00, 0, 0);
+        let day = today();
+        let raised = day - Duration::days(30);
+
+        save_card_term(&conn, &card, &iso(raised), Some(2_00_000_00), None, None, Some("raised"))
+            .unwrap();
+        save_card_term(
+            &conn,
+            &card,
+            &iso(raised - Duration::days(400)),
+            Some(80_000_00),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // The newest change dated on or before today is the limit now, so
+        // the card itself has been moved to match.
+        let month = Utc::now().format("%Y-%m").to_string();
+        let now_stat = cards_overview(&conn, &month, 1, None, None).unwrap().cards.remove(0);
+        assert_eq!(now_stat.credit_limit, 2_00_000_00);
+        assert_eq!(now_stat.window_credit_limit, 2_00_000_00);
+
+        // A window that closed the day before the raise is read against what
+        // the limit was then.
+        let before = iso(raised - Duration::days(1));
+        let older = cards_overview(&conn, &month, 1, Some(&iso(raised - Duration::days(31))), Some(&before))
+            .unwrap()
+            .cards
+            .remove(0);
+        assert_eq!(older.window_credit_limit, 80_000_00);
+        assert_eq!(older.credit_limit, 2_00_000_00);
+
+        // Nothing recorded that far back: the earliest figure on file is a
+        // better answer than the one the card is on today.
+        let ancient = iso(raised - Duration::days(900));
+        let far = cards_overview(&conn, &month, 1, Some(&ancient), Some(&ancient))
+            .unwrap()
+            .cards
+            .remove(0);
+        assert_eq!(far.window_credit_limit, 80_000_00);
+
+        // Taking the raise back out puts the card back on the older limit.
+        let raise = card_terms(&conn, &card)
+            .unwrap()
+            .into_iter()
+            .find(|t| t.credit_limit == Some(2_00_000_00))
+            .unwrap();
+        delete_card_term(&conn, &raise.id).unwrap();
+        let after = cards_overview(&conn, &month, 1, None, None).unwrap().cards.remove(0);
+        assert_eq!(after.credit_limit, 80_000_00);
+    }
+
+    /// Saving the account form leaves a card's terms exactly where they are.
+    /// They belong to the changes recorded against it, and a form that wrote
+    /// its own blanks over them would take the cycle off a card every time
+    /// its name was corrected — which is what it did.
+    #[test]
+    fn saving_the_account_leaves_the_terms_alone() {
+        let (conn, _path) = book();
+        let card = account(&conn, "credit", 0, 0, 0);
+        save_card_term(
+            &conn,
+            &card,
+            &iso(today() - Duration::days(10)),
+            Some(1_00_000_00),
+            Some(2),
+            Some(22),
+            None,
+        )
+        .unwrap();
+        assert_eq!(row_of(&conn, &card), (1_00_000_00, 2, 22));
+
+        db::save_account(
+            &conn,
+            AccountInput {
+                id: Some(card.clone()),
+                name: "Swiggy HDFC".into(),
+                kind: "credit".into(),
+                institution: None,
+                opening_balance: 0,
+                color: "#118ae4".into(),
+                icon: "credit-card".into(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(row_of(&conn, &card), (1_00_000_00, 2, 22));
+
+        // And the card still reads by its own cycle rather than by the month.
+        let month = Utc::now().format("%Y-%m").to_string();
+        let stat = cards_overview(&conn, &month, 1, None, None).unwrap().cards.remove(0);
+        assert_eq!(stat.statement_day, 2);
+        assert!(!stat.cycles.is_empty());
+    }
+
+    /// Even a card whose account row has lost its terms is read by what was
+    /// recorded against it: the changes are the card, and the row is a copy.
+    #[test]
+    fn the_recorded_terms_outrank_the_account_row() {
+        let (conn, _path) = book();
+        let card = account(&conn, "credit", 0, 0, 0);
+        save_card_term(&conn, &card, &iso(today() - Duration::days(40)), None, Some(2), Some(22), None)
+            .unwrap();
+        // As if something had blanked the copy behind the card's back.
+        conn.execute(
+            "UPDATE accounts SET statement_day = 0, due_day = 0 WHERE id = ?1",
+            params![card],
+        )
+        .unwrap();
+
+        let month = Utc::now().format("%Y-%m").to_string();
+        let stat = cards_overview(&conn, &month, 1, None, None).unwrap().cards.remove(0);
+        assert_eq!(stat.statement_day, 2);
+        assert_eq!(stat.due_day, 22);
+        assert!(!stat.cycles.is_empty());
+    }
+
+    /// A change dated ahead is a card the bank has told you about and not
+    /// yet moved: it colours nothing before it, today included.
+    #[test]
+    fn a_change_that_has_not_happened_yet_changes_nothing_yet() {
+        let (conn, _path) = book();
+        let card = account(&conn, "credit", 50_000_00, 5, 22);
+        let ahead = iso(today() + Duration::days(30));
+        save_card_term(&conn, &card, &ahead, Some(3_00_000_00), Some(20), None, None).unwrap();
+
+        let month = Utc::now().format("%Y-%m").to_string();
+        let stat = cards_overview(&conn, &month, 1, None, None).unwrap().cards.remove(0);
+        assert_eq!(stat.credit_limit, 50_000_00);
+        assert_eq!(stat.window_credit_limit, 50_000_00);
+        assert_eq!(stat.statement_day, 5);
+        // …and the cycles running now are still cut on the day it is on.
+        let open = stat.cycles.last().unwrap();
+        assert_eq!(&open.closed_on[8..], "05");
+    }
+
+    /// A statement day the bank moved splits the cycles where it actually
+    /// moved: the cycles before it close on the old day, the one across the
+    /// change is short, and no day falls in neither or in both.
+    #[test]
+    fn a_statement_day_that_moved_splits_the_cycles_where_it_moved() {
+        let (conn, _path) = book();
+        // The card is on the 20th now; it was on the 5th until four months
+        // ago. Only the change says so — the account carries today's terms.
+        let card = account(&conn, "credit", 0, 20, 0);
+        let moved = day_in(today().year(), today().month(), 1) - Duration::days(100);
+        save_card_term(&conn, &card, &iso(moved), None, Some(20), None, None).unwrap();
+        save_card_term(
+            &conn,
+            &card,
+            &iso(moved - Duration::days(700)),
+            None,
+            Some(5),
+            None,
+            None,
+        )
+        .unwrap();
+
+        let month = Utc::now().format("%Y-%m").to_string();
+        let stat = cards_overview(&conn, &month, 1, None, None).unwrap().cards.remove(0);
+
+        // Still end to end, however the day moved under them.
+        for pair in stat.cycles.windows(2) {
+            let ended = NaiveDate::parse_from_str(&pair[0].closed_on, "%Y-%m-%d").unwrap();
+            let starts = NaiveDate::parse_from_str(&pair[1].from, "%Y-%m-%d").unwrap();
+            assert_eq!(starts, ended + Duration::days(1));
+        }
+        // Every cycle that closed after the change closes on the 20th, and
+        // the ones before it on the 5th — bar the one the change cut short,
+        // which is the first to close on the new day.
+        let closes: Vec<NaiveDate> = stat
+            .cycles
+            .iter()
+            .map(|c| NaiveDate::parse_from_str(&c.closed_on, "%Y-%m-%d").unwrap())
+            .collect();
+        for close in &closes {
+            let day = if *close >= moved { 20 } else { 5 };
+            assert_eq!(close.day(), day, "cycle closing {close} is on the wrong day");
+        }
+    }
+
     /// Every card together, month by month — calendar months, because two
     /// cards close on different days and only the calendar is common.
     #[test]
@@ -602,7 +1157,7 @@ mod tests {
         post(&conn, "expense", 250_00, &card, None, last_month, None);
 
         let month = Utc::now().format("%Y-%m").to_string();
-        let all = cards_overview(&conn, &month, 1).unwrap();
+        let all = cards_overview(&conn, &month, 1, None, None).unwrap();
         // Twelve months, oldest first, none of them missing.
         assert_eq!(all.monthly.len(), 12);
         assert_eq!(all.monthly.last().unwrap().bucket, month);

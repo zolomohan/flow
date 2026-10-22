@@ -149,7 +149,7 @@ export function HoldingSheet({
   const submit = async () => {
     if (!name.trim()) return setError('Give the holding a name.');
     if (kind === 'fund' && !schemeCode) {
-      return setError('Search for the fund so its NAV can be fetched.');
+      return setError('Pick the fund so its price can be tracked.');
     }
     if (kind === 'gold' && gramsE4 <= 0) return setError('How many grams?');
     const deposit = isDeposit(kind);
@@ -195,9 +195,9 @@ export function HoldingSheet({
         kind === 'fd'
           ? 'One sum, left to earn until it matures'
           : kind === 'rd'
-            ? 'Paid in by instalments, each earning from the day it goes in'
+            ? 'Paid in by instalments, earning until it matures'
             : kind === 'gold'
-              ? 'Physical gold — weigh it and Midas prices it'
+              ? 'Physical gold, priced by weight'
               : 'A mutual fund, tracked by its units'
       }
       width={520}
@@ -347,7 +347,7 @@ export function HoldingSheet({
               <DateField
                 value={acquiredOn}
                 onChange={setAcquiredOn}
-                placeholder="As long as you can remember"
+                placeholder="When you got it"
                 max={toLocalInput().slice(0, 10)}
                 allowClear
               />
@@ -361,9 +361,9 @@ export function HoldingSheet({
             hint={
               investmentAccounts.length
                 ? isDeposit(kind)
-                  ? 'optional — an investment account for the money to sit in'
-                  : 'optional — an investment account for purchases to move through'
-                : 'add an investment account first to post purchases'
+                  ? 'optional, where the money sits'
+                  : 'optional, where purchases move through'
+                : 'add an investment account first'
             }
           >
             <Select
@@ -413,7 +413,7 @@ export function HoldingSheet({
       >
         {editing?.kind === 'gold'
           ? `${editing.name} goes, and what it is worth goes out of your net worth with it. This cannot be undone.`
-          : `${editing?.name ?? 'This holding'} goes, and every entry under it goes with it. The postings behind them stay in your ledger. This cannot be undone.`}
+          : `${editing?.name ?? 'This holding'} goes, and every entry under it goes too. The transactions behind them stay in your ledger. This cannot be undone.`}
       </Confirm>
     </Sheet>
   );
@@ -872,7 +872,7 @@ export function LotSheet({
       >
         {editing?.ownsTransaction
           ? 'The transfer that paid for it goes too, and the money returns to the account it left. This cannot be undone.'
-          : 'The entry goes; anything in your ledger that paid for it stays. This cannot be undone.'}
+          : 'The entry goes. Anything in your ledger that paid for it stays. This cannot be undone.'}
       </Confirm>
     </Sheet>
   );

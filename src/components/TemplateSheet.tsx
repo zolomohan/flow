@@ -196,7 +196,7 @@ export function TemplateSheet({
                 options={categoryOptions}
                 value={split ? null : categoryId}
                 onChange={setCategoryId}
-                placeholder={split ? 'Split — use it to change the parts' : 'Left blank'}
+                placeholder={split ? 'Split (use it to change the parts)' : 'Left blank'}
                 disabled={split}
                 allowClear
                 searchable
@@ -222,10 +222,9 @@ export function TemplateSheet({
         <p className="page-note">
           <Icon name="circle-help" size={13} />
           A field left blank is a field this template asks for: set the account
-          to <strong>Ask each time</strong> and every posting written from it
-          asks where the money went — in the sheet, and in the shortcut your
-          phone runs. To change the parts of a split, use the template instead
-          and save it back under this name.
+          to <strong>Ask each time</strong> and every transaction written from it
+          asks where the money went. To change the parts of a split, use the
+          template and save it back under this name.
         </p>
       </div>
     </Sheet>

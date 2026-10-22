@@ -343,7 +343,7 @@ export function Overview({
         <Card className="wallet-card">
           <CardHead
             title="Where it sits"
-            hint="Every account, and what is held outside one"
+            hint="Every account and holding"
             action={
               <Button tone="quiet" size="sm" trailingIcon="arrow-right" onClick={onGoAccounts}>
                 Accounts
@@ -387,7 +387,7 @@ export function Overview({
               <Card className="wealth-card">
                 <CardHead
                   title="Investments"
-                  hint="Valued at what today's prices say"
+                  hint="At today's prices"
                   action={
                     <Button
                       tone="quiet"
@@ -602,7 +602,7 @@ export function Overview({
           <Card className="chart-card">
             <CardHead
               title="Cash flow"
-              hint="Money in against money out, month by month"
+              hint="Income against spending, month by month"
               action={
                 <div className="legend">
                   <span><i style={{ background: 'var(--green)' }} /> In</span>
@@ -653,9 +653,8 @@ export function Overview({
               </div>
             ) : (
               <Empty
-                icon="grid-2x2"
                 title="No spending yet"
-                body="Categorised expenses show up here as a breakdown."
+                body="Categorise your spending to see it broken down here."
               />
             )}
           </Card>
@@ -695,7 +694,7 @@ export function Overview({
               <div className="card-pad">
                 <Empty
                   title="Nothing recorded yet"
-                  body="Add your first transaction and it will appear here."
+                  body="Your latest transactions appear here."
                   action={<Button tone="primary" icon="plus" onClick={onAddTransaction}>Add transaction</Button>}
                 />
               </div>
@@ -737,7 +736,7 @@ export function Overview({
                 ))}
               </motion.ul>
             ) : (
-              <Empty icon="store" title="No merchants yet" body="Name the payee on an expense to see it ranked here." />
+              <Empty title="No merchants yet" body="Expenses with a merchant are ranked here." />
             )}
           </Card>
         </div>
@@ -1000,9 +999,8 @@ function PlannedCard({ plans, onOpen }: { plans: Plan[]; onOpen: () => void }) {
       />
       {next.length === 0 ? (
         <Empty
-          icon="repeat"
           title="Nothing on the horizon"
-          body="Track a rent or a subscription and the next few land here."
+          body="Add a planned payment to see what is coming up."
           action={
             <Button tone="primary" icon="sparkles" onClick={onOpen}>
               Find what repeats

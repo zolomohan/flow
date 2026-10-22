@@ -47,14 +47,17 @@ export function money(
   opts: { paise?: boolean; sign?: boolean; plain?: boolean } = {},
 ) {
   const abs = Math.abs(paise);
-  const body = opts.paise
-    ? inrPaise.format(abs / 100)
-    : inr.format(Math.round(abs / 100));
-  // What is printed, not what was passed: a figure that rounds away to
-  // nothing has no sign to carry. "−₹0" is a rounding artifact reading as a
-  // debt, and "+₹0" is a gain that didn't happen.
-  const shown = opts.paise ? abs : Math.round(abs / 100);
-  const prefix = shown === 0 ? '' : paise < 0 ? '−' : opts.sign ? '+' : '';
+  // Paise are shown when there are any and left off when there are none, and
+  // nothing is ever rounded to get there. A ledger that prints ₹1,451 for
+  // ₹1,450.60 is telling you something that is not in the book, and a column
+  // of round figures that do not add up to their own total is worse than a
+  // column with two decimal places in it.
+  const exact = opts.paise || abs % 100 !== 0;
+  const body = exact ? inrPaise.format(abs / 100) : inr.format(abs / 100);
+  // Nothing is rounded away any more, so the only figure with no sign to
+  // carry is a true zero: "−₹0" would have read as a debt, "+₹0" as a gain
+  // that didn't happen.
+  const prefix = abs === 0 ? '' : paise < 0 ? '−' : opts.sign ? '+' : '';
   const out = `${prefix}₹${body}`;
   // `plain` is for a figure that is only an echo of what is being typed: the
   // field beside it is showing the number in the clear, so hiding the echo
@@ -219,6 +222,21 @@ export function shiftMonth(key: string, delta: number) {
   const [y, m] = key.split('-').map(Number);
   const total = y * 12 + (m - 1) + delta;
   return `${Math.floor(total / 12)}-${String((total % 12) + 1).padStart(2, '0')}`;
+}
+
+/**
+ * The first and last day a window of `span` months ending at `month` covers.
+ * A span of nothing is all of time, which has no bounds to give.
+ */
+export function monthWindowBounds(span: number, month: string) {
+  if (span <= 0) return { from: null, to: null };
+  const [y, m] = shiftMonth(month, -(span - 1)).split('-').map(Number);
+  const [ey, em] = month.split('-').map(Number);
+  const end = new Date(ey, em, 0);
+  return {
+    from: `${y}-${String(m).padStart(2, '0')}-01`,
+    to: `${ey}-${String(em).padStart(2, '0')}-${String(end.getDate()).padStart(2, '0')}`,
+  };
 }
 
 export function monthLabel(key: string, full = false) {

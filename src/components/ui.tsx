@@ -6,9 +6,13 @@ import {
   type TextareaHTMLAttributes,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence, motion, useDragControls } from 'motion/react';
 import { Icon } from './Icon';
-import { popover, press, sheetBackdrop, sheetPanel, spring, springSoft } from '../lib/motion';
+import {
+  emptyLine, emptyStack, popover, press, sheetBackdrop, sheetPanel, sheetPhone,
+  spring, springSoft,
+} from '../lib/motion';
+import { usePhone } from '../lib/media';
 
 /* ------------------------------------------------------------------ Button */
 
@@ -380,7 +384,7 @@ export function Select({
               disabled={option.heading}
               title={
                 option.heading
-                  ? `${option.label} is a group — pick one of the categories under it`
+                  ? `${option.label} is a group. Pick one of the categories under it`
                   : undefined
               }
               className={`select-option ${option.value === value ? 'is-active' : ''} ${
@@ -573,6 +577,14 @@ export function Sheet({
     };
   }, [open, onClose]);
 
+  // On a phone the sheet comes up from the bottom edge and can be thrown back
+  // down at it. That is not decoration: a centred card with a 24px gutter is
+  // 342pt wide on an iPhone, its close button is at the top of a reach, and
+  // nothing about it says which way out is. A sheet you push down says it
+  // without a word.
+  const phone = usePhone();
+  const dragControls = useDragControls();
+
   return (
     <AnimatePresence>
       {open && (
@@ -587,16 +599,42 @@ export function Sheet({
           >
             <motion.div
               className={`sheet ${full ? 'is-full' : ''}`}
-              style={full ? undefined : { maxWidth: width }}
-              variants={sheetPanel}
+              /* The width rides in as a custom property rather than as
+                 `max-width` outright, so the phone's stylesheet can take the
+                 whole window without having to shout `!important` at an
+                 inline style. */
+              style={{ ['--sheet-w' as string]: `${width}px` }}
+              variants={phone && !full ? sheetPhone : sheetPanel}
               initial="initial"
               animate="animate"
               exit="exit"
+              /* Downwards only, and only from the sheet's own chrome — a drag
+                 that started on a list would fight the list's scroll. Past a
+                 third of the way, or thrown hard enough, it goes. */
+              drag={phone && !full ? 'y' : false}
+              dragDirectionLock
+              dragConstraints={{ top: 0, bottom: 0 }}
+              dragElastic={{ top: 0.02, bottom: 0.7 }}
+              dragListener={false}
+              dragControls={dragControls}
+              onDragEnd={(_, info) => {
+                if (info.offset.y > 130 || info.velocity.y > 700) onClose();
+              }}
               role="dialog"
               aria-modal="true"
               aria-label={title}
             >
               <header className="sheet-head">
+                {/* The grip is the drag handle and the drag handle is the
+                    grip: it is the one part of a sheet that is not content,
+                    so it is the one part safe to start a gesture on. */}
+                {phone && !full && (
+                  <motion.div
+                    className="sheet-grip"
+                    onPointerDown={(e) => dragControls.start(e)}
+                    aria-hidden
+                  />
+                )}
                 {onBack && (
                   <IconButton icon="chevron-left" label="Back" onClick={onBack} />
                 )}
@@ -619,7 +657,7 @@ export function Sheet({
                 <IconButton icon="x" label="Close" onClick={onClose} />
               </header>
               <div className="sheet-body">
-                <SheetCanvas width={width} full={full}>
+                <SheetCanvas full={full || phone}>
                   {children}
                 </SheetCanvas>
               </div>
@@ -645,9 +683,11 @@ export function Sheet({
  * jumping to it, and everything under the sheet stops flinching.
  */
 function SheetCanvas({
-  width, full, children,
+  full, children,
 }: {
-  width: number;
+  /** Set when the box is the sheet's own width and the height is the page's
+   *  to choose — a full-window sheet, or any sheet on a phone, where the
+   *  panel is already as wide as the window and as tall as it is allowed. */
   full?: boolean;
   children: ReactNode;
 }) {
@@ -674,10 +714,7 @@ function SheetCanvas({
   return (
     <motion.div
       className="sheet-canvas"
-      style={{
-        width: full ? '100%' : `min(${width - 44}px, calc(100vw - 92px))`,
-        overflow: moving && !full ? 'hidden' : undefined,
-      }}
+      style={{ overflow: moving && !full ? 'hidden' : undefined }}
       // Whatever it opens at is its own height already; only what happens
       // after is worth animating.
       initial={false}
@@ -937,21 +974,46 @@ export function Chip({
 }
 
 export function Empty({
-  icon = 'inbox', title, body, action,
-}: { icon?: string; title: string; body?: string; action?: ReactNode }) {
+  title, body, action, screen, glyph = '😔',
+}: {
+  title: string;
+  body?: string;
+  /**
+   * The face over the words. Sad by default because an empty state is a
+   * small disappointment — you came looking for something and there is
+   * nothing there. A screen with a happier sort of nothing can say so.
+   */
+  glyph?: string;
+  /**
+   * Only where the screen's own header doesn't already carry the same
+   * button. An empty state that repeats the header is the same button
+   * twice on one screen, and the eye has to work out whether it is.
+   */
+  action?: ReactNode;
+  /**
+   * Takes the height the list would have had, so the words sit in the middle
+   * of the screen rather than at the top of it. For an empty state standing
+   * on its own; leave it off inside a card that has its own heading.
+   */
+  screen?: boolean;
+}) {
   return (
     <motion.div
-      className="empty"
-      initial={{ opacity: 0, y: 6 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={spring}
+      className={`empty ${screen ? 'is-screen' : ''}`}
+      initial="initial"
+      animate="animate"
+      variants={emptyStack}
     >
-      <div className="empty-glyph">
-        <Icon name={icon} size={22} />
-      </div>
-      <h4>{title}</h4>
-      {body && <p>{body}</p>}
-      {action}
+      <motion.span className="empty-glyph" variants={emptyLine} aria-hidden>
+        {glyph}
+      </motion.span>
+      <motion.h4 variants={emptyLine}>{title}</motion.h4>
+      {body && <motion.p variants={emptyLine}>{body}</motion.p>}
+      {action && (
+        <motion.div className="empty-action" variants={emptyLine}>
+          {action}
+        </motion.div>
+      )}
     </motion.div>
   );
 }

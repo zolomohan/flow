@@ -19,9 +19,11 @@ import type {
   AccountInput,
   Category,
   CategoryDeleteOptions,
+  CardTerm,
   CategoryInput,
   Debt,
   DebtInput,
+  DebtAdditionInput,
   DebtPaymentInput,
   Holding,
   HoldingInput,
@@ -67,15 +69,7 @@ export const HIDE_AMOUNTS = 'hide_amounts';
  * name rather than leaving the corner empty.
  */
 export const OWNER_NAME = 'owner_name';
-export const OWNER_FALLBACK = 'Midas';
-
-/**
- * The account the last transaction was written against, so the next one
- * opens on it. Most people spend from the same account for weeks at a time,
- * and picking it again every entry is the sort of work a book should do for
- * itself.
- */
-export const LAST_ACCOUNT = 'last_account';
+export const OWNER_FALLBACK = 'flow';
 
 /** The looks Midas comes in: one light, and three darks of different colour. */
 export type Theme = 'light' | 'midnight' | 'graphite' | 'black';
@@ -142,6 +136,14 @@ interface Store {
   saveAccount: (input: AccountInput) => Promise<Account>;
   deleteAccount: (id: string) => Promise<void>;
   setAccountArchived: (id: string, archived: boolean) => Promise<void>;
+  /** The days a card's terms changed, oldest first. */
+  cardTerms: (accountId: string) => Promise<CardTerm[]>;
+  saveCardTerm: (
+    accountId: string,
+    effectiveOn: string,
+    terms: { creditLimit?: Paise | null; statementDay?: number | null; dueDay?: number | null },
+  ) => Promise<CardTerm>;
+  deleteCardTerm: (id: string) => Promise<void>;
   saveCategory: (input: CategoryInput) => Promise<Category>;
   /** Writes a new order for one kind's categories, flattened parent-then-children. */
   reorderCategories: (ids: string[]) => Promise<void>;
@@ -151,6 +153,8 @@ interface Store {
   deleteDebt: (id: string) => Promise<void>;
   saveDebtPayment: (input: DebtPaymentInput) => Promise<void>;
   deleteDebtPayment: (id: string) => Promise<void>;
+  saveDebtAddition: (input: DebtAdditionInput) => Promise<void>;
+  deleteDebtAddition: (id: string) => Promise<void>;
   saveHolding: (input: HoldingInput) => Promise<void>;
   deleteHolding: (id: string) => Promise<void>;
   saveLot: (input: InvestmentLotInput) => Promise<void>;
@@ -169,6 +173,8 @@ interface Store {
   commitStatementImport: (accountId: string, rows: ImportCommitRow[]) => Promise<ImportResult>;
   /** Marks postings as verified: Triage off, their filing remembered. */
   confirmTriage: (ids: string[]) => Promise<number>;
+  /** Pins one label across a selection, or takes it off. */
+  labelTransactions: (ids: string[], labelId: string, on: boolean) => Promise<number>;
   /** What has been said to a phone and is still waiting for a person. */
   captures: Capture[];
   /** Everything said out loud that made it into the ledger, newest first. */
@@ -196,7 +202,9 @@ interface Store {
   /** Lets the cycle now due go by unpaid. */
   skipPlan: (id: string) => Promise<Plan>;
   /** Writes the posting a cycle describes and points the plan at it. */
-  payPlan: (id: string, amount?: Paise | null, occurredAt?: string | null) => Promise<Transaction>;
+  /** Saves the reviewed posting for a plan's cycle and links it. The sheet
+   *  doing the reviewing says what happened, as it does for any save. */
+  payPlan: (id: string, input: TransactionInput) => Promise<Transaction>;
   /** Says these postings belong to this plan. Resolves with how many. */
   linkPlanPostings: (planId: string, ids: string[]) => Promise<number>;
   /** Takes one back off. The posting itself stays where it is. */
@@ -377,7 +385,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setLastCaptureSync(result);
       if (result.found > 0) {
         setRevision((r) => r + 1);
-        const posted = result.posted === 1 ? '1 posting written' : `${result.posted} postings written`;
+        const posted = result.posted === 1 ? '1 transaction added' : `${result.posted} transactions added`;
         toast(
           result.pending > 0
             ? `${posted}, ${result.pending} waiting in the Inbox`
@@ -395,12 +403,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // What the phone said while you were away. Read as the book opens, and
   // again whenever you come back to the window — iCloud delivers on its own
   // schedule, and the moment you look is the moment it matters.
+  //
+  // Two events, not one. `focus` is what a window regains on the Mac; on iOS
+  // there is no window to focus and WKWebView fires it unreliably, so the app
+  // coming back to the foreground arrives as `visibilitychange` instead. Both
+  // are listened for and the sync is idempotent, so a platform that sends
+  // both costs one extra read of a file that is usually empty.
   useEffect(() => {
     if (!ready) return;
     void syncCaptures();
     const onFocus = () => void syncCaptures();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void syncCaptures();
+    };
     window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [ready, syncCaptures]);
 
   // Prices go stale overnight, so top them up once after the book loads. Doing
@@ -462,6 +483,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           () => api.setAccountArchived(id, archived),
           archived ? 'Account archived' : 'Account restored',
         ),
+      cardTerms: (accountId) => api.cardTerms(accountId),
+      saveCardTerm: (accountId, effectiveOn, terms) =>
+        mutate(() => api.saveCardTerm(accountId, effectiveOn, terms), 'Change recorded'),
+      deleteCardTerm: (id) => mutate(() => api.deleteCardTerm(id), 'Change removed'),
       saveCategory: (input) =>
         mutate(
           () => api.saveCategory(input),
@@ -487,6 +512,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         mutate(() => api.saveDebtPayment(input), 'Repayment recorded'),
       deleteDebtPayment: (id) =>
         mutate(() => api.deleteDebtPayment(id), 'Repayment removed'),
+      saveDebtAddition: (input) =>
+        mutate(() => api.saveDebtAddition(input), input.id ? 'Debt updated' : 'Added to the debt'),
+      deleteDebtAddition: (id) =>
+        mutate(() => api.deleteDebtAddition(id), 'Taken off the debt'),
       saveHolding: (input) =>
         mutate(
           () => api.saveHolding(input),
@@ -510,6 +539,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       commitStatementImport: (accountId, rows) =>
         mutate(() => api.commitStatementImport(accountId, rows)),
       confirmTriage: (ids) => mutate(() => api.confirmTriage(ids)),
+      labelTransactions: (ids, labelId, on) =>
+        mutate(() => api.labelTransactions(ids, labelId, on)),
       captures,
       captureHistory,
       lastCaptureSync,
@@ -551,8 +582,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           archived ? 'Plan put away' : 'Plan brought back',
         ),
       skipPlan: (id) => mutate(() => api.skipPlan(id), 'Skipped this one'),
-      payPlan: (id, amount, occurredAt) =>
-        mutate(() => api.payPlan(id, amount ?? null, occurredAt ?? null), 'Marked as paid'),
+      payPlan: (id, input) => mutate(() => api.payPlan(id, input)),
       linkPlanPostings: (planId, ids) =>
         mutate(
           () => api.linkPlanPostings(planId, ids),

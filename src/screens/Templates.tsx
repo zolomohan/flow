@@ -41,27 +41,25 @@ export function Templates({
         <div>
           <h1>Templates</h1>
           <p>
-            The transactions you write again and again — the rent, the Friday shop,
+            The transactions you write again and again: the rent, the Friday shop,
             the standing transfer. Everything but the date, kept under a name.
           </p>
         </div>
       </header>
 
-      <Card padded={false}>
-        {templates.length === 0 ? (
-          <div className="card-pad">
-            <Empty
-              icon="shapes"
-              title="No templates yet"
-              body="Fill a transaction in the way you keep filling it in, then open Templates at the foot of the sheet and save it. The next one like it is a single click."
-              action={
-                <Button tone="primary" icon="plus" onClick={onAddTransaction}>
-                  New transaction
-                </Button>
-              }
-            />
-          </div>
-        ) : (
+      {templates.length === 0 ? (
+        <Empty
+          screen
+          title="No templates yet"
+          body="Save a transaction you write often, then reuse it in one click."
+          action={
+            <Button tone="primary" icon="plus" onClick={onAddTransaction}>
+              New transaction
+            </Button>
+          }
+        />
+      ) : (
+        <Card padded={false}>
           <motion.div
             className="tpl-list"
             variants={listVariants}
@@ -143,8 +141,8 @@ export function Templates({
               );
             })}
           </motion.div>
-        )}
-      </Card>
+        </Card>
+      )}
 
       <TemplateSheet open={!!open} onClose={() => setEditing(null)} editing={open} />
 

@@ -1,19 +1,31 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { motion } from 'motion/react';
+import { ordinalDay } from '../components/DateField';
 import { Icon } from '../components/Icon';
 import { BigMoney } from '../components/Money';
-import { SpendBars } from '../components/charts';
+import { Donut, SpendBars } from '../components/charts';
 import { TransactionRow } from '../components/TransactionRow';
-import { Button, Card, Empty, Meter } from '../components/ui';
+import {
+  Button, Card, Empty, IconButton, Meter, Segmented, type SegmentOption,
+} from '../components/ui';
+import { periodLabel } from '../components/MonthNav';
+import { api } from '../lib/api';
 import { useStore } from '../lib/store';
 import {
-  compactMoney, money, percent, percentDelta, shortDayLabel,
+  compactMoney, money, monthKey, monthWindowBounds, percent, shiftMonth, shortDayLabel,
 } from '../lib/format';
 import { itemVariants, listVariants } from '../lib/motion';
-import type { CardStat, Transaction } from '../lib/types';
+import type { CardStat, Paise, Transaction, TransactionSummary } from '../lib/types';
 
 /* The words a card is read in. They are shared with the tab itself, which
    says the same things in less room. */
+
+/** Today as a plain ISO day, by the clock on the wall rather than UTC. */
+export function todayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${
+    String(d.getDate()).padStart(2, '0')}`;
+}
 
 /** Whole days from today to a plain ISO day, negative once it is past. */
 export function daysUntil(iso: string) {
@@ -56,19 +68,16 @@ export function dueTone(days: number, billed: number): 'good' | 'bad' | 'warn' |
 export const usedOf = (card: { outstanding: number; creditLimit: number }) =>
   card.creditLimit > 0 ? Math.min(1, card.outstanding / card.creditLimit) : 0;
 
-/** 1st, 2nd, 3rd — for saying a day of the month out loud. */
-export function ordinal(day: number) {
-  const tens = day % 100;
-  const suffix = tens >= 11 && tens <= 13 ? 'th' : (['th', 'st', 'nd', 'rd'][day % 10] ?? 'th');
-  return `${day}${suffix}`;
-}
-
 /** How a card describes its own cycle, when it keeps one. */
 export function cycleWords(card: CardStat) {
   if (card.statementDay <= 0) return null;
-  return `closes the ${ordinal(card.statementDay)}${
-    card.dueDay > 0 ? `, due the ${ordinal(card.dueDay)}` : ''
-  }`;
+  if (card.dueDay <= 0) return `closes the ${ordinalDay(card.statementDay)}`;
+  // A due day at or before the closing day is the month after: a card that
+  // closes on the 20th and is due on the 7th is not due a fortnight before
+  // the bill exists.
+  const next = card.dueDay <= card.statementDay ? ' of the next month' : '';
+  return `closes the ${ordinalDay(card.statementDay)}, due the ${
+    ordinalDay(card.dueDay)}${next}`;
 }
 
 /** One figure on a rule: what it is, what it comes to, and the one line
@@ -127,6 +136,33 @@ export function CardPlastic({ card }: { card: CardStat }) {
 }
 
 /**
+ * How much of the limit is gone, as one bar rather than a bar with a caption
+ * under it. Both figures live inside the track — the share on the left, the
+ * limit it is a share of on the right — because a percentage with nothing to
+ * be a percentage of is half a fact.
+ */
+function LimitBar({
+  value, limit, caption,
+}: {
+  /** 0–1. */
+  value: number;
+  limit: Paise;
+  caption: string;
+}) {
+  const tone = value >= 0.85 ? 'is-high' : value >= 0.65 ? 'is-mid' : 'is-low';
+  return (
+    <div className={`limit-bar ${tone}`}>
+      <span className="limit-bar-fill" style={{ width: `${Math.max(2, value * 100)}%` }} />
+      <span className="limit-bar-read">
+        <b>{percent(value * 100)}</b>
+        {caption}
+      </span>
+      <span className="limit-bar-cap">{money(limit)}</span>
+    </div>
+  );
+}
+
+/**
  * Where the cycle stands: the day it opened, the day it closes, today's mark
  * between them, and the day the last bill has to be paid. A card's month is
  * the one thing about it nobody can hold in their head.
@@ -158,8 +194,13 @@ function CycleTrack({ card }: { card: CardStat }) {
           <>
             <Icon name="receipt" size={13} />
             <strong>{money(card.billed)}</strong>
-            {days === null ? 'still to pay' : dueWords(days)}
-            {card.dueOn && <em>{shortDayLabel(card.dueOn)}</em>}
+            to pay
+            {days !== null && (
+              <em>
+                {dueWords(days)}
+                {card.dueOn && ` · ${shortDayLabel(card.dueOn)}`}
+              </em>
+            )}
           </>
         ) : (
           <>
@@ -201,17 +242,45 @@ function CycleTrack({ card }: { card: CardStat }) {
   );
 }
 
+/** The windows the card's own ledger can be read over. */
+type CardRange = 'cycle' | 'month' | 'quarter' | 'year' | 'all';
+
+/** How many months each window covers. The cycle is not a number of months —
+ *  it is whatever the bank says it is — so it is bounded from the card. */
+const CARD_RANGE_SPAN: Record<Exclude<CardRange, 'cycle'>, number> = {
+  month: 1, quarter: 3, year: 12, all: 0,
+};
+
+/** Rows fetched at a time. A card with six years on it is still reachable —
+ *  the page is what keeps the list quick, not a cap on what you can see. */
+const CARD_PAGE = 100;
+
+/** Past this many rows the stagger stops being a flourish and becomes a wait. */
+const CARD_STAGGER_UP_TO = 60;
+
+/** Which window a run of `span` months is, when one of them is that long.
+ *  The page opens on whatever the tab was set to, and falls back to a month. */
+function rangeOfSpan(span: number): CardRange {
+  const named = (Object.keys(CARD_RANGE_SPAN) as Exclude<CardRange, 'cycle'>[])
+    .find((r) => CARD_RANGE_SPAN[r] === span && span > 0);
+  return named ?? 'month';
+}
+
+/** The last day anything can have happened on, for a window with no end. */
+const FOREVER = '9999-12-31';
+
 /**
  * One card, at length: the bill and the cycle it came from, where the money
  * went, and the charges themselves. Reached from the wallet on the tab,
  * which says the short version of all of it.
  */
 export function CardPage({
-  card, label, span, onBack, onEdit, onOpenLedger, onOpenCategory, onOpenTransaction,
+  card: fromTab, span, onBack, onEdit, onOpenLedger, onOpenCategory, onOpenTransaction,
 }: {
+  /** The card as the wallet has it, over the tab's own window. It stands in
+   *  until the page has read the card over the window *it* is set to. */
   card: CardStat;
-  /** The window on screen, as the month strip names it. */
-  label: string;
+  /** The window the tab is on, in months, which the page opens on. */
   span: number;
   onBack: () => void;
   onEdit: () => void;
@@ -219,23 +288,176 @@ export function CardPage({
   onOpenCategory: (categoryId: string, span: number) => void;
   onOpenTransaction: (tx: Transaction) => void;
 }) {
-  const { listTransactions, revision } = useStore();
-  const [recent, setRecent] = useState<Transaction[]>([]);
+  const { listTransactions, transactionSummary, month, revision } = useStore();
+  const [rows, setRows] = useState<Transaction[]>([]);
+  const [summary, setSummary] = useState<TransactionSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  // Which window the card's own ledger is read over, and how much of it has
+  // been fetched so far.
+  // A card's own month is the cycle, so that is what it opens on. One that
+  // keeps no cycle has nothing to open on but the calendar, and takes the
+  // window the tab was already showing.
+  const [range, setRange] = useState<CardRange>(
+    () => (fromTab.cycles.length ? 'cycle' : rangeOfSpan(span)),
+  );
+  const [shown, setShown] = useState(CARD_PAGE);
+  // The last month of the window, which the chevrons walk backwards. Its own,
+  // not the tab's: reading January on a card shouldn't move the whole screen.
+  const [anchor, setAnchor] = useState(month);
+  // Which statement is being read, when the window is a cycle. The open one
+  // to begin with, since that is the one being run up right now.
+  const [cycleAt, setCycleAt] = useState(() => Math.max(0, fromTab.cycles.length - 1));
+  // The card read over the page's own window. Everything on the page comes off
+  // this — the bill, the figures, what it bought, where it went — so one
+  // choice of window moves the whole view rather than the list at the bottom.
+  const [own, setOwn] = useState<CardStat | null>(null);
 
-  // The charges themselves, newest first — payments into the card included,
-  // since what you want off this page is everything the card has been doing.
+  const card = own ?? fromTab;
+  const now = monthKey();
+  const cycle = card.cycles[cycleAt];
+  const hasCycles = card.cycles.length > 0;
+
+  // Moving the strip on the tab moves the card with it — the page was reopened
+  // on a period, and the ledger follows it rather than arguing with it.
+  useEffect(() => {
+    setAnchor(month);
+  }, [month]);
+
+  // A different card is a different run of statements, and its own figures —
+  // and its own answer to whether it keeps a cycle at all.
+  useEffect(() => {
+    setAnchor(month);
+    setCycleAt(Math.max(0, fromTab.cycles.length - 1));
+    setRange(fromTab.cycles.length ? 'cycle' : rangeOfSpan(span));
+    setOwn(null);
+  }, [fromTab.id]);
+
+  // The cycle is only offered by a card that keeps one — a window nothing on
+  // the page can explain is worse than one fewer button.
+  const rangeOptions = useMemo<SegmentOption<CardRange>[]>(() => {
+    const named: SegmentOption<CardRange>[] = [
+      { value: 'month', label: 'Month' },
+      { value: 'quarter', label: '3 months' },
+      { value: 'year', label: 'Year' },
+      { value: 'all', label: 'All time' },
+    ];
+    return hasCycles ? [{ value: 'cycle', label: 'Cycle' }, ...named] : named;
+  }, [hasCycles]);
+
+  // What the chosen window comes to in days. A cycle takes its ends from the
+  // bank's own dates; the rest are months back from wherever the chevrons
+  // have walked to.
+  const bounds = useMemo(() => {
+    if (range === 'cycle') {
+      return cycle ? { from: cycle.from, to: cycle.closedOn } : { from: null, to: null };
+    }
+    return monthWindowBounds(CARD_RANGE_SPAN[range], anchor);
+  }, [range, anchor, cycle?.from, cycle?.closedOn]);
+
+  /** Steps the window back or on by one of itself. All time has nowhere to go. */
+  const step = (delta: number) => {
+    if (range === 'cycle') {
+      setCycleAt((at) => Math.min(card.cycles.length - 1, Math.max(0, at + delta)));
+      return;
+    }
+    if (range === 'all') return;
+    setAnchor((at) => {
+      const next = shiftMonth(at, delta * CARD_RANGE_SPAN[range]);
+      // Nothing has happened after this month. A step that would land past it
+      // lands on it instead, so a year window can still be walked up to today.
+      return next > now ? (at < now ? now : at) : next;
+    });
+  };
+
+  // Whether there is anywhere to step. Backwards there always is — the book
+  // goes back as far as it goes; forwards stops at today, and at the statement
+  // still being run up.
+  const canForward = range === 'cycle'
+    ? cycleAt < card.cycles.length - 1
+    : range !== 'all' && anchor < now;
+  const canBack = range === 'cycle' ? cycleAt > 0 : range !== 'all';
+
+  // A different window is a different list; it starts at the top again.
+  useEffect(() => {
+    setShown(CARD_PAGE);
+  }, [bounds.from, bounds.to, fromTab.id]);
+
+  // The card itself, read over the chosen window. Months go as months, so a
+  // month is still compared against the month before it; a cycle and all of
+  // time go as days, which no run of months can say.
   useEffect(() => {
     let live = true;
-    listTransactions({ accountIds: [card.id], limit: 8 })
-      .then((rows) => live && setRecent(rows))
-      .catch(() => live && setRecent([]));
+    const [from, to] = range === 'cycle'
+      ? [bounds.from, bounds.to]
+      : range === 'all'
+        ? [null, FOREVER]
+        : [null, null];
+    api
+      .cards(anchor, Math.max(1, CARD_RANGE_SPAN[range === 'cycle' ? 'month' : range]), from, to)
+      .then((next) => {
+        if (!live) return;
+        setOwn(next.cards.find((c) => c.id === fromTab.id) ?? null);
+      })
+      .catch(() => live && setOwn(null));
     return () => {
       live = false;
     };
-  }, [card.id, listTransactions, revision]);
+  }, [fromTab.id, range, anchor, bounds.from, bounds.to, revision]);
 
-  const used = usedOf(card);
-  const delta = percentDelta(card.spend, card.prevSpend);
+  // Everything the card has been doing over that window, newest first —
+  // payments into it included, since a bill being paid is as much part of the
+  // card's story as the charges are. The count comes off the summary rather
+  // than the page, so it describes the whole window and not the slice loaded.
+  useEffect(() => {
+    let live = true;
+    const query = { accountIds: [card.id], from: bounds.from, to: bounds.to };
+    setLoading(true);
+    Promise.all([listTransactions({ ...query, limit: shown }), transactionSummary(query)])
+      .then(([nextRows, nextSummary]) => {
+        if (!live) return;
+        setRows(nextRows);
+        setSummary(nextSummary);
+      })
+      .catch(() => {
+        if (!live) return;
+        setRows([]);
+        setSummary(null);
+      })
+      .finally(() => live && setLoading(false));
+    return () => {
+      live = false;
+    };
+  }, [
+    card.id, bounds.from, bounds.to, shown, listTransactions, transactionSummary, revision,
+  ]);
+
+  const total = summary?.count ?? rows.length;
+  const remaining = Math.max(0, total - rows.length);
+  // What the chosen window is called, for the line beside the heading and for
+  // the empty state that has to name it. Its own window, not the tab's: the
+  // ledger below can be read over a different period than the figures above.
+  const rangeWords = range === 'cycle'
+    ? cycle
+      ? `${shortDayLabel(cycle.from)} – ${shortDayLabel(cycle.closedOn)}`
+      : 'this cycle'
+    : range === 'all'
+      ? 'all time'
+      : periodLabel(anchor, CARD_RANGE_SPAN[range]);
+  // What the window comes to in months, for a breakdown opened off the page:
+  // the ledger takes its window in months, and a cycle is near enough one.
+  const rangeSpan = range === 'cycle' ? 1 : CARD_RANGE_SPAN[range];
+
+  // The figure the page leads on is what the window on screen came to —
+  // whatever window that is. A month reads the month, a cycle reads the
+  // cycle, and what the card owes today is the bill below, which is a fact
+  // about this morning rather than about the period being read.
+  //
+  // The bar under it measures that same spending against the limit the card
+  // was on when the window ended, which is why the days it changed are worth
+  // recording.
+  const thenLimit = card.windowCreditLimit || card.creditLimit;
+  const used = thenLimit > 0 ? Math.min(1, card.spend / thenLimit) : 0;
+  const raised = card.windowCreditLimit > 0 && card.windowCreditLimit !== card.creditLimit;
   const days = card.dueOn ? daysUntil(card.dueOn) : null;
   const closesIn = card.cycles.length
     ? daysUntil(card.cycles[card.cycles.length - 1].closedOn)
@@ -263,21 +485,40 @@ export function CardPage({
           <button className="detail-back" onClick={onBack} aria-label="Back to cards">
             <Icon name="chevron-left" size={17} />
           </button>
-          <div>
-            <h1>{card.name}</h1>
-            <p>
-              {[
-                card.institution,
-                cycleWords(card) ?? 'no billing cycle set',
-                card.lastUsed ? `last used ${shortDayLabel(card.lastUsed)}` : null,
-              ]
-                .filter(Boolean)
-                .join(' · ')}
-            </p>
-          </div>
+          {/* The card itself is drawn below, institution, cycle and all —
+              a line of the same under the title said it twice. */}
+          <h1>{card.name}</h1>
         </div>
-        <div className="head-actions">
-          <Button icon="list-filter" onClick={onOpenLedger}>Ledger</Button>
+        <div className="head-actions card-range-bar">
+          {/* The window the whole page is read over: the bill and the figures,
+              what it bought, where it went, and the ledger under them. All
+              time has no ends to step between, so it says so instead. */}
+          <div className="month-nav card-range-nav">
+            <IconButton
+              icon="chevron-left"
+              label={range === 'cycle' ? 'Earlier statement' : 'Earlier period'}
+              size={28}
+              disabled={!canBack}
+              onClick={() => step(-1)}
+            />
+            <span className="month-label is-static">
+              <span>{range === 'all' ? 'All time' : rangeWords}</span>
+            </span>
+            <IconButton
+              icon="chevron-right"
+              label={range === 'cycle' ? 'Later statement' : 'Later period'}
+              size={28}
+              disabled={!canForward}
+              onClick={() => step(1)}
+            />
+          </div>
+          <Segmented
+            name="card-range"
+            size="sm"
+            options={rangeOptions}
+            value={range}
+            onChange={setRange}
+          />
           <Button icon="pencil" onClick={onEdit}>Edit card</Button>
         </div>
       </header>
@@ -290,9 +531,9 @@ export function CardPage({
           <div className="cards-alert-body">
             <strong>This card has no billing cycle</strong>
             <p>
-              Say which day the statement closes and which day it has to be paid,
-              and the card is read by its own month: what is billed, what is not
-              yet, and how long you have. Until then all of it is simply owed.
+              Set the day it closes and the day it is due, and the card is read
+              by its own cycle: what is billed, what is not yet, and how long you
+              have to pay.
             </p>
           </div>
           <Button tone="primary" size="sm" icon="calendar-days" onClick={onEdit}>
@@ -305,23 +546,15 @@ export function CardPage({
         <div className="card-detail-hero">
           <CardPlastic card={card} />
           <div className="card-detail-standing">
-            <span className="figure-label">Outstanding</span>
-            <BigMoney value={card.outstanding} className="cards-total" />
-            <p className="card-detail-lead-sub">
-              {card.balance > 0
-                ? `${money(card.balance)} sitting in credit`
-                : card.creditLimit > 0
-                  ? `${money(card.available)} of ${money(card.creditLimit)} left to spend`
-                  : 'no limit set on this card'}
-            </p>
-            {card.creditLimit > 0 && (
-              <div className="card-detail-limit">
-                <Meter
-                  value={used}
-                  color={used >= 0.85 ? 'var(--red)' : used >= 0.65 ? 'var(--amber)' : 'var(--green)'}
-                />
-                <span>{percent(used * 100)} of the limit used</span>
-              </div>
+            {/* No label over it: the stepper in the page head says which
+                window this is, and the bar under it says what it is. */}
+            <BigMoney value={card.spend} className="cards-total" />
+            {thenLimit > 0 && (
+              <LimitBar
+                value={used}
+                limit={thenLimit}
+                caption={raised ? 'of the limit it had then' : 'of the limit'}
+              />
             )}
             <CycleTrack card={card} />
           </div>
@@ -365,17 +598,7 @@ export function CardPage({
             />
           )}
           <Figure
-            label={`Spent · ${label}`}
-            value={money(card.spend)}
-            tone={delta !== null && delta > 0 ? 'bad' : 'good'}
-            hint={
-              delta === null
-                ? `${card.charges} ${card.charges === 1 ? 'charge' : 'charges'}`
-                : `${percent(delta, { sign: true })} on ${compactMoney(card.prevSpend)} before`
-            }
-          />
-          <Figure
-            label={`Paid · ${label}`}
+            label="Paid"
             value={money(card.paid)}
             tone={card.paid > 0 ? 'good' : 'flat'}
             hint={
@@ -435,41 +658,65 @@ export function CardPage({
         )}
 
         <section>
-          <SectionHead title="What it bought" hint={label} />
+          <SectionHead title="What it bought" hint={rangeWords} />
           {card.topCategories.length ? (
-            <motion.ul
-              className="cat-list"
-              variants={listVariants}
-              initial="initial"
-              animate="animate"
-            >
-              {card.topCategories.slice(0, 6).map((c) => (
-                <motion.li key={c.categoryId} variants={itemVariants}>
-                  <button
-                    type="button"
-                    className="cat-row"
-                    onClick={() => onOpenCategory(c.categoryId, span)}
-                    title={`Show ${c.name} over ${label}`}
-                  >
-                    <span className="cat-name">
-                      <span className="cat-swatch" style={{ background: c.color }}>
-                        <Icon name={c.icon} size={11} strokeWidth={2.4} />
+            <>
+              {/* The same donut the dashboard and the wallet are read by —
+                  the shape of a period's spending is one picture, wherever
+                  it is being asked about. */}
+              <div className="card-donut">
+                <Donut
+                  size={148}
+                  thickness={17}
+                  slices={card.topCategories.map((c) => ({
+                    id: c.categoryId,
+                    label: c.name,
+                    value: c.total,
+                    color: c.color,
+                  }))}
+                  centerLabel="Spent"
+                  centerValue={compactMoney(card.spend)}
+                  onSelect={(id) => onOpenCategory(id, rangeSpan)}
+                />
+              </div>
+              <motion.ul
+                className="cat-list"
+                variants={listVariants}
+                initial="initial"
+                animate="animate"
+              >
+                {card.topCategories.slice(0, 6).map((c) => (
+                  <motion.li key={c.categoryId} variants={itemVariants}>
+                    <button
+                      type="button"
+                      className="cat-row"
+                      onClick={() => onOpenCategory(c.categoryId, rangeSpan)}
+                      title={`Show ${c.name} over ${rangeWords}`}
+                    >
+                      <span className="cat-name">
+                        <span className="cat-swatch" style={{ background: c.color }}>
+                          <Icon name={c.icon} size={11} strokeWidth={2.4} />
+                        </span>
+                        {c.name}
                       </span>
-                      {c.name}
-                    </span>
-                    <span className="cat-amount">{money(c.total)}</span>
-                    <Meter value={c.total / categoryPeak} color={c.color} />
-                  </button>
-                </motion.li>
-              ))}
-            </motion.ul>
+                      <span className="cat-amount">{money(c.total)}</span>
+                      <Meter value={c.total / categoryPeak} color={c.color} />
+                    </button>
+                  </motion.li>
+                ))}
+              </motion.ul>
+            </>
           ) : (
-            <p className="section-empty">Nothing was put on this card in {label}.</p>
+            <p className="section-empty">
+              {range === 'all'
+                ? 'Nothing has ever been put on this card.'
+                : `Nothing was put on this card in ${rangeWords}.`}
+            </p>
           )}
         </section>
 
         <section>
-          <SectionHead title="Where it went" hint={label} />
+          <SectionHead title="Where it went" hint={rangeWords} />
           {card.topMerchants.length ? (
             <motion.ul
               className="merchant-list"
@@ -491,35 +738,92 @@ export function CardPage({
               ))}
             </motion.ul>
           ) : (
-            <p className="section-empty">Name the payee on a charge to see it ranked here.</p>
+            <p className="section-empty">Charges with a merchant are ranked here.</p>
           )}
         </section>
       </Card>
 
+      {/* The card's own ledger. Not a preview of one: the whole of whatever
+          window is chosen, read newest first, a page at a time. */}
       <Card padded={false} className="row-board">
         <div className="card-recent-head">
-          <SectionHead title="Latest on this card" hint="newest first" />
+          <SectionHead
+            title="Everything on this card"
+            hint={
+              loading && !summary
+                ? 'newest first'
+                : `${total.toLocaleString('en-IN')} ${total === 1 ? 'entry' : 'entries'} · ${
+                  money(summary?.expense ?? 0)} charged`
+            }
+          />
           <Button size="sm" tone="ghost" trailingIcon="arrow-right" onClick={onOpenLedger}>
-            All of it
+            Open in ledger
           </Button>
         </div>
-        {recent.length ? (
-          <div className="tx-list">
-            {recent.map((tx, i) => (
-              <TransactionRow
-                key={tx.id}
-                tx={tx}
-                showDate={shortDayLabel(tx.occurredAt)}
-                enterDelay={i * 0.028}
-                onClick={() => onOpenTransaction(tx)}
-              />
+        {loading && rows.length === 0 ? (
+          <div className="skeletons">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="skeleton-row" style={{ animationDelay: `${i * 60}ms` }} />
             ))}
           </div>
+        ) : rows.length ? (
+          <>
+            <div className="tx-list">
+              {rows.map((tx, i) => (
+                <TransactionRow
+                  key={tx.id}
+                  tx={tx}
+                  showDate={shortDayLabel(tx.occurredAt)}
+                  // Long lists simply appear; a stagger over hundreds of rows
+                  // is a wait rather than a flourish.
+                  enterDelay={rows.length > CARD_STAGGER_UP_TO ? 0 : i * 0.028}
+                  onClick={() => onOpenTransaction(tx)}
+                />
+              ))}
+            </div>
+            {remaining > 0 && (
+              <div className="ledger-more card-more">
+                <span>
+                  Showing {rows.length.toLocaleString('en-IN')} of{' '}
+                  {total.toLocaleString('en-IN')}
+                </span>
+                <div className="ledger-more-actions">
+                  <Button
+                    size="sm"
+                    onClick={() => setShown((n) => n + CARD_PAGE)}
+                    disabled={loading}
+                  >
+                    {loading ? 'Loading…' : `Show ${Math.min(CARD_PAGE, remaining)} more`}
+                  </Button>
+                  {remaining > CARD_PAGE && (
+                    <Button
+                      size="sm"
+                      tone="ghost"
+                      onClick={() => setShown(total)}
+                      disabled={loading}
+                    >
+                      Show all {remaining.toLocaleString('en-IN')}
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )}
+          </>
         ) : (
           <Empty
-            icon="credit-card"
-            title="Nothing on it yet"
-            body="Charges written against this card show up here."
+            title={range === 'all' ? 'Nothing on it yet' : `Nothing in ${rangeWords}`}
+            body={
+              range === 'all'
+                ? 'Charges on this card show up here.'
+                : 'Nothing was put on this card over that window.'
+            }
+            action={
+              range === 'all' ? undefined : (
+                <Button tone="primary" onClick={() => setRange('all')}>
+                  Show all time
+                </Button>
+              )
+            }
           />
         )}
       </Card>

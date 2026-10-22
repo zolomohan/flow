@@ -58,7 +58,7 @@ export function Categories({ onOpenCategory }: {
       <header className="screen-head">
         <div>
           <h1>Categories</h1>
-          <p>Rename, regroup, and retire the labels behind every transaction.</p>
+          <p>Rename, group, and remove the categories behind your transactions.</p>
         </div>
       </header>
 
@@ -121,10 +121,8 @@ function CategoriesPanel({ onOpen, onOpenCategory }: {
 
       {tops.length === 0 ? (
         <Empty
-          icon="tags"
           title={`No ${kind} categories yet`}
-          body="Categories are what turn a list of payments into something you can read."
-          action={<Button tone="primary" icon="plus" onClick={newCategory}>New category</Button>}
+          body="Categories group your spending so totals and charts make sense."
         />
       ) : (
         <motion.div
@@ -603,7 +601,7 @@ function CategorySheet({
           : 'New category',
       subtitle: parentGroup
         ? `Filed under ${parentGroup.name}, in its colour`
-        : 'Used to group transactions and colour the charts',
+        : 'Groups your transactions and colours your charts',
     },
     move: {
       title: `Move transactions out of ${editing?.name ?? ''}`,
@@ -703,7 +701,7 @@ function CategorySheet({
             hint={hasChildren ? 'this one has sub-categories of its own' : 'optional'}
             error={
               hasChildren && parentId
-                ? 'Moving this under a group will lift its sub-categories to the top level.'
+                ? 'Its sub-categories will move to the top level.'
                 : null
             }
           >
@@ -843,7 +841,7 @@ function CategorySheet({
             hint={mode === 'delete' ? 'optional' : undefined}
             error={
               mode === 'move' && !movingCount
-                ? 'Nothing is filed here yet, so there is nothing to move.'
+                ? 'Nothing is filed here yet.'
                 : null
             }
           >
@@ -859,7 +857,7 @@ function CategorySheet({
           {mode === 'delete' && (
             <p className="sheet-note">
               {deletingCount === 0
-                ? 'Nothing is filed here, so this just removes the category.'
+                ? 'Nothing is filed here, so the category just goes.'
                 : target
                   ? `${plural(deletingCount)} will move across, then the category ${childFate === 'delete' && hasChildren ? 'and its sub-categories go' : 'goes'} for good.`
                   : `${plural(deletingCount)} will be left uncategorised. This cannot be undone.`}

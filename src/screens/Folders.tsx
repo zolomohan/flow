@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { FOLDER_ICON_GROUPS, Icon } from '../components/Icon';
 import {
-  Button, Card, Empty, Field, Sheet, TextArea, TextInput,
+  Button, Empty, Field, Sheet, TextArea, TextInput,
 } from '../components/ui';
 import { useStore } from '../lib/store';
 import { FolderDetail } from './FolderDetail';
@@ -74,7 +74,7 @@ export function Folders({
                   ? `${folders.length} ${folders.length === 1 ? 'folder' : 'folders'} · ${held} ${
                       held === 1 ? 'entry' : 'entries'
                     } gathered`
-                  : 'Entries kept together because they belong together — a trip, a move, a project.'}
+                  : 'Group the transactions that belong together: a trip, a move, a project.'}
               </p>
             </div>
             <div className="head-actions">
@@ -85,18 +85,11 @@ export function Folders({
           </header>
 
           {folders.length === 0 ? (
-            <Card>
-              <Empty
-                icon="folder"
-                title="No folders yet"
-                body="A folder holds the entries you say belong together, whatever they are filed under. Make one for the trip you are on and gather the flights, the hotel and the dinners into it — the ledger keeps them where they are, and the folder adds them up."
-                action={
-                  <Button tone="primary" icon="plus" onClick={() => open(null)}>
-                    New folder
-                  </Button>
-                }
-              />
-            </Card>
+            <Empty
+              screen
+              title="No folders yet"
+              body="Group the transactions that belong together: a trip, a move, a project."
+            />
           ) : (
             <motion.div
               className="folder-grid"
@@ -234,7 +227,7 @@ function FolderSheet({
       subtitle={
         editing
           ? 'Renaming it keeps everything in it'
-          : 'A place to gather the entries one thing is made of'
+          : 'Group the transactions that belong together'
       }
       width={520}
       footer={
@@ -261,7 +254,7 @@ function FolderSheet({
           </span>
           <span className="folder-preview-name">
             {name.trim() || 'Folder name'}
-            <em>{note.trim() || (editing ? 'no note' : 'what it is for, if it needs saying')}</em>
+            <em>{note.trim() || (editing ? 'no note' : 'what it is for')}</em>
           </span>
         </div>
 
@@ -281,7 +274,7 @@ function FolderSheet({
         <Field label="Note" hint="optional">
           <TextArea
             value={note}
-            placeholder="What it is for, when the name doesn’t say it"
+            placeholder="What it is for"
             onChange={(e) => setNote(e.target.value)}
           />
         </Field>

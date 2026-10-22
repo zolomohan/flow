@@ -5,6 +5,7 @@ import type {
   Capture,
   CaptureSync,
   CardsOverview,
+  CardTerm,
   Category,
   CategoryInput,
   Holding,
@@ -13,6 +14,7 @@ import type {
   Scheme,
   Debt,
   DebtInput,
+  DebtAdditionInput,
   DebtPaymentInput,
   ImportCommitRow,
   ImportPreviewRow,
@@ -47,7 +49,7 @@ export const isDesktop =
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   if (!isDesktop) {
     throw new Error(
-      'Midas stores your book in a local SQLite file, so it needs the desktop shell. Run `yarn tauri dev`.',
+      'flow stores your book in a local SQLite file, so it needs the desktop shell. Run `yarn tauri dev`.',
     );
   }
   return invoke<T>(cmd, args);
@@ -85,7 +87,31 @@ export const api = {
   overview: (month: string, span = 1) => call<Overview>('overview', { month, span }),
 
   /** Every credit card: what is owed, what is billed, what the window bought. */
-  cards: (month: string, span = 1) => call<CardsOverview>('cards', { month, span }),
+  /** The days a card's terms changed, oldest first. */
+  cardTerms: (accountId: string) => call<CardTerm[]>('card_terms', { accountId }),
+  /** Records what the terms became on a day — the limit, the day the statement
+   *  closes, the day the bill is due, or any of them. One dated today also
+   *  moves the card itself, so the two never disagree. */
+  saveCardTerm: (
+    accountId: string,
+    effectiveOn: string,
+    terms: { creditLimit?: Paise | null; statementDay?: number | null; dueDay?: number | null },
+    note: string | null = null,
+  ) => call<CardTerm>('save_card_term', {
+    accountId,
+    effectiveOn,
+    creditLimit: terms.creditLimit ?? null,
+    statementDay: terms.statementDay ?? null,
+    dueDay: terms.dueDay ?? null,
+    note,
+  }),
+  deleteCardTerm: (id: string) => call<void>('delete_card_term', { id }),
+
+  /** Every card over a window. Months on the strip by default; `from`/`to`
+   *  name the days instead, for a window no run of months can describe — a
+   *  billing cycle, or the whole of a card's life. */
+  cards: (month: string, span = 1, from: string | null = null, to: string | null = null) =>
+    call<CardsOverview>('cards', { month, span, from, to }),
 
   /** A financial year of earnings, grouped by the head each is filed under.
    *  Computes no tax, on purpose. */
@@ -127,6 +153,10 @@ export const api = {
   /** Takes postings back out. They are untouched otherwise. */
   removeFromFolder: (folderId: string, ids: string[]) =>
     call<void>('remove_from_folder', { folderId, ids }),
+  /** Pins one label across a selection, or takes it off. Resolves with how
+   *  many postings actually changed — one already wearing it is not an edit. */
+  labelTransactions: (ids: string[], labelId: string, on: boolean) =>
+    call<number>('label_transactions', { ids, labelId, on }),
   /** "Filed right": clears Triage and teaches the importer the filing. */
   confirmTriage: (ids: string[]) => call<number>('confirm_triage', { ids }),
 
@@ -140,6 +170,9 @@ export const api = {
    *  Each row reads its figures off the posting it became, so correcting a
    *  transaction corrects the record of it. */
   captureHistory: () => call<Capture[]>('capture_history'),
+  /** Everyone this book has paid or been paid by, most seen first. Transfers
+   *  are left out: their merchant is bookkeeping, not anybody you paid. */
+  knownMerchants: () => call<string[]>('known_merchants'),
   /** Writes one waiting capture into the ledger, with whatever the Inbox
    *  filled in for what could not be worked out. */
   postCapture: (id: string, input: TransactionInput) =>
@@ -165,9 +198,10 @@ export const api = {
     call<void>('set_plan_archived', { id, archived }),
   /** Lets the cycle now due go by unpaid — a waived bill, a month off. */
   skipPlan: (id: string) => call<Plan>('skip_plan', { id }),
-  /** Writes the posting this cycle describes and points the plan at it. */
-  payPlan: (id: string, amount: Paise | null, occurredAt: string | null) =>
-    call<Transaction>('pay_plan', { id, amount, occurredAt }),
+  /** Writes the posting this cycle was reviewed into and points the plan at
+   *  it, in one go. */
+  payPlan: (id: string, input: TransactionInput) =>
+    call<Transaction>('pay_plan', { id, input }),
   /** Every turn of every live plan between two dates, paid ones included. */
   planCalendar: (from: string, to: string) =>
     call<PlanOccurrence[]>('plan_calendar', { from, to }),
@@ -193,6 +227,9 @@ export const api = {
   saveDebtPayment: (input: DebtPaymentInput) =>
     call<void>('save_debt_payment', { input }),
   deleteDebtPayment: (id: string) => call<void>('delete_debt_payment', { id }),
+  saveDebtAddition: (input: DebtAdditionInput) =>
+    call<void>('save_debt_addition', { input }),
+  deleteDebtAddition: (id: string) => call<void>('delete_debt_addition', { id }),
 
   listHoldings: () => call<Holding[]>('list_holdings'),
   saveHolding: (input: HoldingInput) => call<void>('save_holding', { input }),

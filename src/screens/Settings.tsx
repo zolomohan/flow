@@ -20,8 +20,8 @@ const TABS: SegmentOption<Tab>[] = [
 ];
 
 const BLURBS: Record<Tab, string> = {
-  preferences: 'How Midas looks, and what it asks of you while you use it.',
-  data: 'Your name, the SQLite file on this Mac, and what you can do to it.',
+  preferences: 'How flow looks and behaves.',
+  data: 'Your name, and a copy of your book to keep, restore or clear.',
 };
 
 
@@ -65,7 +65,7 @@ function PreferencesPanel() {
   return (
     <>
     <Card>
-      <CardHead title="Theme" hint="Midas follows whichever you pick" />
+      <CardHead title="Theme" hint="Light, dark, or whatever your Mac is set to" />
       <div className="theme-row">
         {THEMES.map((option) => (
           <button
@@ -96,8 +96,8 @@ function PreferencesPanel() {
           <div>
             <strong>Ask for a note</strong>
             <p>
-              A new transaction can’t be saved without one. What is already in
-              the book is left as it is.
+              New transactions can’t be saved without one. Existing ones are
+              left as they are.
             </p>
           </div>
           <Switch
@@ -112,11 +112,9 @@ function PreferencesPanel() {
           <div>
             <strong>Hide amounts</strong>
             <p>
-              Every figure on every screen comes out as the shape of itself —
-              <strong className="setting-sample"> ₹•,••,•••</strong> — with the
-              words around it left readable. For a desk somebody walks past, or
-              a screen you are sharing. Nothing in the book changes, and what
-              you are typing is never hidden from you.
+              Every figure on screen becomes
+              <strong className="setting-sample"> ₹•,••,•••</strong>. Nothing in
+              your book changes, and what you type stays visible to you.
             </p>
           </div>
           <Switch
@@ -191,7 +189,7 @@ function DataPanel() {
     const to = await save({
       title: 'Where should the copy go?',
       defaultPath: `midas-${today}.sqlite3`,
-      filters: [{ name: 'Midas book', extensions: ['sqlite3'] }],
+      filters: [{ name: 'flow book', extensions: ['sqlite3'] }],
     });
     if (!to) return;
     setBusy('export');
@@ -210,7 +208,7 @@ function DataPanel() {
       title: 'Which book should be read in?',
       multiple: false,
       directory: false,
-      filters: [{ name: 'Midas book', extensions: ['sqlite3', 'db', 'sqlite'] }],
+      filters: [{ name: 'flow book', extensions: ['sqlite3', 'db', 'sqlite'] }],
     });
     if (typeof from !== 'string') return;
     setBusy('import');
@@ -231,14 +229,14 @@ function DataPanel() {
     <NameCard />
 
     <Card>
-      <CardHead title="Your data" hint="Everything lives in a local SQLite file on this Mac" />
+      <CardHead title="Your data" hint="Everything stays on this Mac" />
       <div className="data-actions">
         <div className="data-row">
           <div>
             <strong>Save a copy</strong>
             <p>
-              The whole book in one file — accounts, ledger, debts, holdings and
-              prices. Written whole rather than copied, so nothing is left in the log.
+              Your whole book in one file: accounts, transactions, debts and
+              holdings.
             </p>
           </div>
           <Button icon="download" onClick={exportBook} disabled={busy !== null}>
@@ -249,8 +247,8 @@ function DataPanel() {
           <div>
             <strong>Read a book in</strong>
             <p>
-              Replaces everything here with a copy saved earlier. What is here now is
-              kept beside the file you choose, in case it was the wrong one.
+              Replaces everything here with a copy you saved earlier. Your current
+              book is kept alongside it as a backup.
             </p>
           </div>
           <Button icon="corner-up-left" onClick={importBook} disabled={busy !== null}>
@@ -283,9 +281,8 @@ function DataPanel() {
         }}
         onCancel={() => setConfirmReset(false)}
       >
-        Every account, transaction, debt, holding and plan goes, and the book
-        opens empty. This cannot be undone — save a copy first if there is
-        anything in it worth keeping.
+        Every account, transaction, debt, holding and plan is deleted. This
+        cannot be undone. Save a copy first.
       </Confirm>
     </Card>
     </>
