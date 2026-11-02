@@ -16,6 +16,7 @@ import type {
   DebtInput,
   DebtAdditionInput,
   DebtPaymentInput,
+  PersonRepaymentInput,
   ImportCommitRow,
   ImportPreviewRow,
   ImportResult,
@@ -227,6 +228,9 @@ export const api = {
   saveDebtPayment: (input: DebtPaymentInput) =>
     call<void>('save_debt_payment', { input }),
   deleteDebtPayment: (id: string) => call<void>('delete_debt_payment', { id }),
+  savePersonRepayment: (input: PersonRepaymentInput) =>
+    call<string>('save_person_repayment', { input }),
+  deletePersonRepayment: (id: string) => call<void>('delete_person_repayment', { id }),
   saveDebtAddition: (input: DebtAdditionInput) =>
     call<void>('save_debt_addition', { input }),
   deleteDebtAddition: (id: string) => call<void>('delete_debt_addition', { id }),

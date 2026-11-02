@@ -287,6 +287,43 @@ export function shortDayLabel(iso: string) {
   });
 }
 
+/** How many days a run covers, both ends counted. Zero with nothing in it. */
+export function daySpan(first: string | null, last: string | null) {
+  if (!first || !last) return 0;
+  const days = Math.round(
+    (new Date(last.slice(0, 10)).getTime() - new Date(first.slice(0, 10)).getTime()) / 86_400_000,
+  );
+  return days + 1;
+}
+
+/**
+ * "16–24 Dec", "30 Jan – 26 Feb", "Nov 2025 – May 2026": the dates a run
+ * covers, saying each part once. A run inside one year names it once at the
+ * end, or not at all where a heading has already said which year it is; a
+ * run across two years names the months only, since by then the days are
+ * not what anyone is reading for.
+ */
+export function dateRangeLabel(first: string, last: string, withYear = true) {
+  const a = new Date(`${first.slice(0, 10)}T00:00`);
+  const b = new Date(`${last.slice(0, 10)}T00:00`);
+  const month = (d: Date) => MONTHS[d.getMonth()];
+  if (a.getFullYear() !== b.getFullYear()) {
+    return `${month(a)} ${a.getFullYear()} – ${month(b)} ${b.getFullYear()}`;
+  }
+  const year = withYear ? ` ${b.getFullYear()}` : '';
+  if (a.getMonth() !== b.getMonth()) {
+    return `${a.getDate()} ${month(a)} – ${b.getDate()} ${month(b)}${year}`;
+  }
+  if (a.getDate() === b.getDate()) return `${a.getDate()} ${month(a)}${year}`;
+  return `${a.getDate()}–${b.getDate()} ${month(a)}${year}`;
+}
+
+/** "9 days", "7 months": how long a run went on, in the unit it is felt in. */
+export function spanWords(days: number) {
+  if (days <= 60) return `${days} ${days === 1 ? 'day' : 'days'}`;
+  return `${Math.round(days / 30.44)} months`;
+}
+
 export function timeLabel(iso: string) {
   return new Date(iso).toLocaleTimeString('en-IN', {
     hour: 'numeric',
@@ -405,4 +442,24 @@ export function debtProgress(debt: {
     forgiven: (written / debt.principal) * 100,
     forgivenAmount: written,
   };
+}
+
+/**
+ * What a posting counts for, the way the book's totals count it: less what
+ * was refunded, and — for a bill shared with people — less their shares.
+ * The bill left your account in full, but only your part was spending; the
+ * rest is money out with them, and their debts carry it.
+ */
+export function countedAmount(t: {
+  kind: string;
+  amount: Paise;
+  refunded: Paise;
+  shares: { direction: string; amount: Paise }[];
+}) {
+  const left = t.amount - t.refunded;
+  if (t.kind !== 'expense') return left;
+  const theirs = t.shares
+    .filter((s) => s.direction === 'lent')
+    .reduce((sum, s) => sum + s.amount, 0);
+  return Math.max(0, left - theirs);
 }

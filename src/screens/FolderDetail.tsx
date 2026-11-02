@@ -7,18 +7,12 @@ import { TransactionRow } from '../components/TransactionRow';
 import { Donut, SplitBar } from '../components/charts';
 import { Button, Card, CardHead, Confirm, Empty } from '../components/ui';
 import { useStore } from '../lib/store';
-import { compactMoney, dayKey, dayLabel, money, shortDayLabel } from '../lib/format';
+import {
+  countedAmount,
+  compactMoney, dateRangeLabel, dayKey, dayLabel, daySpan, money,
+} from '../lib/format';
 import { itemVariants, listVariants } from '../lib/motion';
 import type { Folder, Paise, Transaction } from '../lib/types';
-
-/** How many days a folder covers, both ends counted. */
-function spanOf(first: string | null, last: string | null) {
-  if (!first || !last) return 0;
-  const days = Math.round(
-    (new Date(last.slice(0, 10)).getTime() - new Date(first.slice(0, 10)).getTime()) / 86_400_000,
-  );
-  return days + 1;
-}
 
 /** One slice of what a folder was spent on. */
 interface Slice {
@@ -72,7 +66,7 @@ export function FolderDetail({
   // is what came in. Whichever side is larger is the one the page is about.
   const outward = folder.expense >= folder.income;
   const total = outward ? folder.expense : folder.income;
-  const days = spanOf(folder.firstAt, folder.lastAt);
+  const days = daySpan(folder.firstAt, folder.lastAt);
 
   // A folder of invoices is read the way a folder of a trip is, in the
   // direction it actually runs: the tiles below are about whichever side of
@@ -82,11 +76,7 @@ export function FolderDetail({
     // A refund is not money of its own: it comes off the posting it gives
     // back, exactly as the ledger's own totals read it.
     const side = (rows ?? []).filter((t) => t.kind === kind && !t.refundOf);
-    const left = (t: Transaction) => t.amount - t.refunded;
-    const biggest = side.reduce<Transaction | null>(
-      (top, t) => (!top || left(t) > left(top) ? t : top),
-      null,
-    );
+    const left = countedAmount;
     const slices = new Map<string, Slice>();
     for (const t of side) {
       // A split bill belongs to every category it was filed under, in the
@@ -111,14 +101,24 @@ export function FolderDetail({
         else slices.set(part.id, { ...part });
       }
     }
+    // What was paid for other people on the folder's bills, and how much of
+    // it has come back since. Their shares are debts, not the folder's cost,
+    // so they are counted here instead of in it.
+    const lentShares = (rows ?? [])
+      .filter((t) => t.kind === 'expense' && !t.refundOf)
+      .flatMap((t) => t.shares)
+      .filter((share) => share.direction === 'lent');
+    const forOthers = lentShares.reduce((sum, share) => sum + share.amount, 0);
+    const repaid = lentShares.reduce((sum, share) => sum + Math.min(share.paid, share.amount), 0);
+    const people = new Set(lentShares.map((share) => share.counterparty.trim().toLowerCase())).size;
     return {
       count: side.length,
-      average: side.length ? Math.round(total / side.length) : 0,
-      biggest,
-      biggestAmount: biggest ? left(biggest) : 0,
+      forOthers,
+      repaid,
+      people,
       slices: [...slices.values()].sort((a, b) => b.value - a.value),
     };
-  }, [rows, outward, total]);
+  }, [rows, outward]);
 
   // A run that went on for months is better read as a rate than as a total,
   // and a fortnight's trip is not.
@@ -137,9 +137,7 @@ export function FolderDetail({
 
   const span =
     folder.firstAt && folder.lastAt
-      ? days === 1
-        ? shortDayLabel(folder.firstAt)
-        : `${shortDayLabel(folder.firstAt)} → ${shortDayLabel(folder.lastAt)}`
+      ? dateRangeLabel(folder.firstAt, folder.lastAt)
       : 'nothing in it yet';
 
   return (
@@ -154,12 +152,9 @@ export function FolderDetail({
           </span>
           <div>
             <h1>{folder.name}</h1>
-            <p>
-              {folder.count === 0
-                ? 'Nothing in it yet'
-                : `${folder.count} ${folder.count === 1 ? 'entry' : 'entries'} · ${span}`}
-              {folder.note && ` · ${folder.note}`}
-            </p>
+            {/* The count and the dates are on the summary right below; only
+                what it cannot say is said here. */}
+            {folder.note && <p>{folder.note}</p>}
           </div>
         </div>
         <div className="head-actions">
@@ -208,17 +203,23 @@ export function FolderDetail({
               </span>
             </div>
             <div className="figure">
-              <span className="figure-label">Average</span>
-              <strong className="figure-value">{money(stats.average)}</strong>
-              <span className="figure-hint">an entry</span>
+              <span className="figure-label">For others</span>
+              <strong className="figure-value">{money(stats.forOthers)}</strong>
+              <span className="figure-hint">
+                {stats.people
+                  ? `owed by ${stats.people} ${stats.people === 1 ? 'person' : 'people'}`
+                  : 'nothing split'}
+              </span>
             </div>
             <div className="figure">
-              <span className="figure-label">Biggest</span>
-              <strong className="figure-value">{money(stats.biggestAmount)}</strong>
+              <span className="figure-label">Repaid</span>
+              <strong className="figure-value">{money(stats.repaid)}</strong>
               <span className="figure-hint">
-                {stats.biggest
-                  ? stats.biggest.merchant || stats.biggest.categoryName || 'one entry'
-                  : '—'}
+                {!stats.forOthers
+                  ? '—'
+                  : stats.repaid >= stats.forOthers
+                    ? 'all of it back'
+                    : `${money(stats.forOthers - stats.repaid)} still owed`}
               </span>
             </div>
             <div className="figure">

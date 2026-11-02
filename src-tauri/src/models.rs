@@ -470,6 +470,14 @@ pub struct TransactionQuery {
     /// is the only sensible default for income and expenses.
     pub account_side: Option<String>,
     pub category_ids: Option<Vec<String>>,
+    /// Postings to leave out by category, read the way `category_ids` reads
+    /// them, so the two are each other's opposite: a split bill is in every
+    /// category it was cut into, and hiding one of them hides the bill.
+    pub exclude_category_ids: Option<Vec<String>>,
+    /// Who paid: `me` for what left an account of yours, `others` for the
+    /// bills somebody else paid, which are spent out of the Debts account.
+    /// Anything else is both.
+    pub paid_by: Option<String>,
     /// Inclusive ISO date bounds (YYYY-MM-DD).
     pub from: Option<String>,
     pub to: Option<String>,
@@ -691,6 +699,9 @@ pub struct DebtPayment {
     /// reopen showing what actually happened. Only set for a posting this
     /// repayment wrote itself.
     pub cash_account_id: Option<String>,
+    /// Set on each piece of one repayment spread across somebody's debts.
+    /// The pieces are one repayment, changed and removed together.
+    pub spread_id: Option<String>,
     pub created_at: String,
 }
 
@@ -717,6 +728,23 @@ pub struct DebtPaymentInput {
 /// and differs only in which way the money went.
 pub type DebtAddition = DebtPayment;
 pub type DebtAdditionInput = DebtPaymentInput;
+
+/// One repayment from somebody you have several open debts with, laid over
+/// all of them oldest first instead of against one of them by hand.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonRepaymentInput {
+    /// The repayment being changed, when one is.
+    pub spread_id: Option<String>,
+    pub direction: String,
+    pub counterparty: String,
+    pub amount: Paise,
+    pub occurred_at: String,
+    pub note: Option<String>,
+    pub transaction_id: Option<String>,
+    #[serde(default)]
+    pub cash_account_id: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

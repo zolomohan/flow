@@ -25,6 +25,7 @@ import { Accounts } from './screens/Accounts';
 import { Cards } from './screens/Cards';
 import { Taxes } from './screens/Taxes';
 import { Debts } from './screens/Debts';
+import type { DebtPerson } from './lib/debts';
 import { Investments } from './screens/Investments';
 import { Categories } from './screens/Categories';
 import { Folders } from './screens/Folders';
@@ -219,6 +220,8 @@ function Shell() {
     debt: Debt;
     kind: DebtMovement;
     payment: DebtPayment | null;
+    /** Set when the repayment is laid over everything a person owes. */
+    person?: DebtPerson;
   } | null>(null);
   // The plan sheet's subject: the one being changed, or nothing when a new
   // one is being written.
@@ -655,6 +658,14 @@ function Shell() {
                 onEditAddition={(debt, addition) =>
                   setPaying({ debt, kind: 'addition', payment: addition })
                 }
+                onRepayPerson={(person, payment) =>
+                  setPaying({
+                    debt: person.debts[person.debts.length - 1],
+                    kind: 'repayment',
+                    payment,
+                    person,
+                  })
+                }
                 onOpenTransaction={openTransaction}
               />
             ) : isInvestmentRoute(route) ? (
@@ -713,6 +724,7 @@ function Shell() {
         open={!!paying}
         onClose={() => setPaying(null)}
         debt={paying?.debt ?? null}
+        person={paying?.person ?? null}
         kind={paying?.kind}
         editing={paying?.payment ?? null}
         onOpenTransaction={openTransactionById}

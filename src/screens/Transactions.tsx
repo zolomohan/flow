@@ -29,6 +29,21 @@ const SIDES: SegmentOption<Side>[] = [
   { value: 'to', label: 'Into', icon: 'arrow-down-left' },
 ];
 
+/** Whether the picked categories are what the ledger shows or what it hides. */
+type CategoryMode = 'only' | 'hide';
+const CATEGORY_MODES: SegmentOption<CategoryMode>[] = [
+  { value: 'only', label: 'Show only' },
+  { value: 'hide', label: 'Hide', icon: 'eye-off' },
+];
+
+/** Who paid: you, out of an account of yours, or a friend who covered it. */
+type PaidBy = 'anyone' | 'me' | 'others';
+const PAID_BY: SegmentOption<PaidBy>[] = [
+  { value: 'anyone', label: 'Anyone' },
+  { value: 'me', label: 'Me' },
+  { value: 'others', label: 'Someone else', icon: 'handshake' },
+];
+
 const KIND_FILTERS: SegmentOption<KindFilter>[] = [
   { value: 'all', label: 'All' },
   { value: 'expense', label: 'Out', icon: 'arrow-up-right' },
@@ -130,6 +145,8 @@ export function Transactions({
   const [accountIds, setAccountIds] = useState<string[]>([]);
   const [side, setSide] = useState<Side>('either');
   const [categoryIds, setCategoryIds] = useState<string[]>([]);
+  const [categoryMode, setCategoryMode] = useState<CategoryMode>('only');
+  const [paidBy, setPaidBy] = useState<PaidBy>('anyone');
   const [labelIds, setLabelIds] = useState<string[]>([]);
   const [catQuery, setCatQuery] = useState('');
   const [showFilters, setShowFilters] = useState(false);
@@ -164,12 +181,14 @@ export function Transactions({
   useEffect(() => {
     if (!categoryFocus?.token) return;
     setCategoryIds(categoryFocus.ids);
+    setCategoryMode('only');
     if (categoryFocus.span) setWindowSpan(categoryFocus.span);
     setRange(rangeFor(categoryFocus.span));
     // Whatever the ledger was last narrowed by is not part of the question
     // being asked, and would quietly leave entries out of the answer.
     setKind('all');
     setAccountIds([]);
+    setPaidBy('anyone');
     setSearch('');
     setDebounced('');
     onFocusUsed?.();
@@ -184,6 +203,7 @@ export function Transactions({
     setKind('all');
     setAccountIds([]);
     setCategoryIds([]);
+    setPaidBy('anyone');
     setSearch('');
     setDebounced('');
     onFocusUsed?.();
@@ -214,7 +234,10 @@ export function Transactions({
 
   useEffect(() => {
     setShown(PAGE);
-  }, [debounced, kind, months, accountIds, side, expandedCategoryIds, labelIds, month]);
+  }, [
+    debounced, kind, months, accountIds, side, expandedCategoryIds, categoryMode, paidBy, labelIds,
+    month,
+  ]);
 
   useEffect(() => {
     const bounds = monthWindowBounds(months, month);
@@ -224,7 +247,9 @@ export function Transactions({
       kinds: kind === 'all' ? null : [kind],
       accountIds: accountIds.length ? accountIds : null,
       accountSide: accountIds.length ? side : null,
-      categoryIds: expandedCategoryIds,
+      categoryIds: categoryMode === 'only' ? expandedCategoryIds : null,
+      excludeCategoryIds: categoryMode === 'hide' ? expandedCategoryIds : null,
+      paidBy: paidBy === 'anyone' ? null : paidBy,
       labelIds: labelIds.length ? labelIds : null,
       from: bounds.from,
       to: bounds.to,
@@ -245,8 +270,8 @@ export function Transactions({
       })
       .finally(() => setLoading(false));
   }, [
-    debounced, kind, months, accountIds, side, expandedCategoryIds, labelIds, month, shown,
-    listTransactions, transactionSummary, revision,
+    debounced, kind, months, accountIds, side, expandedCategoryIds, categoryMode, paidBy, labelIds,
+    month, shown, listTransactions, transactionSummary, revision,
   ]);
 
 
@@ -386,6 +411,8 @@ export function Transactions({
   const clearFilters = () => {
     setAccountIds([]);
     setCategoryIds([]);
+    setCategoryMode('only');
+    setPaidBy('anyone');
     setLabelIds([]);
     setSide('either');
   };
@@ -565,7 +592,8 @@ export function Transactions({
   };
 
   const activeFilters =
-    accountIds.length + categoryIds.length + labelIds.length + (side === 'either' ? 0 : 1);
+    accountIds.length + categoryIds.length + labelIds.length + (side === 'either' ? 0 : 1) +
+    (paidBy === 'anyone' ? 0 : 1);
   const total = summary?.count ?? rows.length;
   const remaining = Math.max(total - rows.length, 0);
   const listing = rows.length > STAGGER_UP_TO ? PLAIN_LIST : listVariants;
@@ -690,6 +718,26 @@ export function Transactions({
                   )}
                 </div>
 
+                <div className="filter-group">
+                  <div className="filter-head">
+                    <span>Paid by</span>
+                    <Segmented
+                      options={PAID_BY}
+                      value={paidBy}
+                      onChange={setPaidBy}
+                      name="tx-paid-by"
+                      size="sm"
+                    />
+                  </div>
+                  {paidBy !== 'anyone' && (
+                    <p className="filter-note">
+                      {paidBy === 'others'
+                        ? 'Bills a friend paid, where your share is what you owe them. None of your accounts moved for them.'
+                        : 'Everything that went through an account of yours, leaving out the bills a friend paid.'}
+                    </p>
+                  )}
+                </div>
+
                 {kind === 'transfer' ? (
                   <div className="filter-group">
                     <span>Categories</span>
@@ -702,25 +750,59 @@ export function Transactions({
                   <div className="filter-group">
                     <div className="filter-head">
                       <span>Categories</span>
-                      <div className="filter-search">
-                        <Icon name="search" size={13} />
-                        <TextInput
-                          value={catQuery}
-                          placeholder="Find a category"
-                          onChange={(e) => setCatQuery(e.target.value)}
+                      <div className="filter-head-tools">
+                        <Segmented
+                          options={CATEGORY_MODES}
+                          value={categoryMode}
+                          onChange={setCategoryMode}
+                          name="tx-category-mode"
+                          size="sm"
                         />
-                        {catQuery && (
-                          <button onClick={() => setCatQuery('')} aria-label="Clear">
-                            <Icon name="x" size={12} />
-                          </button>
-                        )}
+                        <div className="filter-search">
+                          <Icon name="search" size={13} />
+                          <TextInput
+                            value={catQuery}
+                            placeholder="Find a category"
+                            onChange={(e) => setCatQuery(e.target.value)}
+                          />
+                          {catQuery && (
+                            <button onClick={() => setCatQuery('')} aria-label="Clear">
+                              <Icon name="x" size={12} />
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
+                    {categoryMode === 'hide' && (
+                      <p className="filter-note">
+                        {categoryIds.length
+                          ? 'Entries filed under the ones picked are left out, along with any bill split across them.'
+                          : 'Pick the categories to leave out of the list.'}
+                      </p>
+                    )}
                     <div className="chip-tree">
                       {visibleGroups.length === 0 && (
                         <p className="filter-note">Nothing matches “{catQuery}”.</p>
                       )}
-                      {visibleGroups.map(({ group, children }) => {
+                      {/* Categories with nothing under them — income is a
+                          flat list — share one row rather than a line each. */}
+                      {visibleGroups.some(({ children }) => children.length === 0) && (
+                        <div className="chip-row">
+                          {visibleGroups
+                            .filter(({ children }) => children.length === 0)
+                            .map(({ group }) => (
+                              <Chip
+                                key={group.id}
+                                color={group.color}
+                                active={categoryIds.includes(group.id)}
+                                onClick={() => setCategoryIds((l) => toggle(l, group.id))}
+                              >
+                                {group.name}
+                              </Chip>
+                            ))}
+                        </div>
+                      )}
+                      {visibleGroups.filter(({ children }) => children.length > 0).map(({ group, children }) => {
                         const groupOn = categoryIds.includes(group.id);
                         return (
                           <div key={group.id} className="cat-branch">
@@ -820,6 +902,13 @@ export function Transactions({
               </Chip>
             );
           })}
+          {paidBy !== 'anyone' && (
+            <Chip active onClick={() => setPaidBy('anyone')}>
+              <Icon name={paidBy === 'others' ? 'handshake' : 'user-round'} size={12} />
+              {paidBy === 'others' ? 'Paid by someone else' : 'Paid by me'}
+              <Icon name="x" size={11} />
+            </Chip>
+          )}
           {categoryIds.map((id) => {
             const c = categories.find((x) => x.id === id);
             return c && (
@@ -829,7 +918,9 @@ export function Transactions({
                 active
                 onClick={() => setCategoryIds((l) => l.filter((x) => x !== id))}
               >
-                {c.name}
+                {/* Hidden rather than shown: the chip says which. */}
+                {categoryMode === 'hide' && <Icon name="eye-off" size={11} />}
+                {categoryMode === 'hide' ? `Not ${c.name}` : c.name}
                 <Icon name="x" size={11} />
               </Chip>
             );

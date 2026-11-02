@@ -539,12 +539,15 @@ export function TransactionSheet({
   onSubmit?: (input: TransactionInput) => void;
 }) {
   const {
-    accounts, categories, labels, saveTransaction, deleteTransaction, toast, settings,
+    accounts, categories, labels, debts, saveTransaction, deleteTransaction, toast, settings,
     templates, saveTemplate, markTemplateUsed, payPlan,
   } = useStore();
   const live = useMemo(() => accounts.filter((a) => !a.archived && !a.system), [accounts]);
   // The account every debt runs through, named by the book itself.
   const holding = useMemo(() => accounts.find((a) => a.system), [accounts]);
+  // Read by the reset below for the same reason the live accounts are.
+  const holdingRef = useRef(holding);
+  holdingRef.current = holding;
   // Read by the reset below rather than watched by it. Every write anywhere in
   // the app hands the store a fresh accounts array, and a reset that listed
   // that array as a reason to run would empty the form under whoever was
@@ -581,6 +584,13 @@ export function TransactionSheet({
   const [saving, setSaving] = useState(false);
   const [lines, setLines] = useState<SplitLine[]>([]);
   const [people, setPeople] = useState<SplitPeople>(emptyPeople);
+  // Who paid, when somebody else did. The amount is then your share of the
+  // bill, all of it owed to them, and no account of yours is touched. Null is
+  // you; an empty string is somebody not yet named.
+  const [payer, setPayer] = useState<string | null>(null);
+  // Whether the names the book already owes or is owed by are on offer.
+  const [suggestingPayer, setSuggestingPayer] = useState(false);
+  const payerRef = useRef<HTMLInputElement>(null);
   const [labelIds, setLabelIds] = useState<string[]>([]);
   // What this posting gives back, when it is a refund. A refund undoes one
   // posting rather than being money of its own: neither of them is counted
@@ -638,6 +648,16 @@ export function TransactionSheet({
       .slice(0, 6);
   }, [known, merchant, kind]);
 
+  // Whoever paid is somebody the Debts screen gathers by name, so the names it
+  // already has are offered: a spelling of your own would be a second person.
+  const payerSuggestions = useMemo(() => {
+    const term = (payer ?? '').trim().toLowerCase();
+    return [...new Set(debts.map((d) => d.counterparty))]
+      .sort()
+      .filter((name) => name.toLowerCase().includes(term) && name.toLowerCase() !== term)
+      .slice(0, 6);
+  }, [debts, payer]);
+
   // Reset the form each time the sheet opens, from the edited row or the draft.
   useEffect(() => {
     if (!open) return;
@@ -648,6 +668,11 @@ export function TransactionSheet({
     if (editing?.note && carried.length && !carried[0].note) {
       carried[0] = { ...carried[0], note: editing.note };
     }
+    // A bill spent out of the Debts account is one somebody else paid, and its
+    // one share is what you owe them. Read onto the people page it would be
+    // everyone owing you — the very thing it is not.
+    const theirs =
+      editing?.kind === 'expense' && editing.accountId === holdingRef.current?.id;
     if (editing) {
       setKind(editing.kind);
       setAmount(paiseToRupeeString(editing.amount));
@@ -658,7 +683,8 @@ export function TransactionSheet({
       setNote(carried.length ? '' : (editing.note ?? ''));
       setOccurredAt(editing.occurredAt.slice(0, 16));
       setLines(carried);
-      setPeople(peopleFor(editing));
+      setPayer(theirs ? (editing.shares[0]?.counterparty ?? '') : null);
+      setPeople(theirs ? emptyPeople() : peopleFor(editing));
       setLabelIds(editing.labels.map((l) => l.id));
       setSeeded(false);
       setFromTemplate(null);
@@ -697,6 +723,7 @@ export function TransactionSheet({
       setOccurredAt(toLocalInput());
       setLines(shape ? shape.lines : []);
       setPeople(emptyPeople());
+      setPayer(null);
       setLabelIds(shape ? shape.labelIds : []);
       setSeeded(false);
       setFromTemplate(draft?.template ?? null);
@@ -736,7 +763,12 @@ export function TransactionSheet({
     // the Split action on a row. Otherwise it opens on the transaction, with
     // whatever divisions it already carries summarised underneath.
     setBrowsing(null);
-    setPage(splitFocus === 'debt' ? 'people' : splitFocus ?? null);
+    // Except one somebody else paid, which has nobody to divide it with.
+    setPage(
+      theirs && splitFocus !== 'categories'
+        ? null
+        : splitFocus === 'debt' ? 'people' : splitFocus ?? null,
+    );
     setBack(false);
     // The whole of it is theirs, so no row of yours holds any of it back.
     // Only for a posting nobody owes anything on yet: one that already has
@@ -754,6 +786,7 @@ export function TransactionSheet({
     }
     setError(null);
     setPartsError(null);
+    setSuggestingPayer(false);
     const focus = window.setTimeout(() => amountRef.current?.focus(), 220);
     return () => window.clearTimeout(focus);
   }, [open, editing, draft, splitFocus]);
@@ -857,6 +890,24 @@ export function TransactionSheet({
     setKind(next);
     // Only money landing in an account gives anything back.
     if (refund && next !== 'income') setRefund(null);
+    // And only a bill can have been paid by somebody else.
+    if (payer !== null && next !== 'expense') youPaid();
+  };
+
+  // Somebody else paid. What the others on the bill owe is between them and
+  // whoever paid, so nobody is down for a share of it here: the amount is
+  // yours, and all of it is owed to them.
+  const someoneElsePaid = () => {
+    setPayer('');
+    setPeople(emptyPeople());
+    window.setTimeout(() => payerRef.current?.focus(), 60);
+  };
+
+  // Back to a bill you paid. One that was on the Debts account names no
+  // account of yours yet, so the rail asks rather than keeping one nobody chose.
+  const youPaid = () => {
+    setPayer(null);
+    if (accountId === holding?.id) setAccountId(null);
   };
 
   // Opening the categories panel on an unsplit bill seeds two halves rather
@@ -992,7 +1043,13 @@ export function TransactionSheet({
 
   const submit = async () => {
     if (!paise) return setError('Enter an amount.');
-    if (!accountId) return setError('Pick an account.');
+    const theirs = kind === 'expense' && payer !== null;
+    const payerName = payer?.trim() ?? '';
+    if (theirs && !payerName) return setError('Say who paid for it.');
+    // The Debts account is never one you pick: a bill on it is one somebody
+    // else paid, and stops being that the moment you say you paid it.
+    if (!theirs && (!accountId || (kind !== 'transfer' && accountId === holding?.id)))
+      return setError('Pick an account.');
     if (needsNote && !split && !note.trim())
       return setError('Add a note. This book requires one.');
     if (kind === 'transfer' && toAccountId === accountId)
@@ -1002,7 +1059,20 @@ export function TransactionSheet({
     // it — but it can still be owed back: money out of your accounts with
     // nowhere of yours to go is lending, and the debt is the other side of it.
     const parts = kind === 'transfer' ? [] : linesToInput(lines, paise);
-    const owing = peopleToInput(people, paise, kind);
+    // Paid by somebody else, the whole of it is owed to them — as the same
+    // debt it already was, when it was theirs before, so whatever has been
+    // paid back on it stays paid.
+    const was = editing?.accountId === holding?.id ? editing?.shares[0] : undefined;
+    const owing = theirs
+      ? [{
+          id: was?.debtId ?? null,
+          direction: 'borrowed' as const,
+          counterparty: payerName,
+          amount: paise,
+          dueOn: was?.dueOn ?? null,
+          note: null,
+        }]
+      : peopleToInput(people, paise, kind);
     if (kind === 'transfer' && !toAccountId && !owing.length)
       return setError('Pick an account to transfer into, or say who owes it back.');
     if (kind !== 'transfer' && split && rest < 0)
@@ -1035,7 +1105,9 @@ export function TransactionSheet({
       id: editing?.id ?? null,
       kind: savedKind,
       amount: paise,
-      accountId,
+      // No account of yours, when somebody else paid: the book files it
+      // against the one that stands for what is owed.
+      accountId: theirs ? '' : accountId!,
       toAccountId: savedKind === 'transfer' ? toAccountId : null,
       // A split bill has no single category of its own, but the ledger row
       // still needs a colour and a glyph — so it takes the largest part's.
@@ -1079,7 +1151,9 @@ export function TransactionSheet({
           ? 'Transaction updated'
           : 'Transaction added';
       toast(
-        owing.length
+        theirs
+          ? `${done} · you owe ${payerName} ${money(paise)}`
+          : owing.length
           ? `${done} · ${owing.length} ${owing.length === 1 ? 'debt' : 'debts'} ${
               directionFor(kind) === 'lent' ? 'owed to you' : 'you owe'
             }`
@@ -1194,6 +1268,58 @@ export function TransactionSheet({
           narrows the other — so a transfer asks the way a form asks, with a
           menu apiece. */}
       <div className={`tx-accounts ${kind === 'transfer' ? 'is-transfer' : ''}`}>
+        {/* Paid by somebody else, no account of yours was touched, so the
+            question the rail asks is answered with who paid instead. */}
+        {payer !== null && kind === 'expense' ? (
+          <Field label="Paid by">
+            <div className="suggest">
+              <TextInput
+                ref={payerRef}
+                value={payer}
+                placeholder="Harish"
+                autoComplete="off"
+                onChange={(e) => {
+                  setPayer(e.target.value);
+                  setSuggestingPayer(true);
+                  setError(null);
+                }}
+                onFocus={() => setSuggestingPayer(true)}
+                onBlur={() => setSuggestingPayer(false)}
+                onKeyDown={(e) => e.key === 'Escape' && setSuggestingPayer(false)}
+              />
+              <AnimatePresence>
+                {suggestingPayer && payerSuggestions.length > 0 && (
+                  <motion.div
+                    className="select-menu suggest-menu"
+                    variants={popover}
+                    initial="initial"
+                    animate="animate"
+                    exit="exit"
+                  >
+                    {payerSuggestions.map((name) => (
+                      <button
+                        key={name}
+                        type="button"
+                        className="select-option"
+                        // Taking the click without taking the focus: a blur
+                        // would close the menu out from under the pointer.
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => {
+                          setPayer(name);
+                          setSuggestingPayer(false);
+                          setError(null);
+                        }}
+                      >
+                        <Icon name="users" size={14} />
+                        <span className="select-option-label">{name}</span>
+                      </button>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          </Field>
+        ) : (
         <Field label={kind === 'income' ? 'Into account' : 'From account'}>
           {kind === 'transfer' ? (
             <Select
@@ -1211,6 +1337,7 @@ export function TransactionSheet({
             />
           )}
         </Field>
+        )}
         <AnimatePresence mode="popLayout">
           {kind === 'transfer' && (
             <motion.div
@@ -1250,6 +1377,15 @@ export function TransactionSheet({
           )}
         </AnimatePresence>
       </div>
+
+      {payer !== null && kind === 'expense' && (
+        <p className="page-note tx-payer-note">
+          <Icon name="handshake" size={13} />
+          {payer.trim()
+            ? `${payer.trim()} paid, and ${money(paise)} of it was yours. It counts as your spending now, and as money you owe ${payer.trim()} — your bank balance only changes when you pay them back.`
+            : 'Say who paid. The amount is your share of the bill, and all of it becomes what you owe them.'}
+        </p>
+      )}
 
       <Field label={kind === 'transfer' ? 'Description' : 'Merchant or payee'}>
         {/* The same listbox the debt sheet hangs under its name field: the
@@ -1484,7 +1620,9 @@ export function TransactionSheet({
                   ? 'Moving money between your own accounts'
                   : kind === 'income'
                     ? 'Money landing in an account'
-                    : 'Money leaving an account',
+                    : payer !== null
+                      ? 'Somebody else paid. This is your share of it'
+                      : 'Money leaving an account',
           };
 
   // Escape steps back out of a split first, since leaving the page is what it
@@ -1602,16 +1740,44 @@ export function TransactionSheet({
                     summary: partsSummary,
                     on: split,
                   },
-                  {
-                    which: 'people',
-                    icon: 'users',
-                    title: 'Split with people',
-                    summary: peopleSummary,
-                    on: owed > 0,
-                  },
+                  // Paid by somebody else, the bill is already all theirs to
+                  // be paid back, and there is nobody else to divide it with.
+                  ...(payer === null
+                    ? [{
+                        which: 'people' as const,
+                        icon: 'users',
+                        title: 'Split with people',
+                        summary: peopleSummary,
+                        on: owed > 0,
+                      }]
+                    : []),
                 ]}
                 onPick={openPage}
               />
+            )}
+
+            {/* Who paid is the same size of decision as splitting, so it
+                stands beside the split menu. A statement row left one of your
+                accounts by definition, so it is never asked there. */}
+            {!page && kind === 'expense' && !onSubmit && (
+              <>
+                <button
+                  type="button"
+                  className={`split-menu-trigger ${payer !== null ? 'is-on' : ''}`}
+                  onClick={() => (payer !== null ? payerRef.current?.focus() : someoneElsePaid())}
+                  title="Somebody else paid, and this is your share of it"
+                >
+                  <span><Icon name="handshake" size={14} strokeWidth={2.1} /></span>
+                  {payer === null
+                    ? 'Someone else paid'
+                    : payer.trim()
+                      ? `Paid by ${payer.trim()}`
+                      : 'Paid by…'}
+                </button>
+                {payer !== null && (
+                  <IconButton icon="x" label="You paid" size={30} onClick={youPaid} />
+                )}
+              </>
             )}
 
             {/* Naming what this gives back is the same size of decision as

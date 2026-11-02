@@ -12,6 +12,7 @@ import { popover } from '../lib/motion';
 import {
   amountChars, dayLabel, money, paiseToRupeeString, rupeesToPaise, settleAmount, toLocalInput,
 } from '../lib/format';
+import type { DebtPerson } from '../lib/debts';
 import type { Debt, DebtDirection, DebtPayment } from '../lib/types';
 
 /** How the money itself is accounted for, if at all. */
@@ -432,20 +433,27 @@ export type DebtMovement = 'repayment' | 'addition';
  * the other way.
  */
 export function DebtPaymentSheet({
-  open, onClose, debt, kind = 'repayment', editing, onOpenTransaction,
+  open, onClose, debt, person, kind = 'repayment', editing, onOpenTransaction,
 }: {
   open: boolean;
   onClose: () => void;
   debt: Debt | null;
+  /** Set for a repayment from somebody with several debts open: it is laid
+   *  over all of them, oldest first, rather than going against `debt`. */
+  person?: DebtPerson | null;
   kind?: DebtMovement;
-  /** The repayment or addition being changed, when one is. */
+  /** The repayment or addition being changed, when one is. A spread
+   *  repayment comes as its whole amount, not as one of its pieces. */
   editing?: DebtPayment | null;
   /** Opens the posting this entry names, when it names one. */
   onOpenTransaction?: (id: string) => void;
 }) {
   const {
     accounts, saveDebtPayment, deleteDebtPayment, saveDebtAddition, deleteDebtAddition,
+    savePersonRepayment, deletePersonRepayment,
   } = useStore();
+  // Only a repayment is spread; more handed over goes on one debt.
+  const spreading = person && kind === 'repayment' ? person : null;
   const live = useMemo(() => accounts.filter((a) => !a.archived && !a.system), [accounts]);
   const accountOptions: SelectOption[] = live.map((a) => ({
     value: a.id,
@@ -481,7 +489,7 @@ export function DebtPaymentSheet({
         ? paiseToRupeeString(editing.amount)
         : kind === 'addition'
           ? ''
-          : paiseToRupeeString(debt.outstanding),
+          : paiseToRupeeString((spreading ?? debt).outstanding),
     );
     setOccurredAt((editing?.occurredAt ?? toLocalInput()).slice(0, 10));
     setNote(editing?.note ?? '');
@@ -495,12 +503,14 @@ export function DebtPaymentSheet({
     );
     setError(null);
     setWriteError(null);
-  }, [open, debt, editing, kind]);
+  }, [open, debt, person, editing, kind]);
 
   if (!debt) return null;
 
   const adding = kind === 'addition';
-  const lent = debt.direction === 'lent';
+  // What the sheet is about: the one debt, or everything the person owes.
+  const subject = spreading ?? debt;
+  const lent = subject.direction === 'lent';
   const linkQuestion = adding
     ? lent
       ? 'Which record was the money you lent?'
@@ -513,6 +523,19 @@ export function DebtPaymentSheet({
     if (recordWay === 'write' && !cashId)
       return setWriteError('Which account did the money move through?');
     if (recordWay === 'link' && !txId) return setWriteError(linkQuestion);
+    if (spreading) {
+      await savePersonRepayment({
+        spreadId: editing?.spreadId ?? null,
+        direction: spreading.direction,
+        counterparty: spreading.counterparty,
+        amount: value,
+        occurredAt,
+        note: note.trim() || null,
+        transactionId: recordWay === 'link' ? txId : null,
+        cashAccountId: recordWay === 'write' ? cashId : null,
+      });
+      return onClose();
+    }
     await (adding ? saveDebtAddition : saveDebtPayment)({
       id: editing?.id ?? null,
       debtId: debt.id,
@@ -538,14 +561,14 @@ export function DebtPaymentSheet({
       }
       subtitle={
         editing
-          ? `${debt.counterparty} · recorded ${dayLabel(editing.occurredAt)}`
+          ? `${subject.counterparty} · recorded ${dayLabel(editing.occurredAt)}`
           : adding
             ? lent
-              ? `On top of the ${money(debt.outstanding)} they already owe you`
-              : `On top of the ${money(debt.outstanding)} you already owe them`
+              ? `On top of the ${money(subject.outstanding)} they already owe you`
+              : `On top of the ${money(subject.outstanding)} you already owe them`
             : lent
-              ? `${debt.counterparty} paying you back · ${money(debt.outstanding)} outstanding`
-              : `Paying ${debt.counterparty} back · ${money(debt.outstanding)} outstanding`
+              ? `${subject.counterparty} paying you back · ${money(subject.outstanding)} outstanding`
+              : `Paying ${subject.counterparty} back · ${money(subject.outstanding)} outstanding`
       }
       width={470}
       footer={
@@ -571,6 +594,14 @@ export function DebtPaymentSheet({
       }
     >
       <div className="account-form">
+        {spreading && (
+          <p className="page-note is-quiet">
+            <Icon name="split" size={13} />
+            {lent
+              ? `Laid over everything ${spreading.counterparty} owes you, oldest first. Anything beyond it goes on the newest.`
+              : `Laid over everything you owe ${spreading.counterparty}, oldest first. Anything beyond it goes on the newest.`}
+          </p>
+        )}
         <div className="tx-meta">
           <Field label="Amount" error={error}>
             <div className="rupee-input">
@@ -637,7 +668,7 @@ export function DebtPaymentSheet({
                     value={txId}
                     label={txLabel}
                     title={linkQuestion}
-                    subtitle={`${debt.counterparty} · search and filter your whole ledger`}
+                    subtitle={`${subject.counterparty} · search and filter your whole ledger`}
                     browseLabel="Link record"
                     onChange={(id, label) => {
                       setTxId(id);
@@ -673,7 +704,8 @@ export function DebtPaymentSheet({
         onConfirm={async () => {
           if (!editing) return;
           setConfirming(false);
-          await (adding ? deleteDebtAddition : deleteDebtPayment)(editing.id);
+          if (spreading && editing.spreadId) await deletePersonRepayment(editing.spreadId);
+          else await (adding ? deleteDebtAddition : deleteDebtPayment)(editing.id);
           onClose();
         }}
         onCancel={() => setConfirming(false)}

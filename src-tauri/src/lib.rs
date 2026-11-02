@@ -518,6 +518,17 @@ fn delete_debt_payment(db: State<Db>, id: String) -> R<()> {
     with_db(&db, |c| db::delete_debt_payment(c, &id))
 }
 
+/// One repayment laid over everything a person owes, oldest first.
+#[tauri::command]
+fn save_person_repayment(db: State<Db>, input: PersonRepaymentInput) -> R<String> {
+    with_db(&db, |c| db::save_person_repayment(c, input))
+}
+
+#[tauri::command]
+fn delete_person_repayment(db: State<Db>, id: String) -> R<()> {
+    with_db(&db, |c| db::delete_person_repayment(c, &id))
+}
+
 /// More handed over against a debt already open.
 #[tauri::command]
 fn save_debt_addition(db: State<Db>, input: DebtAdditionInput) -> R<()> {
@@ -814,6 +825,8 @@ pub fn run() {
             debt_entries,
             save_debt_payment,
             delete_debt_payment,
+            save_person_repayment,
+            delete_person_repayment,
             save_debt_addition,
             delete_debt_addition,
             list_holdings,

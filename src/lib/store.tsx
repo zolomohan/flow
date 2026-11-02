@@ -25,6 +25,7 @@ import type {
   DebtInput,
   DebtAdditionInput,
   DebtPaymentInput,
+  PersonRepaymentInput,
   Holding,
   HoldingInput,
   ImportCommitRow,
@@ -153,6 +154,9 @@ interface Store {
   deleteDebt: (id: string) => Promise<void>;
   saveDebtPayment: (input: DebtPaymentInput) => Promise<void>;
   deleteDebtPayment: (id: string) => Promise<void>;
+  /** One repayment over everything a person owes on one side. */
+  savePersonRepayment: (input: PersonRepaymentInput) => Promise<void>;
+  deletePersonRepayment: (spreadId: string) => Promise<void>;
   saveDebtAddition: (input: DebtAdditionInput) => Promise<void>;
   deleteDebtAddition: (id: string) => Promise<void>;
   saveHolding: (input: HoldingInput) => Promise<void>;
@@ -512,6 +516,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         mutate(() => api.saveDebtPayment(input), 'Repayment recorded'),
       deleteDebtPayment: (id) =>
         mutate(() => api.deleteDebtPayment(id), 'Repayment removed'),
+      savePersonRepayment: (input) =>
+        mutate(
+          async () => {
+            await api.savePersonRepayment(input);
+          },
+          input.spreadId ? 'Repayment updated' : 'Repayment recorded',
+        ),
+      deletePersonRepayment: (id) =>
+        mutate(() => api.deletePersonRepayment(id), 'Repayment removed'),
       saveDebtAddition: (input) =>
         mutate(() => api.saveDebtAddition(input), input.id ? 'Debt updated' : 'Added to the debt'),
       deleteDebtAddition: (id) =>

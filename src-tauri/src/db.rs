@@ -51,6 +51,14 @@ LEFT JOIN transactions o ON o.id = t.refund_of
 pub(crate) const REFUNDED: &str =
     "COALESCE((SELECT SUM(r.amount) FROM transactions r WHERE r.refund_of = t.id), 0)";
 
+/// What the people on a bill owe you back for it: every lent share split off
+/// it. The bill left your account in full, but only your own part of it was
+/// spending — the rest is money out with them, and the debts carry it.
+/// Correlated on `t` the way `REFUNDED` is, and only ever read against an
+/// expense.
+pub(crate) const SHARED: &str = "COALESCE((SELECT SUM(d.principal) FROM debts d
+     WHERE d.transaction_id = t.id AND d.from_split = 1 AND d.direction = 'lent'), 0)";
+
 /// Postings that are money of their own. A refund is not: it undoes the one
 /// it names, and both are netted rather than counted.
 pub(crate) const NOT_A_REFUND: &str = "t.refund_of IS NULL";
@@ -77,22 +85,44 @@ pub(crate) fn tx_select() -> String {
 /// part of one comes off the line items in order, earliest first, so the
 /// parts still add up to what the bill is now worth.
 pub(crate) const ATTRIBUTED: &str = "
-SELECT t.id, t.kind, t.occurred_at, t.merchant, t.refund_of, t.account_id,
-       COALESCE(s.category_id, t.category_id) AS category_id,
-       COALESCE(s.amount, t.amount)           AS amount,
-       CASE
-         WHEN COALESCE(rb.given_back, 0) = 0 THEN COALESCE(s.amount, t.amount)
-         WHEN s.id IS NULL THEN t.amount - rb.given_back
-         ELSE MAX(0, MIN(s.amount,
-                         SUM(s.amount) OVER (PARTITION BY s.transaction_id
-                                             ORDER BY s.sort_order, s.id)
-                         - rb.given_back))
+SELECT id, kind, occurred_at, merchant, refund_of, account_id, category_id, amount,
+       -- Only your part of a bill shared with people is spending. It comes
+       -- off the line items in proportion, each part's running total scaled
+       -- and the parts taken as differences, so they still add up to exactly
+       -- your part rather than drifting a paisa per line.
+       CASE WHEN shared = 0 OR whole <= 0 THEN net_amount
+            ELSE upto * MAX(0, whole - shared) / whole
+               - (upto - net_amount) * MAX(0, whole - shared) / whole
        END AS net_amount
-FROM transactions t
-LEFT JOIN transaction_splits s ON s.transaction_id = t.id
-LEFT JOIN (SELECT refund_of, SUM(amount) AS given_back
-           FROM transactions WHERE refund_of IS NOT NULL
-           GROUP BY refund_of) rb ON rb.refund_of = t.id
+FROM (
+  SELECT x.*,
+         SUM(x.net_amount) OVER (PARTITION BY x.id ORDER BY x.sort_order, x.split_id) AS upto,
+         SUM(x.net_amount) OVER (PARTITION BY x.id) AS whole
+  FROM (
+    SELECT t.id, t.kind, t.occurred_at, t.merchant, t.refund_of, t.account_id,
+           COALESCE(s.category_id, t.category_id) AS category_id,
+           COALESCE(s.amount, t.amount)           AS amount,
+           CASE
+             WHEN COALESCE(rb.given_back, 0) = 0 THEN COALESCE(s.amount, t.amount)
+             WHEN s.id IS NULL THEN t.amount - rb.given_back
+             ELSE MAX(0, MIN(s.amount,
+                             SUM(s.amount) OVER (PARTITION BY s.transaction_id
+                                                 ORDER BY s.sort_order, s.id)
+                             - rb.given_back))
+           END AS net_amount,
+           s.sort_order, s.id AS split_id,
+           CASE WHEN t.kind = 'expense' THEN COALESCE(sh.shared, 0) ELSE 0 END AS shared
+    FROM transactions t
+    LEFT JOIN transaction_splits s ON s.transaction_id = t.id
+    LEFT JOIN (SELECT refund_of, SUM(amount) AS given_back
+               FROM transactions WHERE refund_of IS NOT NULL
+               GROUP BY refund_of) rb ON rb.refund_of = t.id
+    LEFT JOIN (SELECT transaction_id, SUM(principal) AS shared
+               FROM debts
+               WHERE from_split = 1 AND direction = 'lent' AND transaction_id IS NOT NULL
+               GROUP BY transaction_id) sh ON sh.transaction_id = t.id
+  ) x
+)
 ";
 
 pub fn open(path: &Path) -> Result<Connection> {
@@ -594,6 +624,9 @@ pub(crate) fn migrate(conn: &Connection) -> Result<()> {
         "owns_transaction",
         "owns_transaction INTEGER NOT NULL DEFAULT 0",
     )?;
+    // Which repayment spread over somebody's debts a piece belongs to.
+    // Everything before spreading existed was paid against one debt.
+    add_column_if_missing(conn, "debt_payments", "spread_id", "spread_id TEXT")?;
     // A template once carried a list of the fields it would ask for rather
     // than answer. A field left blank is the question now, so the column says
     // nothing that the template does not already say by being empty.
@@ -1937,6 +1970,30 @@ fn tx_filters(q: &TransactionQuery) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
             }
         }
     }
+    if let Some(ids) = q.exclude_category_ids.as_ref().filter(|v| !v.is_empty()) {
+        // The opposite of the filter above, exactly: whatever it would find,
+        // this leaves out — so a bill split across a hidden category goes,
+        // and a posting with no category at all is never hidden by one.
+        let ph = placeholders(ids.len());
+        wheres.push(format!(
+            "NOT (coalesce(t.category_id, '') IN ({ph}) OR EXISTS (SELECT 1 FROM transaction_splits s
+                 WHERE s.transaction_id = t.id AND s.category_id IN ({ph})))"
+        ));
+        for _ in 0..2 {
+            for id in ids {
+                args.push(Box::new(id.clone()));
+            }
+        }
+    }
+    // A bill somebody else paid is one spent out of the Debts account; the
+    // book holds that account's id in its settings.
+    let theirs = "(t.kind = 'expense' AND t.account_id =
+                   (SELECT value FROM settings WHERE key = 'debt_account'))";
+    match q.paid_by.as_deref() {
+        Some("others") => wheres.push(theirs.to_string()),
+        Some("me") => wheres.push(format!("NOT coalesce({theirs}, 0)")),
+        _ => {}
+    }
     if let Some(ids) = q.label_ids.as_ref().filter(|v| !v.is_empty()) {
         let ph = placeholders(ids.len());
         wheres.push(format!(
@@ -2010,7 +2067,7 @@ pub fn transaction_summary(conn: &Connection, q: TransactionQuery) -> Result<Tra
                 COALESCE(SUM(CASE WHEN t.kind = 'income'  AND {NOT_A_REFUND}
                                   THEN t.amount - {REFUNDED} ELSE 0 END), 0),
                 COALESCE(SUM(CASE WHEN t.kind = 'expense' AND {NOT_A_REFUND}
-                                  THEN t.amount - {REFUNDED} ELSE 0 END), 0),
+                                  THEN MAX(0, t.amount - {REFUNDED} - {SHARED}) ELSE 0 END), 0),
                 COALESCE(SUM(CASE WHEN t.kind = 'transfer' THEN t.amount ELSE 0 END), 0)
          {TX_FROM}{clause}"
     );
@@ -2094,6 +2151,72 @@ fn replace_splits(
             ],
         )
         .map_err(oops)?;
+    }
+    Ok(())
+}
+
+/// Which way the people on a bill owe, held against who paid it.
+///
+/// A bill spent out of the Debts account is one somebody else paid: none of it
+/// left an account of yours, so all of it is owed to them — a share running
+/// the other way would turn what you owe into what you are owed, and a share
+/// short of the bill would be spending nobody paid for. A bill you paid runs
+/// the other way: the people on it owe you. Money that came in to you is yours
+/// to hand back. And nothing comes in to the Debts account but what is owed,
+/// so income never lands there.
+///
+/// The shares are the ones being saved, or the ones the posting already
+/// carries when the save leaves them alone.
+fn refuse_shares_running_the_wrong_way(
+    conn: &Connection,
+    id: Option<&str>,
+    kind: &str,
+    amount: Paise,
+    account_id: &str,
+    shares: Option<&[TransactionShareInput]>,
+) -> Result<()> {
+    let standing: Vec<(String, Paise)> = match (shares, id) {
+        (Some(shares), _) => shares.iter().map(|s| (s.direction.clone(), s.amount)).collect(),
+        (None, Some(id)) => {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT direction, principal FROM debts
+                     WHERE transaction_id = ?1 AND from_split = 1",
+                )
+                .map_err(oops)?;
+            let rows = stmt
+                .query_map(params![id], |r| Ok((r.get(0)?, r.get(1)?)))
+                .map_err(oops)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(oops)?;
+            rows
+        }
+        (None, None) => Vec::new(),
+    };
+
+    if debt_account_id(conn)?.as_deref() == Some(account_id) {
+        if kind != "expense" {
+            return Err(format!(
+                "Pick the account the money came into — {DEBT_ACCOUNT} only stands for what is owed."
+            ));
+        }
+        let owed: Paise = standing.iter().map(|(_, a)| a).sum();
+        if standing.iter().any(|(d, _)| d != "borrowed") || owed != amount {
+            return Err(
+                "Somebody else paid this bill, so all of it is owed to them. Say who paid it."
+                    .into(),
+            );
+        }
+        return Ok(());
+    }
+
+    let wrong_way = if kind == "expense" { "borrowed" } else { "lent" };
+    if standing.iter().any(|(d, _)| d == wrong_way) {
+        return Err(if kind == "expense" {
+            "You paid this bill, so the people on it owe you — not the other way round.".into()
+        } else {
+            "This money came in to you, so a share of it is yours to hand back, not theirs.".into()
+        });
     }
     Ok(())
 }
@@ -2416,6 +2539,29 @@ pub fn save_transaction(conn: &Connection, input: TransactionInput) -> Result<Tr
                 to_account_id = Some(holding);
             }
         }
+    }
+    // A bill somebody else paid touched no account of yours either: named
+    // against none, and owed in full to whoever paid it, it is spent out of the
+    // same account — the one answer there is, filled in the same way.
+    let owed_to_them = input
+        .shares
+        .as_deref()
+        .is_some_and(|s| !s.is_empty() && s.iter().all(|s| s.direction == "borrowed"));
+    if input.kind == "expense" && account_id.is_empty() && owed_to_them {
+        account_id = debt_account(conn)?;
+    }
+    if account_id.is_empty() {
+        return Err("Pick an account.".into());
+    }
+    if input.kind != "transfer" {
+        refuse_shares_running_the_wrong_way(
+            conn,
+            input.id.as_deref(),
+            &input.kind,
+            input.amount,
+            &account_id,
+            input.shares.as_deref(),
+        )?;
     }
 
     // One transaction over the whole save: a bill and the parts it was split
@@ -3736,10 +3882,16 @@ fn debt_movements(conn: &Connection, movement: Movement) -> Result<Vec<DebtPayme
                     SELECT CASE WHEN fa.name = '{DEBT}' THEN t.to_account_id
                                 ELSE t.account_id END
                     FROM transactions t JOIN accounts fa ON fa.id = t.account_id
-                    WHERE t.id = p.transaction_id) END
+                    WHERE t.id = p.transaction_id) END,
+                {spread}
          FROM {table} p ORDER BY p.occurred_at DESC",
         DEBT = DEBT_ACCOUNT,
         table = movement.table(),
+        // Only a repayment is ever spread; what is added goes on one debt.
+        spread = match movement {
+            Movement::Repayment => "p.spread_id",
+            Movement::Addition => "NULL",
+        },
     );
     let mut stmt = conn.prepare(&sql).map_err(oops)?;
     let rows = stmt
@@ -3754,6 +3906,7 @@ fn debt_movements(conn: &Connection, movement: Movement) -> Result<Vec<DebtPayme
                 transaction_label: r.get(6)?,
                 created_at: r.get(7)?,
                 cash_account_id: r.get(8)?,
+                spread_id: r.get(9)?,
             })
         })
         .map_err(oops)?
@@ -3974,6 +4127,28 @@ fn save_debt_movement(conn: &Connection, movement: Movement, input: DebtPaymentI
     let table = movement.table();
     let guard = conn.unchecked_transaction().map_err(oops)?;
 
+    // A piece of a spread repayment is one part of a single repayment, and
+    // changing it alone would leave the rest, and the posting, saying
+    // something else.
+    if movement == Movement::Repayment {
+        if let Some(id) = input.id.as_deref() {
+            let spread: Option<String> = conn
+                .query_row(
+                    "SELECT spread_id FROM debt_payments WHERE id = ?1",
+                    params![id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(oops)?
+                .flatten();
+            if spread.is_some() {
+                return Err(
+                    "This repayment was spread across several debts — change it from the person's page.".into(),
+                );
+            }
+        }
+    }
+
     // What this entry already names, and whether it wrote it.
     let (had_tx, had_own): (Option<String>, bool) = match input.id.as_deref() {
         Some(id) => conn
@@ -4011,59 +4186,30 @@ fn save_debt_movement(conn: &Connection, movement: Movement, input: DebtPaymentI
         // account, money going out leaves it, and the other end is the
         // account that stands for what is out with people.
         (Some(cash_id), None) => {
-            let direction: String = conn
+            let (direction, counterparty): (String, String) = conn
                 .query_row(
-                    "SELECT direction FROM debts WHERE id = ?1",
+                    "SELECT direction, counterparty FROM debts WHERE id = ?1",
                     params![input.debt_id],
-                    |r| r.get(0),
+                    |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .optional()
                 .map_err(oops)?
                 .ok_or("That debt is no longer in your book.")?;
-            let holding = debt_account(conn)?;
-            if cash_id == holding {
-                return Err(format!(
-                    "Pick the account the money actually moved through — {DEBT_ACCOUNT} is the other side of it."
-                ));
-            }
-            // Out of your account when you are lending more or paying back
-            // what you borrowed; into it when they are paying you back or
-            // lending you more.
-            let leaving = (direction == "lent") == (movement == Movement::Addition);
-            let (from, to) = if leaving {
-                (cash_id.to_string(), holding)
-            } else {
-                (holding, cash_id.to_string())
-            };
-            let counterparty: String = conn
-                .query_row(
-                    "SELECT counterparty FROM debts WHERE id = ?1",
-                    params![input.debt_id],
-                    |r| r.get(0),
-                )
-                .map_err(oops)?;
             // Only a posting this entry wrote may be rewritten; a linked one
             // is the user's record and is left exactly as entered.
             let reuse = if had_own { had_tx.clone() } else { None };
-            let tx = save_transaction(
+            let tx = write_debt_transfer(
                 conn,
-                TransactionInput {
-                    id: reuse,
-                    kind: "transfer".into(),
-                    amount: input.amount,
-                    account_id: from,
-                    to_account_id: Some(to),
-                    category_id: None,
-                    merchant: counterparty,
-                    note: input.note.clone(),
-                    occurred_at: format!("{}T12:00", &input.occurred_at[..10.min(input.occurred_at.len())]),
-                    splits: None,
-                    shares: None,
-                    label_ids: None,
-                    refund_of: None,
-                },
+                movement,
+                &direction,
+                &counterparty,
+                cash_id,
+                reuse,
+                input.amount,
+                input.note.clone(),
+                &input.occurred_at,
             )?;
-            (Some(tx.id), true)
+            (Some(tx), true)
         }
 
         // Recorded without touching the ledger, for what predates it.
@@ -4112,6 +4258,226 @@ fn save_debt_movement(conn: &Connection, movement: Movement, input: DebtPaymentI
     Ok(())
 }
 
+/// Writes the transfer a debt entry stands for: out of the chosen account
+/// when you are lending more or paying back what you borrowed, into it when
+/// they are paying you back or lending you more. The other end is the account
+/// that stands for what is out with people.
+#[allow(clippy::too_many_arguments)]
+fn write_debt_transfer(
+    conn: &Connection,
+    movement: Movement,
+    direction: &str,
+    counterparty: &str,
+    cash_id: &str,
+    reuse: Option<String>,
+    amount: Paise,
+    note: Option<String>,
+    occurred_at: &str,
+) -> Result<String> {
+    let holding = debt_account(conn)?;
+    if cash_id == holding {
+        return Err(format!(
+            "Pick the account the money actually moved through — {DEBT_ACCOUNT} is the other side of it."
+        ));
+    }
+    let leaving = (direction == "lent") == (movement == Movement::Addition);
+    let (from, to) = if leaving {
+        (cash_id.to_string(), holding)
+    } else {
+        (holding, cash_id.to_string())
+    };
+    let tx = save_transaction(
+        conn,
+        TransactionInput {
+            id: reuse,
+            kind: "transfer".into(),
+            amount,
+            account_id: from,
+            to_account_id: Some(to),
+            category_id: None,
+            merchant: counterparty.to_string(),
+            note,
+            occurred_at: format!("{}T12:00", &occurred_at[..10.min(occurred_at.len())]),
+            splits: None,
+            shares: None,
+            label_ids: None,
+            refund_of: None,
+        },
+    )?;
+    Ok(tx.id)
+}
+
+/// Whose debt this is, the way the Debts screen groups them: the same name,
+/// whatever its spacing or case, is the same person.
+fn person_key(name: &str) -> String {
+    name.trim().to_lowercase()
+}
+
+/// One repayment from somebody you have several debts open with. It is laid
+/// over them oldest first — each bill is cleared before the next one is
+/// touched — and anything beyond what they owe goes on the newest, the way
+/// paying one debt too much is recorded. One posting stands behind all of it.
+///
+/// Changing one takes its old pieces off first and lays it out again, so a
+/// debt it had cleared is open to it once more.
+pub fn save_person_repayment(conn: &Connection, input: PersonRepaymentInput) -> Result<String> {
+    if input.amount <= 0 {
+        return Err("A repayment needs an amount greater than zero.".into());
+    }
+    if input.direction != "lent" && input.direction != "borrowed" {
+        return Err("A debt is either lent or borrowed.".into());
+    }
+    let guard = conn.unchecked_transaction().map_err(oops)?;
+
+    // What the repayment wrote before, if it is being changed.
+    let (had_tx, had_own): (Option<String>, bool) = match input.spread_id.as_deref() {
+        Some(spread) => {
+            let row: Option<(Option<String>, bool)> = conn
+                .query_row(
+                    "SELECT transaction_id, MAX(owns_transaction) FROM debt_payments
+                     WHERE spread_id = ?1 GROUP BY spread_id",
+                    params![spread],
+                    |r| Ok((r.get(0)?, r.get::<_, i64>(1)? != 0)),
+                )
+                .optional()
+                .map_err(oops)?;
+            conn.execute("DELETE FROM debt_payments WHERE spread_id = ?1", params![spread])
+                .map_err(oops)?;
+            row.unwrap_or((None, false))
+        }
+        None => (None, false),
+    };
+
+    // The debts it can go against, oldest first, with what is left on each.
+    let who = person_key(&input.counterparty);
+    let mut stmt = conn
+        .prepare(
+            "SELECT d.id, d.counterparty,
+                    d.principal
+                      + COALESCE((SELECT SUM(a.amount) FROM debt_additions a WHERE a.debt_id = d.id), 0)
+                      - COALESCE((SELECT SUM(p.amount) FROM debt_payments p WHERE p.debt_id = d.id), 0)
+             FROM debts d
+             WHERE d.direction = ?1 AND d.settled_at IS NULL
+             ORDER BY d.opened_on, d.created_at",
+        )
+        .map_err(oops)?;
+    let open: Vec<(String, String, Paise)> = stmt
+        .query_map(params![input.direction], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Paise>(2)?))
+        })
+        .map_err(oops)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(oops)?
+        .into_iter()
+        .filter(|(_, name, left)| *left > 0 && person_key(name) == who)
+        .collect();
+    drop(stmt);
+    let Some((_, name, _)) = open.last() else {
+        return Err(format!("Nothing is owed with {} to repay.", input.counterparty.trim()));
+    };
+    let name = name.clone();
+
+    let mut pieces: Vec<(String, Paise)> = Vec::new();
+    let mut left = input.amount;
+    for (id, _, owed) in &open {
+        if left == 0 {
+            break;
+        }
+        let take = left.min(*owed);
+        pieces.push((id.clone(), take));
+        left -= take;
+    }
+    if left > 0 {
+        // Every debt is cleared and there is still money: it is more than
+        // was owed, and it sits on the newest.
+        if let Some(last) = pieces.last_mut() {
+            last.1 += left;
+        }
+    }
+
+    let cash = input.cash_account_id.as_deref().filter(|a| !a.is_empty());
+    let linked = input.transaction_id.as_deref().filter(|t| !t.is_empty());
+    let drop_owned = |conn: &Connection| -> Result<()> {
+        match (had_own, &had_tx) {
+            (true, Some(id)) => delete_transaction(conn, id),
+            _ => Ok(()),
+        }
+    };
+    let (transaction_id, owns) = match (cash, linked) {
+        (_, Some(tx_id)) => {
+            if had_tx.as_deref() != Some(tx_id) {
+                drop_owned(conn)?;
+            }
+            (Some(tx_id.to_string()), false)
+        }
+        (Some(cash_id), None) => {
+            let reuse = if had_own { had_tx.clone() } else { None };
+            let tx = write_debt_transfer(
+                conn,
+                Movement::Repayment,
+                &input.direction,
+                &name,
+                cash_id,
+                reuse,
+                input.amount,
+                input.note.clone(),
+                &input.occurred_at,
+            )?;
+            (Some(tx), true)
+        }
+        (None, None) => {
+            drop_owned(conn)?;
+            (None, false)
+        }
+    };
+
+    let spread = input.spread_id.clone().unwrap_or_else(new_id);
+    for (debt_id, amount) in pieces {
+        conn.execute(
+            "INSERT INTO debt_payments (id, debt_id, amount, occurred_at, note,
+                                        transaction_id, owns_transaction, spread_id, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                new_id(),
+                debt_id,
+                amount,
+                input.occurred_at,
+                input.note,
+                transaction_id,
+                owns as i64,
+                spread,
+                now()
+            ],
+        )
+        .map_err(oops)?;
+    }
+    guard.commit().map_err(oops)?;
+    Ok(spread)
+}
+
+/// A spread repayment goes as a whole: every piece of it, and the posting it
+/// wrote. One you linked is your own record and stays.
+pub fn delete_person_repayment(conn: &Connection, spread_id: &str) -> Result<()> {
+    let guard = conn.unchecked_transaction().map_err(oops)?;
+    let owned: Option<String> = conn
+        .query_row(
+            "SELECT transaction_id FROM debt_payments
+             WHERE spread_id = ?1 AND owns_transaction = 1 LIMIT 1",
+            params![spread_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(oops)?
+        .flatten();
+    conn.execute("DELETE FROM debt_payments WHERE spread_id = ?1", params![spread_id])
+        .map_err(oops)?;
+    if let Some(tx) = owned {
+        delete_transaction(conn, &tx)?;
+    }
+    guard.commit().map_err(oops)?;
+    Ok(())
+}
+
 /// The repayment goes, and the posting it wrote goes with it. One you linked
 /// is your own record and stays.
 pub fn delete_debt_payment(conn: &Connection, id: &str) -> Result<()> {
@@ -4125,6 +4491,21 @@ pub fn delete_debt_addition(conn: &Connection, id: &str) -> Result<()> {
 
 fn delete_debt_movement(conn: &Connection, movement: Movement, id: &str) -> Result<()> {
     let table = movement.table();
+    // One piece of a spread repayment is the whole repayment.
+    if movement == Movement::Repayment {
+        let spread: Option<String> = conn
+            .query_row(
+                "SELECT spread_id FROM debt_payments WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(oops)?
+            .flatten();
+        if let Some(spread) = spread {
+            return delete_person_repayment(conn, &spread);
+        }
+    }
     let guard = conn.unchecked_transaction().map_err(oops)?;
     let owned: Option<String> = conn
         .query_row(
@@ -6045,7 +6426,8 @@ fn flow_for(conn: &Connection, from: &str, to: &str) -> Result<(Paise, Paise)> {
     conn.query_row(
         &format!(
             "SELECT COALESCE(SUM(CASE WHEN t.kind = 'income'  THEN t.amount - {REFUNDED} ELSE 0 END), 0),
-                    COALESCE(SUM(CASE WHEN t.kind = 'expense' THEN t.amount - {REFUNDED} ELSE 0 END), 0)
+                    COALESCE(SUM(CASE WHEN t.kind = 'expense'
+                                      THEN MAX(0, t.amount - {REFUNDED} - {SHARED}) ELSE 0 END), 0)
              FROM transactions t
              WHERE {NOT_A_REFUND} AND t.occurred_at >= ?1 AND t.occurred_at <= ?2"
         ),
@@ -6223,7 +6605,7 @@ pub fn overview(conn: &Connection, month: &str, span: u32) -> Result<Overview> {
                     COALESCE(SUM(CASE WHEN t.kind = 'income'  AND {NOT_A_REFUND}
                                       THEN t.amount - {REFUNDED} ELSE 0 END), 0),
                     COALESCE(SUM(CASE WHEN t.kind = 'expense' AND {NOT_A_REFUND}
-                                      THEN t.amount - {REFUNDED} ELSE 0 END), 0)
+                                      THEN MAX(0, t.amount - {REFUNDED} - {SHARED}) ELSE 0 END), 0)
              FROM transactions t
              WHERE t.occurred_at >= ?1 AND t.occurred_at <= ?2
              GROUP BY day ORDER BY day"
@@ -6293,13 +6675,13 @@ pub fn overview(conn: &Connection, month: &str, span: u32) -> Result<Overview> {
     let mut stmt = conn
         .prepare(
             &format!(
-                "SELECT t.merchant, SUM(t.amount - {REFUNDED}), COUNT(*)
+                "SELECT t.merchant, SUM(MAX(0, t.amount - {REFUNDED} - {SHARED})), COUNT(*)
                  FROM transactions t
                  WHERE t.kind = 'expense' AND {NOT_A_REFUND} AND t.merchant <> ''
                    AND t.occurred_at >= ?1 AND t.occurred_at <= ?2
                  GROUP BY LOWER(t.merchant)
-                 HAVING SUM(t.amount - {REFUNDED}) > 0
-                 ORDER BY SUM(t.amount - {REFUNDED}) DESC LIMIT 6"
+                 HAVING SUM(MAX(0, t.amount - {REFUNDED} - {SHARED})) > 0
+                 ORDER BY SUM(MAX(0, t.amount - {REFUNDED} - {SHARED})) DESC LIMIT 6"
             ),
         )
         .map_err(oops)?;
@@ -7770,6 +8152,35 @@ mod tests {
         }
     }
 
+    /// The share of somebody who paid: what you owe them, not they you.
+    fn owed_to(who: &str, amount: Paise) -> TransactionShareInput {
+        TransactionShareInput { direction: "borrowed".into(), ..share(who, amount) }
+    }
+
+    /// Your share of a bill somebody else paid, saved the way the sheet saves
+    /// it: against no account of yours, and owed to whoever paid it.
+    fn paid_by(conn: &Connection, who: &str, amount: Paise) -> Transaction {
+        save_transaction(
+            conn,
+            TransactionInput {
+                id: None,
+                kind: "expense".into(),
+                amount,
+                account_id: String::new(),
+                to_account_id: None,
+                category_id: None,
+                merchant: "Zostel".into(),
+                note: None,
+                occurred_at: "2026-08-15T20:00".into(),
+                splits: None,
+                shares: Some(vec![owed_to(who, amount)]),
+                label_ids: None,
+                refund_of: None,
+            },
+        )
+        .unwrap()
+    }
+
     /// Re-saves a posting with new parts, leaving everything else as it was.
     fn resplit(
         conn: &Connection,
@@ -7884,10 +8295,43 @@ mod tests {
         assert!(debts.iter().all(|d| d.from_split && d.transaction_id.as_deref() == Some(tx.id.as_str())));
         assert_eq!(debts.iter().map(|d| d.outstanding).sum::<Paise>(), 200_000);
 
-        // The money still left the account in full — being owed some of it back
-        // is an asset, not a smaller expense.
+        // The money still left the account in full, and what is owed back of
+        // it is an asset — but only your own third was spending.
         assert_eq!(get_account(&conn, &bank).unwrap().balance, 200_000);
-        assert_eq!(overview(&conn, "2026-08", 1).unwrap().lent_outstanding, 200_000);
+        let o = overview(&conn, "2026-08", 1).unwrap();
+        assert_eq!(o.lent_outstanding, 200_000);
+        assert_eq!(o.expense, 100_000);
+    }
+
+    /// A shared bill cut across categories: your part of it comes off each
+    /// line in proportion, and the lines still add up to exactly your part.
+    #[test]
+    fn only_your_part_of_a_shared_bill_is_spending() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 500_000);
+        let food = category(&conn, "Food", None);
+        let drinks = category(&conn, "Drinks", None);
+        let tx = bill(&conn, &bank, 300_000, Some(food.clone()));
+        resplit(
+            &conn,
+            &tx,
+            Some(vec![part(200_000, &food), part(100_000, &drinks)]),
+            Some(vec![share("Subash", 100_000), share("Harish", 100_001)]),
+        )
+        .unwrap();
+
+        let o = overview(&conn, "2026-08", 1).unwrap();
+        assert_eq!(o.expense, 99_999);
+        let total: Paise = o.top_categories.iter().map(|s| s.total).sum();
+        assert_eq!(total, 99_999, "the parts add up to your part, not a paisa off");
+        let by_name = |name: &str| {
+            o.top_categories.iter().find(|s| s.name == name).map(|s| s.total).unwrap_or(0)
+        };
+        assert_eq!(by_name("Food"), 66_666);
+        assert_eq!(by_name("Drinks"), 33_333);
+
+        let summary = transaction_summary(&conn, TransactionQuery::default()).unwrap();
+        assert_eq!(summary.expense, 99_999);
     }
 
     #[test]
@@ -7896,6 +8340,186 @@ mod tests {
         let bank = account(&conn, "Savings", "bank", 500_000);
         let tx = bill(&conn, &bank, 300_000, None);
         assert!(resplit(&conn, &tx, None, Some(vec![share("Suhruth", 400_000)])).is_err());
+        assert!(list_debts(&conn).unwrap().is_empty());
+    }
+
+    /// Harish paid, and this is your share: it is spent, it is owed to him,
+    /// and not a paisa of it leaves an account of yours until you pay him.
+    #[test]
+    fn a_bill_somebody_else_paid_is_spent_and_owed() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 500_000);
+        let before = net_worth(&conn);
+        let tx = paid_by(&conn, "Harish", 40_000);
+
+        assert_eq!(tx.account_id, debt_account(&conn).unwrap(), "spent out of Debts");
+        assert_eq!(tx.shares.len(), 1);
+        assert_eq!(tx.shares[0].direction, "borrowed");
+        assert_eq!(tx.shares[0].counterparty, "Harish");
+        assert_eq!(get_account(&conn, &bank).unwrap().balance, 500_000);
+        let month = overview(&conn, "2026-08", 1).unwrap();
+        assert_eq!(month.expense, 40_000);
+        assert_eq!(month.borrowed_outstanding, 40_000);
+        assert_eq!(net_worth(&conn), before - 40_000);
+    }
+
+    /// Edited afterwards — another amount, a category — it is still Harish's
+    /// to be paid back, it is still the same debt, and what was already paid
+    /// him stays paid.
+    #[test]
+    fn editing_a_bill_somebody_else_paid_keeps_it_owed_to_them() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 500_000);
+        let food = category(&conn, "Food", None);
+        let tx = paid_by(&conn, "Harish", 40_000);
+        let debt_id = tx.shares[0].debt_id.clone();
+        save_debt_payment(
+            &conn,
+            DebtPaymentInput {
+                id: None,
+                debt_id: debt_id.clone(),
+                amount: 10_000,
+                occurred_at: "2026-08-20".into(),
+                note: None,
+                transaction_id: None,
+                cash_account_id: Some(bank.clone()),
+            },
+        )
+        .unwrap();
+
+        let tx = save_transaction(
+            &conn,
+            TransactionInput {
+                id: Some(tx.id.clone()),
+                kind: "expense".into(),
+                amount: 45_000,
+                account_id: tx.account_id.clone(),
+                to_account_id: None,
+                category_id: Some(food.clone()),
+                merchant: tx.merchant.clone(),
+                note: None,
+                occurred_at: tx.occurred_at.clone(),
+                splits: None,
+                shares: Some(vec![TransactionShareInput {
+                    id: Some(debt_id.clone()),
+                    ..owed_to("Harish", 45_000)
+                }]),
+                label_ids: None,
+                refund_of: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(tx.category_id.as_deref(), Some(food.as_str()));
+        let owed = &tx.shares[0];
+        assert_eq!((owed.debt_id.as_str(), owed.direction.as_str()), (debt_id.as_str(), "borrowed"));
+        assert_eq!((owed.amount, owed.paid, owed.outstanding), (45_000, 10_000, 35_000));
+
+        // A save that leaves the shares alone leaves them as they were.
+        let tx = resplit(&conn, &tx, None, None).unwrap();
+        assert_eq!(tx.shares.len(), 1);
+        assert_eq!(tx.shares[0].direction, "borrowed");
+    }
+
+    /// Turned round into money owed to you, left part owed, or owed to nobody,
+    /// a bill on the Debts account would be spending that never left an
+    /// account of yours and that nobody paid for — so none of them is saved.
+    #[test]
+    fn a_bill_somebody_else_paid_cannot_be_owed_to_you() {
+        let conn = book();
+        let tx = paid_by(&conn, "Harish", 40_000);
+
+        assert!(resplit(&conn, &tx, None, Some(vec![share("Harish", 40_000)])).is_err(), "turned round");
+        assert!(resplit(&conn, &tx, None, Some(vec![owed_to("Harish", 30_000)])).is_err(), "part owed");
+        assert!(resplit(&conn, &tx, None, Some(vec![])).is_err(), "owed to nobody");
+        let income = TransactionInput {
+            id: Some(tx.id.clone()),
+            kind: "income".into(),
+            amount: tx.amount,
+            account_id: tx.account_id.clone(),
+            to_account_id: None,
+            category_id: None,
+            merchant: tx.merchant.clone(),
+            note: None,
+            occurred_at: tx.occurred_at.clone(),
+            splits: None,
+            shares: None,
+            label_ids: None,
+            refund_of: None,
+        };
+        assert!(save_transaction(&conn, income).is_err(), "money in");
+
+        let debts = list_debts(&conn).unwrap();
+        assert_eq!(debts.len(), 1);
+        assert_eq!((debts[0].direction.as_str(), debts[0].principal), ("borrowed", 40_000));
+    }
+
+    /// Hiding a category is showing it inside out: the bills one finds are
+    /// exactly the bills the other leaves out, a split bill goes with any of
+    /// its categories, and an uncategorised one is never caught by either.
+    #[test]
+    fn hiding_a_category_leaves_out_exactly_what_showing_it_finds() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 500_000);
+        let food = category(&conn, "Food", None);
+        let drinks = category(&conn, "Drinks", None);
+        let meal = bill(&conn, &bank, 30_000, Some(food.clone()));
+        let beer = bill(&conn, &bank, 20_000, Some(drinks.clone()));
+        let both = bill(&conn, &bank, 30_000, Some(food.clone()));
+        resplit(&conn, &both, Some(vec![part(20_000, &food), part(10_000, &drinks)]), None).unwrap();
+        let loose = bill(&conn, &bank, 5_000, None);
+
+        let ids = |q: TransactionQuery| {
+            let mut v: Vec<String> = list_transactions(&conn, q).unwrap().into_iter().map(|t| t.id).collect();
+            v.sort();
+            v
+        };
+        let sorted = |mut v: Vec<String>| {
+            v.sort();
+            v
+        };
+        let shown = ids(TransactionQuery { category_ids: Some(vec![drinks.clone()]), ..Default::default() });
+        let hidden = ids(TransactionQuery { exclude_category_ids: Some(vec![drinks.clone()]), ..Default::default() });
+        assert_eq!(shown, sorted(vec![beer.id.clone(), both.id.clone()]));
+        assert_eq!(hidden, sorted(vec![meal.id.clone(), loose.id.clone()]));
+
+        let summary = transaction_summary(
+            &conn,
+            TransactionQuery { exclude_category_ids: Some(vec![drinks]), ..Default::default() },
+        )
+        .unwrap();
+        assert_eq!((summary.count, summary.expense), (2, 35_000));
+    }
+
+    /// Who paid: your own bills on one side, the ones somebody else paid on
+    /// the other, and nothing in both.
+    #[test]
+    fn paid_by_tells_your_bills_from_ones_somebody_else_paid() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 500_000);
+        let mine = bill(&conn, &bank, 30_000, None);
+        let theirs = paid_by(&conn, "Harish", 40_000);
+
+        let ids = |who: &str| {
+            list_transactions(&conn, TransactionQuery { paid_by: Some(who.into()), ..Default::default() })
+                .unwrap()
+                .into_iter()
+                .map(|t| t.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids("others"), vec![theirs.id.clone()]);
+        assert_eq!(ids("me"), vec![mine.id.clone()]);
+        assert_eq!(list_transactions(&conn, TransactionQuery::default()).unwrap().len(), 2);
+    }
+
+    /// The other side of it: a bill you paid out of your own account leaves
+    /// the people on it owing you, never you owing them.
+    #[test]
+    fn a_bill_you_paid_cannot_leave_you_owing() {
+        let conn = book();
+        let bank = account(&conn, "Savings", "bank", 500_000);
+        let tx = bill(&conn, &bank, 30_000, None);
+
+        assert!(resplit(&conn, &tx, None, Some(vec![owed_to("Harish", 10_000)])).is_err());
         assert!(list_debts(&conn).unwrap().is_empty());
     }
 
@@ -9074,6 +9698,112 @@ mod tests {
         delete_debt_payment(&conn, &payment.id).unwrap();
         assert!(get_transaction(&conn, &tx.id).is_err());
         assert_eq!(net_worth(&conn), before);
+    }
+
+    /// Somebody on three bills pays once. The money clears the oldest bills
+    /// first, one posting stands behind it, and it is changed and removed as
+    /// the one repayment it is.
+    #[test]
+    fn a_repayment_spreads_over_everything_a_person_owes() {
+        let conn = book();
+        let bank = account(&conn, "Bank", "bank", 500_000);
+        for (who, amount, day) in [
+            ("Subash", 36_700, "2026-09-26"),
+            ("subash ", 131_600, "2026-09-27"),
+            ("Subash", 76_600, "2026-10-02"),
+            ("Asha", 10_000, "2026-09-01"),
+        ] {
+            save_debt(
+                &conn,
+                DebtInput {
+                    id: None,
+                    direction: "lent".into(),
+                    counterparty: who.into(),
+                    principal: amount,
+                    opened_on: day.into(),
+                    due_on: None,
+                    note: None,
+                    transaction_id: None,
+                    settled: None,
+                },
+            )
+            .unwrap();
+        }
+        let owed = |conn: &Connection, day: &str| {
+            list_debts(conn)
+                .unwrap()
+                .into_iter()
+                .find(|d| d.opened_on == day)
+                .unwrap()
+                .outstanding
+        };
+        let repay = |conn: &Connection, spread: Option<String>, amount: Paise| {
+            save_person_repayment(
+                conn,
+                PersonRepaymentInput {
+                    spread_id: spread,
+                    direction: "lent".into(),
+                    counterparty: "Subash".into(),
+                    amount,
+                    occurred_at: "2026-10-10".into(),
+                    note: None,
+                    transaction_id: None,
+                    cash_account_id: Some(bank.clone()),
+                },
+            )
+            .unwrap()
+        };
+
+        // Oldest first: the first two are cleared and the newest takes the rest.
+        let spread = repay(&conn, None, 200_000);
+        assert_eq!(owed(&conn, "2026-09-26"), 0);
+        assert_eq!(owed(&conn, "2026-09-27"), 0);
+        assert_eq!(owed(&conn, "2026-10-02"), 76_600 - 31_700);
+        // Asha is somebody else, and nothing of it reached her.
+        assert_eq!(owed(&conn, "2026-09-01"), 10_000);
+
+        // One posting, for the whole of it.
+        let pieces: Vec<DebtPayment> = list_debts(&conn)
+            .unwrap()
+            .into_iter()
+            .flat_map(|d| d.payments)
+            .collect();
+        assert_eq!(pieces.len(), 3);
+        let tx_id = pieces[0].transaction_id.clone().unwrap();
+        assert!(pieces.iter().all(|p| p.transaction_id.as_deref() == Some(tx_id.as_str())));
+        assert_eq!(get_transaction(&conn, &tx_id).unwrap().amount, 200_000);
+
+        // A piece is not changed on its own.
+        assert!(save_debt_payment(
+            &conn,
+            DebtPaymentInput {
+                id: Some(pieces[0].id.clone()),
+                debt_id: pieces[0].debt_id.clone(),
+                amount: 1,
+                occurred_at: "2026-10-10".into(),
+                note: None,
+                transaction_id: None,
+                cash_account_id: None,
+            },
+        )
+        .is_err());
+
+        // Paid more than was owed: everything clears and the extra sits on
+        // the newest. The same posting is rewritten, not a second one added.
+        assert_eq!(repay(&conn, Some(spread.clone()), 254_900), spread);
+        assert_eq!(owed(&conn, "2026-10-02"), 0);
+        let newest = list_debts(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|d| d.opened_on == "2026-10-02")
+            .unwrap();
+        assert_eq!(newest.paid, 76_600 + 10_000);
+        assert_eq!(get_transaction(&conn, &tx_id).unwrap().amount, 254_900);
+
+        // Removing any piece removes the repayment, and its posting with it.
+        delete_debt_payment(&conn, &newest.payments[0].id).unwrap();
+        assert!(list_debts(&conn).unwrap().iter().all(|d| d.payments.is_empty()));
+        assert!(get_transaction(&conn, &tx_id).is_err());
     }
 
     /// Lending more to somebody who already owes you raises what they owe by

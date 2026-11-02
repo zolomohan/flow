@@ -4,6 +4,10 @@ import { Icon } from '../components/Icon';
 import { Button, Empty, Segmented, type SegmentOption } from '../components/ui';
 import { useStore } from '../lib/store';
 import { DebtDetail } from './DebtDetail';
+import { PersonDebtDetail } from './PersonDebtDetail';
+import {
+  groupByPerson, personKey, personOf, personRepayments, type DebtPerson,
+} from '../lib/debts';
 import { dayLabel, debtProgress, initials, isShareOfBill, money } from '../lib/format';
 import { itemVariants, listVariants, spring } from '../lib/motion';
 import type { Debt, DebtAddition, DebtDirection, DebtPayment, Transaction } from '../lib/types';
@@ -14,7 +18,7 @@ type DebtTab = DebtDirection;
 
 export function Debts({
   onNewDebt, onEditDebt, onRecordPayment, onEditPayment, onAddMore, onEditAddition,
-  onOpenTransaction,
+  onRepayPerson, onOpenTransaction,
 }: {
   onNewDebt: (direction: DebtDirection) => void;
   onEditDebt: (debt: Debt) => void;
@@ -25,6 +29,8 @@ export function Debts({
   onAddMore: (debt: Debt) => void;
   /** Opens one of a debt's additions to change or remove it. */
   onEditAddition: (debt: Debt, addition: DebtAddition) => void;
+  /** A repayment over everything a person owes, or one being changed. */
+  onRepayPerson: (person: DebtPerson, payment: DebtPayment | null) => void;
   /** Opens one of the entries behind a debt, from the debt itself. */
   onOpenTransaction: (tx: Transaction) => void;
 }) {
@@ -32,6 +38,9 @@ export function Debts({
   // Held by id, not by object: the store hands back fresh debts after every
   // write, and the open page should follow them.
   const [openId, setOpenId] = useState<string | null>(null);
+  // The person whose debts are open, by key. A debt opened from their page
+  // goes back to it.
+  const [openPerson, setOpenPerson] = useState<string | null>(null);
 
   const open = useMemo(() => debts.filter((d) => !d.settled), [debts]);
   // Newest first: what was squared up last week is worth more than what was
@@ -48,24 +57,56 @@ export function Debts({
   const borrowed = open.filter((d) => d.direction === 'borrowed');
   const owedToYou = lent.reduce((s, d) => s + d.outstanding, 0);
   const youOwe = borrowed.reduce((s, d) => s + d.outstanding, 0);
+  // Every bill split with somebody is a debt of its own, but it is the
+  // person who owes: the screen shows one card for each.
+  const lentPeople = useMemo(() => groupByPerson(lent), [lent]);
+  const borrowedPeople = useMemo(() => groupByPerson(borrowed), [borrowed]);
+
+  // Everything with one person on one side, settled or not.
+  const everythingWith = (key: string) =>
+    debts.filter((d) => personKey(d.direction, d.counterparty) === key);
+  const personFor = (debt: Debt) => {
+    const key = personKey(debt.direction, debt.counterparty);
+    return personOf(key, everythingWith(key));
+  };
+  // A new repayment goes over what is still open; anything settled has
+  // nothing left for it to clear.
+  const repayPerson = (person: DebtPerson) => {
+    const open = person.debts.filter((d) => !d.settled);
+    onRepayPerson(open.length ? personOf(person.key, open) : person, null);
+  };
+  // A piece of a spread repayment opens as the whole of it.
+  const editPayment = (debt: Debt, payment: DebtPayment) => {
+    if (!payment.spreadId) return onEditPayment(debt, payment);
+    const person = personFor(debt);
+    const whole =
+      personRepayments(person.debts).find((p) => p.spreadId === payment.spreadId) ?? payment;
+    onRepayPerson(person, whole);
+  };
+  // More handed over goes on the newest debt still open.
+  const addMoreTo = (person: DebtPerson) => {
+    const open = person.debts.filter((d) => !d.settled);
+    const newest = open[open.length - 1];
+    if (newest) onAddMore(newest);
+  };
 
   // Two sides, two tabs. What is done with is not a third place to look: it
   // belongs to the side it happened on, folded away under it.
   const tabs: SegmentOption<DebtTab>[] = [
     {
       value: 'lent',
-      label: `Lent${lent.length ? ` · ${lent.length}` : ''}`,
+      label: `Lent${lentPeople.length ? ` · ${lentPeople.length}` : ''}`,
       icon: 'arrow-up-right',
       accent: 'var(--green)',
     },
     {
       value: 'borrowed',
-      label: `Borrowed${borrowed.length ? ` · ${borrowed.length}` : ''}`,
+      label: `Borrowed${borrowedPeople.length ? ` · ${borrowedPeople.length}` : ''}`,
       icon: 'arrow-down-left',
       accent: 'var(--amber)',
     },
   ];
-  const showing = tab === 'lent' ? lent : borrowed;
+  const showing = tab === 'lent' ? lentPeople : borrowedPeople;
   const past = settled.filter((d) => d.direction === tab);
 
   const viewing = openId ? debts.find((d) => d.id === openId) ?? null : null;
@@ -76,10 +117,25 @@ export function Debts({
         onBack={() => setOpenId(null)}
         onEdit={() => onEditDebt(viewing)}
         onRecordPayment={() => onRecordPayment(viewing)}
-        onEditPayment={(payment) => onEditPayment(viewing, payment)}
+        onEditPayment={(payment) => editPayment(viewing, payment)}
         onAddMore={() => onAddMore(viewing)}
         onEditAddition={(addition) => onEditAddition(viewing, addition)}
         onOpenTransaction={onOpenTransaction}
+      />
+    );
+  }
+
+  const personDebts = openPerson ? everythingWith(openPerson) : [];
+  if (openPerson && personDebts.length) {
+    const person = personOf(openPerson, personDebts);
+    return (
+      <PersonDebtDetail
+        person={person}
+        onBack={() => setOpenPerson(null)}
+        onOpenDebt={(debt) => setOpenId(debt.id)}
+        onRecordPayment={() => repayPerson(person)}
+        onEditPayment={editPayment}
+        onAddMore={() => addMoreTo(person)}
       />
     );
   }
@@ -144,15 +200,25 @@ export function Debts({
                   initial="initial"
                   animate="animate"
                 >
-                  {showing.map((debt) => (
-                    <DebtCard
-                      key={debt.id}
-                      debt={debt}
-                      onOpen={() => setOpenId(debt.id)}
-                      onRecordPayment={() => onRecordPayment(debt)}
-                      onAddMore={() => onAddMore(debt)}
-                    />
-                  ))}
+                  {showing.map((person) =>
+                    person.debts.length === 1 ? (
+                      <DebtCard
+                        key={person.key}
+                        debt={person.debts[0]}
+                        onOpen={() => setOpenId(person.debts[0].id)}
+                        onRecordPayment={() => onRecordPayment(person.debts[0])}
+                        onAddMore={() => onAddMore(person.debts[0])}
+                      />
+                    ) : (
+                      <PersonCard
+                        key={person.key}
+                        person={person}
+                        onOpen={() => setOpenPerson(person.key)}
+                        onRecordPayment={() => repayPerson(person)}
+                        onAddMore={() => addMoreTo(person)}
+                      />
+                    ),
+                  )}
                 </motion.div>
               )}
 
@@ -163,8 +229,7 @@ export function Debts({
               <SettledSection
                 debts={past}
                 onOpen={setOpenId}
-                onRecordPayment={onRecordPayment}
-                onAddMore={onAddMore}
+                onOpenPerson={setOpenPerson}
               />
             </motion.div>
           </AnimatePresence>
@@ -179,14 +244,14 @@ export function Debts({
  * go, and the debts themselves — opened only when somebody asks for them.
  */
 function SettledSection({
-  debts, onOpen, onRecordPayment, onAddMore,
+  debts, onOpen, onOpenPerson,
 }: {
   debts: Debt[];
   onOpen: (id: string) => void;
-  onRecordPayment: (debt: Debt) => void;
-  onAddMore: (debt: Debt) => void;
+  onOpenPerson: (key: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const people = useMemo(() => groupByPerson(debts), [debts]);
 
   if (!debts.length) return null;
   const principal = debts.reduce((sum, d) => sum + d.principal, 0);
@@ -246,17 +311,29 @@ function SettledSection({
                 variant handed down a tree that never remounts is a variant
                 nothing acts on. */}
             <div className="debt-grid">
-              {debts.map((debt, i) => (
-                <DebtCard
-                  key={debt.id}
-                  debt={debt}
-                  reveal={open}
-                  delay={0.08 + i * 0.05}
-                  onOpen={() => onOpen(debt.id)}
-                  onRecordPayment={() => onRecordPayment(debt)}
-                  onAddMore={() => onAddMore(debt)}
-                />
-              ))}
+              {people.map((person, i) =>
+                person.debts.length === 1 ? (
+                  <DebtCard
+                    key={person.key}
+                    debt={person.debts[0]}
+                    reveal={open}
+                    delay={0.08 + i * 0.05}
+                    onOpen={() => onOpen(person.debts[0].id)}
+                    onRecordPayment={() => {}}
+                    onAddMore={() => {}}
+                  />
+                ) : (
+                  <PersonCard
+                    key={person.key}
+                    person={person}
+                    reveal={open}
+                    delay={0.08 + i * 0.05}
+                    onOpen={() => onOpenPerson(person.key)}
+                    onRecordPayment={() => {}}
+                    onAddMore={() => {}}
+                  />
+                ),
+              )}
             </div>
           </div>
         </motion.div>
@@ -288,6 +365,110 @@ function DebtBar({ bar }: { bar: ReturnType<typeof debtProgress> }) {
   );
 }
 
+/** How a card comes in: with its list, or on its own when a fold opens. */
+function cardMotion(reveal: boolean | undefined, delay: number) {
+  return reveal === undefined
+    ? { variants: itemVariants }
+    : {
+        initial: false as const,
+        animate: reveal ? { opacity: 1, y: 0 } : { opacity: 0, y: 12 },
+        transition: {
+          duration: 0.34,
+          delay: reveal ? delay : 0,
+          ease: [0.22, 1, 0.36, 1] as const,
+        },
+      };
+}
+
+/**
+ * Somebody with several debts on one side, as the one card they are. What is
+ * left across all of it, and the bills it is made of a tap away.
+ */
+function PersonCard({
+  person, onOpen, onRecordPayment, onAddMore, reveal, delay = 0,
+}: {
+  person: DebtPerson;
+  onOpen: () => void;
+  onRecordPayment: () => void;
+  onAddMore: () => void;
+  reveal?: boolean;
+  delay?: number;
+}) {
+  const lent = person.direction === 'lent';
+  const settled = person.debts.every((d) => d.settled);
+  const forgiven = person.debts.reduce((s, d) => s + debtProgress(d).forgivenAmount, 0);
+  const paid = person.debts.reduce((s, d) => s + Math.min(d.paid, d.principal), 0);
+  const bar = debtProgress({ principal: person.principal, paid, settled });
+  const shares = person.debts.filter(isShareOfBill).length;
+  const today = new Date().toISOString().slice(0, 10);
+  const overdue = !settled && person.debts.some((d) => !d.settled && !!d.dueOn && d.dueOn < today);
+  const repayments = personRepayments(person.debts).length;
+
+  return (
+    <motion.article
+      className={`debt-card ${settled ? 'is-settled' : ''}`}
+      {...cardMotion(reveal, delay)}
+      style={{ ['--tint' as any]: lent ? 'var(--green)' : 'var(--amber)' }}
+    >
+      <button className="debt-head" onClick={onOpen}>
+        <span className="debt-avatar">{initials(person.counterparty)}</span>
+        <span className="debt-who">
+          <strong>{person.counterparty}</strong>
+          <span>
+            {person.debts.length} debts · since {dayLabel(person.openedOn)}
+          </span>
+        </span>
+        <span className="debt-amount">
+          <strong>{money(settled ? person.principal : person.outstanding)}</strong>
+          <span>
+            {settled
+              ? forgiven > 0
+                ? `${money(forgiven)} forgiven`
+                : 'repaid in full'
+              : `of ${money(person.principal)}`}
+          </span>
+        </span>
+      </button>
+
+      <DebtBar bar={bar} />
+
+      <div className="debt-meta">
+        <span className="debt-tags">
+          {settled && (
+            <span className={`debt-tag ${forgiven > 0 ? 'is-forgiven' : 'is-done'}`}>
+              {forgiven > 0 ? 'Forgiven' : 'Settled'}
+            </span>
+          )}
+          {overdue && <span className="debt-tag is-late">Overdue</span>}
+          {shares > 0 && (
+            <span className="debt-tag is-link">
+              <Icon name="split" size={11} />
+              {shares} split {shares === 1 ? 'bill' : 'bills'}
+            </span>
+          )}
+          {repayments > 0 && (
+            <span className="debt-tag">
+              {repayments} {repayments === 1 ? 'repayment' : 'repayments'}
+            </span>
+          )}
+        </span>
+        {!settled && (
+          <span className="debt-actions">
+            <button className="debt-repay" onClick={onAddMore}>
+              <Icon name={lent ? 'arrow-up-right' : 'arrow-down-left'} size={13} strokeWidth={2.4} />
+              {lent ? 'Lend more' : 'Borrow more'}
+            </button>
+            <button className="debt-repay" onClick={onRecordPayment}>
+              <Icon name="plus" size={13} strokeWidth={2.4} />
+              Repayment
+            </button>
+          </span>
+        )}
+      </div>
+    </motion.article>
+  );
+}
+
 function DebtCard({
   debt, onOpen, onRecordPayment, onAddMore, reveal, delay = 0,
 }: {
@@ -309,17 +490,7 @@ function DebtCard({
   return (
     <motion.article
       className={`debt-card ${debt.settled ? 'is-settled' : ''}`}
-      {...(reveal === undefined
-        ? { variants: itemVariants }
-        : {
-            initial: false,
-            animate: reveal ? { opacity: 1, y: 0 } : { opacity: 0, y: 12 },
-            transition: {
-              duration: 0.34,
-              delay: reveal ? delay : 0,
-              ease: [0.22, 1, 0.36, 1] as const,
-            },
-          })}
+      {...cardMotion(reveal, delay)}
       style={{ ['--tint' as any]: lent ? 'var(--green)' : 'var(--amber)' }}
     >
       {/* The card says where it stands; the page behind it says how it got

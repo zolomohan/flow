@@ -2811,6 +2811,9 @@ kbd {
   color: var(--ink-2);
 }
 .page-note svg { flex: none; margin-top: 2px; color: var(--blue); }
+/* Who paid, said right under their name: it belongs to the field above, so it
+   sits against it instead of a whole form row away. */
+.tx-payer-note { margin-top: -8px; }
 
 /* Narrow enough that two columns would each be a squeeze — stack them. */
 /* Stacked before the columns get tight enough to clip a tab's label. */
@@ -4025,6 +4028,7 @@ kbd {
   margin-bottom: 9px;
 }
 .filter-head > span { margin-bottom: 0; }
+.filter-head-tools { display: flex; align-items: center; gap: 8px; min-width: 0; }
 
 .filter-search {
   position: relative;
@@ -5874,13 +5878,38 @@ kbd {
 /* A folder is read as a tile: what it is, what is in it, what it came to.
    Wider than a card of figures because the name is the point of it, and the
    name is usually a place or a project rather than a word. */
+.folder-sections { display: grid; gap: 28px; }
+.folder-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 2px 12px;
+}
+.folder-section-head h2 {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: var(--tight);
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.folder-section-head span {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
 .folder-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
   gap: 14px;
 }
+/* A card holds to its column whatever is in it. Without these a long name or
+   legend, kept to one line, set the card's own minimum width — and the card
+   pushed past its column, strip, text, chevron and all, rather than
+   truncating. */
 .folder-card {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 14px;
   padding: 16px 18px 17px;
   text-align: left;
@@ -5895,7 +5924,7 @@ kbd {
   border-color: color-mix(in srgb, var(--tint) 45%, var(--line-soft));
   box-shadow: var(--shadow-sm);
 }
-.folder-card-top { display: flex; align-items: center; gap: 11px; }
+.folder-card-top { display: flex; align-items: center; gap: 11px; min-width: 0; }
 .folder-card-top > svg { color: var(--ink-4); flex-shrink: 0; }
 
 /* The mark, in the folder's own colour. Square-ish rather than round: a
@@ -5922,6 +5951,15 @@ kbd {
   font-weight: 600;
   letter-spacing: var(--tight);
 }
+/* One line, whatever the name: the dates underneath say the rest, and cards
+   whose names wrapped sat a line out of step with their neighbours. */
+.folder-card-name b,
+.folder-card-name em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folder-card-name b { font-weight: 600; }
 .folder-card-name em,
 .folder-preview-name em {
   font-style: normal;
@@ -5929,27 +5967,52 @@ kbd {
   font-weight: 500;
   color: var(--ink-3);
 }
-.folder-card-figures { display: flex; align-items: baseline; gap: 20px; }
-.folder-card-total,
-.folder-card-net {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  font-size: 19px;
+.folder-card-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 9px; min-width: 0; }
+.folder-card-total {
+  font-size: 20px;
   font-weight: 600;
   letter-spacing: var(--tight);
   font-variant-numeric: tabular-nums;
 }
-.folder-card-net { font-size: 15px; color: var(--ink-3); }
-.folder-card-net.is-up { color: var(--green); }
-.folder-card-total em,
-.folder-card-net em {
-  font-style: normal;
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: var(--wide);
-  text-transform: uppercase;
+.folder-card-total.is-up { color: var(--green); }
+
+/* What the money went on, as one bar: the folder page's breakdown in
+   miniature. Each share keeps its category's colour, so the same colour means
+   the same thing on every card. */
+.folder-strip {
+  display: flex;
+  gap: 2px;
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--r-full);
+  background: var(--line-soft);
+}
+/* Shares take their width from what they are worth alone — no basis of their
+   own to add on top — so a dozen small ones still fit the strip. */
+.folder-strip i { display: block; flex-basis: 0; flex-shrink: 1; min-width: 2px; }
+.folder-strip-legend {
+  display: flex;
+  gap: 12px;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11.5px;
+  font-weight: 500;
   color: var(--ink-3);
+}
+.folder-strip-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.folder-strip-legend i {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: var(--r-full);
 }
 .folder-card-note {
   font-size: 12px;
@@ -6010,12 +6073,21 @@ kbd {
     justify-items: stretch;
   }
 }
-.folder-slices { display: grid; gap: 11px; align-content: center; }
+/* One grid for every row, so the names, the bars and the figures each make a
+   column. Sized row by row, a wider figure on one line shifted its bar along
+   and no two bars started in the same place. */
+.folder-slices {
+  display: grid;
+  grid-template-columns: 8px minmax(0, max-content) minmax(72px, 1fr) max-content;
+  column-gap: 10px;
+  row-gap: 11px;
+  align-content: center;
+}
 .folder-slices li {
   display: grid;
-  grid-template-columns: 8px minmax(0, 1fr) 90px auto;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
   align-items: center;
-  gap: 10px;
   font-size: 12.5px;
   font-weight: 500;
 }
@@ -6032,6 +6104,7 @@ kbd {
   font-size: 12.5px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
 /* What the folder will look like, while it is being named. */

@@ -475,6 +475,12 @@ export interface TransactionQuery {
   /** Which side of a posting the accounts must be on. Only transfers differ. */
   accountSide?: 'either' | 'from' | 'to' | null;
   categoryIds?: string[] | null;
+  /** Categories to leave out: the opposite of `categoryIds`, read the same
+   *  way, so a split bill goes with any category it was cut into. */
+  excludeCategoryIds?: string[] | null;
+  /** `me` for what left an account of yours, `others` for the bills somebody
+   *  else paid. Left off, both. */
+  paidBy?: 'me' | 'others' | null;
   from?: string | null;
   to?: string | null;
   limit?: number | null;
@@ -553,6 +559,9 @@ export interface DebtPayment {
   /** The account the money moved through, for a posting this repayment
    *  wrote itself. Null when it linked one of yours, or posted nothing. */
   cashAccountId: string | null;
+  /** Set on each piece of one repayment spread over somebody's debts. The
+   *  pieces are one repayment, and are changed and removed together. */
+  spreadId: string | null;
   createdAt: string;
 }
 
@@ -573,6 +582,20 @@ export interface DebtPaymentInput {
  *  a repayment, and differing only in which way the money went. */
 export type DebtAddition = DebtPayment;
 export type DebtAdditionInput = DebtPaymentInput;
+
+/** One repayment from somebody with several debts open, laid over them
+ *  oldest first. Anything beyond what they owe sits on the newest. */
+export interface PersonRepaymentInput {
+  /** The repayment being changed, when one is. */
+  spreadId: string | null;
+  direction: DebtDirection;
+  counterparty: string;
+  amount: Paise;
+  occurredAt: string;
+  note: string | null;
+  transactionId: string | null;
+  cashAccountId?: string | null;
+}
 
 export interface Debt {
   id: string;
