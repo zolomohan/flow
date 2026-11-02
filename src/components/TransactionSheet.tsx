@@ -16,14 +16,14 @@ import {
 import { api } from '../lib/api';
 import { REQUIRE_NOTE, useStore } from '../lib/store';
 import {
-  amountChars, dayLabel, money, paiseToRupeeString, rupeesToPaise, settleAmount, sumPreview,
-  toLocalInput,
+  amountChars, cashbackRate, compactMoney, dayLabel, money, paiseToRupeeString, rupeesToPaise,
+  settleAmount, shortDayLabel, sumPreview, toLocalInput,
 } from '../lib/format';
 import { itemVariants, listVariants, pageVariants, popover, press, spring } from '../lib/motion';
 import { RecordPicker } from './RecordPicker';
 import { asksFor, describeTemplate, spoken } from '../lib/templates';
 import type {
-  Account, Category, Paise, Plan, Transaction, TransactionInput, TxKind,
+  Account, CashbackQuote, Category, Paise, Plan, Transaction, TransactionInput, TxKind,
   TxTemplate, TxTemplateInput,
 } from '../lib/types';
 
@@ -599,6 +599,15 @@ export function TransactionSheet({
   const [refund, setRefund] = useState<RefundTarget | null>(null);
   // The ledger, opened from the footer to name what this gives back.
   const [refundPicking, setRefundPicking] = useState(false);
+  // What the card gave back on it, when that was said by hand — a spend the
+  // offer leaves out, or a figure off the statement. Null leaves it to the
+  // card's rate, which is what nearly every purchase wants.
+  const [cashbackSet, setCashbackSet] = useState<Paise | null>(null);
+  // The figure being typed, while it is being said by hand.
+  const [cashbackDraft, setCashbackDraft] = useState<string | null>(null);
+  // What the card's rate gives this purchase, asked of the book as the form
+  // changes: the cap is the cycle's, so only the book knows what is left.
+  const [quote, setQuote] = useState<CashbackQuote | null>(null);
   const debtorRef = useRef<HTMLInputElement>(null);
   // Which template this one was filled in from: what it asks for is still
   // owed, its name belongs in the heading, and the count against it goes up
@@ -812,6 +821,50 @@ export function TransactionSheet({
   const paise = rupeesToPaise(amount);
   // What the sum in the well comes to, while it is still a sum.
   const typed = sumPreview(amount);
+
+  // The card this purchase went on, when it went on one of yours. A row
+  // waiting to import is not in the book yet, so its cycle has nothing to
+  // say about it until it is.
+  const card =
+    kind === 'expense' && payer === null && !onSubmit
+      ? accounts.find((a) => a.id === accountId && a.kind === 'credit')
+      : undefined;
+  // The credit a cycle's cashback lands as. The book writes it and keeps it
+  // in step with the purchases, so it is shown rather than edited.
+  const isCashbackCredit = !!editing?.cashbackCycle;
+
+  useEffect(() => {
+    if (!open) return;
+    setCashbackSet(editing?.cashbackSet ?? null);
+    setCashbackDraft(null);
+  }, [open, editing]);
+
+  useEffect(() => {
+    if (!open || !card || paise <= 0) {
+      setQuote(null);
+      return;
+    }
+    let stale = false;
+    const wait = window.setTimeout(() => {
+      api
+        .cashbackQuote(card.id, occurredAt, paise, editing?.id ?? null)
+        .then((q) => !stale && setQuote(q))
+        .catch(() => !stale && setQuote(null));
+    }, 150);
+    return () => {
+      stale = true;
+      window.clearTimeout(wait);
+    };
+  }, [open, card?.id, occurredAt, paise, editing?.id]);
+
+  // Leaving the figure: blank goes back to the card's rate, and so does the
+  // rate's own figure left as it was — looking is not deciding.
+  const settleCashback = () => {
+    if (cashbackDraft === null) return;
+    const said = cashbackDraft.trim() ? Math.max(0, rupeesToPaise(settleAmount(cashbackDraft))) : null;
+    setCashbackSet(said !== null && cashbackSet === null && said === quote?.cashback ? null : said);
+    setCashbackDraft(null);
+  };
   // The parts always come to the bill — the last one takes whatever is left —
   // so the only thing that can go wrong is the typed ones overrunning it.
   const split = lines.length > 0;
@@ -1127,6 +1180,7 @@ export function TransactionSheet({
       shares: owing,
       labelIds,
       refundOf: refund?.id ?? null,
+      cashback: card && savedKind === 'expense' ? cashbackSet : null,
     };
 
     // The caller wanted the input, not the save.
@@ -1209,6 +1263,104 @@ export function TransactionSheet({
   const accentVar =
     kind === 'income' ? 'var(--green)' : kind === 'transfer' ? 'var(--blue)' : 'var(--ink)';
 
+  // What the card gives back on it, and so what it actually cost. The posting
+  // keeps what was paid; every total counts what is left once this is off.
+  const cashBack = cashbackSet ?? quote?.cashback ?? 0;
+  const capLeft = quote && quote.cap > 0 ? Math.max(0, quote.cap - quote.earned - cashBack) : null;
+  const cashbackLine = card && (quote?.rateE4 || cashbackSet !== null) ? (
+    <div
+      className="tx-cashback-line"
+      title={
+        quote?.creditsOn
+          ? `Credited to ${card.name} when the cycle closes, ${shortDayLabel(quote.creditsOn)}`
+          : undefined
+      }
+    >
+      <Icon name="percent" size={13} />
+      {cashbackDraft !== null ? (
+        <>
+          <span>Cashback</span>
+          <div className="rupee-input">
+            <span>₹</span>
+            <TextInput
+              autoFocus
+              inputMode="decimal"
+              value={cashbackDraft}
+              placeholder={quote ? paiseToRupeeString(quote.cashback) : '0'}
+              onChange={(e) => setCashbackDraft(amountChars(e.target.value))}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  settleCashback();
+                }
+                if (e.key === 'Escape') {
+                  e.stopPropagation();
+                  setCashbackDraft(null);
+                }
+              }}
+              onBlur={settleCashback}
+            />
+          </div>
+        </>
+      ) : (
+        <span className="tx-cashback-words">
+          <strong>{money(cashBack)} back</strong>
+          {cashbackSet !== null
+            ? ' · said by hand'
+            : quote
+              ? ` · ${cashbackRate(quote.rateE4)}${
+                  capLeft === null
+                    ? ''
+                    : capLeft > 0
+                      ? `, ${compactMoney(capLeft)} of ${compactMoney(quote.cap)} left`
+                      : `, ${compactMoney(quote.cap)} cap reached`
+                }`
+              : ''}
+          {paise > 0 && (
+            <>
+              {' · costs you '}
+              <strong>{money(Math.max(0, paise - cashBack))}</strong>
+            </>
+          )}
+        </span>
+      )}
+      <span className="tx-cashback-acts">
+        {cashbackDraft === null && (
+          <button type="button" onClick={() => setCashbackDraft(paiseToRupeeString(cashBack))}>
+            Change
+          </button>
+        )}
+        {cashbackSet !== null && !!quote?.rateE4 && (
+          <button
+            type="button"
+            onClick={() => {
+              setCashbackSet(null);
+              setCashbackDraft(null);
+            }}
+          >
+            Use {cashbackRate(quote.rateE4)}
+          </button>
+        )}
+      </span>
+    </div>
+  ) : null;
+
+  const creditNote = isCashbackCredit ? (
+    <p className="page-note">
+      <Icon name="percent" size={13} />
+      {`The card writes this one: the cashback the cycle that closed ${shortDayLabel(
+        editing!.cashbackCycle!,
+      )} earned on its purchases. It follows them — change a purchase, or the card's cashback, and it changes too. It is not counted as income.`}
+    </p>
+  ) : editing?.paysCashback && kind === 'income' ? (
+    <p className="page-note">
+      <Icon name="percent" size={13} />
+      The card's cashback offer covers this day, so this is read as its cashback paying out
+      rather than as income. The credit the book writes when the cycle closes only tops up
+      what rows like this leave.
+    </p>
+  ) : null;
+
   // The same column on every page of the sheet: what the money did. A split
   // is a different way of reading the same bill, not a different bill, so the
   // amount and the rest of it stay where they were rather than being left
@@ -1230,6 +1382,7 @@ export function TransactionSheet({
             setError(null);
           }}
           onBlur={() => setAmount(settleAmount(amount))}
+          readOnly={isCashbackCredit}
         />
         {/* A bill is often three things added up. The answer shows as it is
             typed, and the sum settles into it when the field is left. */}
@@ -1261,6 +1414,9 @@ export function TransactionSheet({
           </motion.p>
         )}
       </AnimatePresence>
+
+      {cashbackLine}
+      {creditNote}
 
       {/* One account to pick, and the row to pick it from: the rail reads
           left to right and costs no clicks. Two of them side by side is a
@@ -1670,7 +1826,7 @@ export function TransactionSheet({
       footer={
         <>
           <div className="foot-lead">
-            {editing && !page && !onSubmit && (
+            {editing && !page && !onSubmit && !isCashbackCredit && (
               <Button
                 tone="danger"
                 icon="trash-2"
@@ -1812,7 +1968,7 @@ export function TransactionSheet({
               Cancel
             </Button>
             {/* The shortcut belongs on the thing it presses. */}
-            <Button tone="primary" onClick={submit} disabled={saving}>
+            <Button tone="primary" onClick={submit} disabled={saving || isCashbackCredit}>
               {payingPlan ? 'Mark paid' : isNew ? 'Add transaction' : 'Save changes'}
               <span className="btn-keys">
                 <kbd>⌘</kbd>

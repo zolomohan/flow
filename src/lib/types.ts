@@ -42,6 +42,11 @@ export interface Account {
   /** The day the bill has to be paid by, counted from the statement: the
    *  first such day after the cycle closed. */
   dueDay: number;
+  /** What the card gives back on a purchase today, as a percentage scaled by
+   *  10^4 (10% is 100000), and the most it gives back in one cycle. Zero is
+   *  none, and no cap. */
+  cashbackRateE4: number;
+  cashbackCap: Paise;
 }
 
 export interface AccountInput {
@@ -129,6 +134,20 @@ export interface Transaction {
   refundOfAmount: Paise | null;
   /** How much of *this* posting has been given back. Zero on nearly all. */
   refunded: Paise;
+  /**
+   * What the card gave back on this purchase — its part of the cycle's
+   * cashback. `amount` is what was paid; what it cost is this much less, and
+   * that is the figure every total counts.
+   */
+  cashback: Paise;
+  /** The cashback as it was said by hand. Null lets the card work it out. */
+  cashbackSet: Paise | null;
+  /** Set on the credit a cycle's cashback lands as: the day that cycle
+   *  closed. The book writes these, and they are not money earned. */
+  cashbackCycle: string | null;
+  /** Cashback written down by hand — a Rewards row on the card — that the
+   *  card's offer covers: the cycle's credit arriving, not income. */
+  paysCashback: boolean;
 }
 
 /** A label as it sits on a posting. */
@@ -265,6 +284,21 @@ export interface TransactionInput {
   /** The posting this one refunds. Null on every save that isn't one, which
    *  is how a refund is taken off again. */
   refundOf?: string | null;
+  /** What the card gave back on it, said by hand. Null leaves it to the
+   *  card's rate. */
+  cashback?: Paise | null;
+}
+
+/** What a purchase being written would earn back on its card. */
+export interface CashbackQuote {
+  /** What the card's rate gives it, the cap allowing. */
+  cashback: Paise;
+  rateE4: number;
+  cap: Paise;
+  /** What the rest of its cycle has already earned. */
+  earned: Paise;
+  /** The day the cycle closes and its cashback is credited. */
+  creditsOn: string | null;
 }
 
 /* ------------------------------------------------------------------ cards */
@@ -282,6 +316,9 @@ export interface CardCycle {
    */
   spend: Paise;
   paid: Paise;
+  /** What the cycle's purchases earned back: credited the day it closed, and
+   *  still to come on the open one. */
+  cashback: Paise;
   open: boolean;
 }
 
@@ -302,7 +339,21 @@ export interface CardTerm {
   creditLimit: Paise | null;
   statementDay: number | null;
   dueDay: number | null;
+  /** What the card gives back from this day: a percentage scaled by 10^4,
+   *  and the most a cycle earns. Zero is none, and no cap. */
+  cashbackRateE4: number | null;
+  cashbackCap: Paise | null;
   note: string | null;
+}
+
+/** A change to a card's terms as a form writes it: anything left off is
+ *  something the change says nothing about. */
+export interface CardTermChange {
+  creditLimit?: Paise | null;
+  statementDay?: number | null;
+  dueDay?: number | null;
+  cashbackRateE4?: number | null;
+  cashbackCap?: Paise | null;
 }
 
 /** One card, and everything the tab says about it. */
@@ -341,6 +392,15 @@ export interface CardStat {
   paid: Paise;
   charges: number;
   lastUsed: string | null;
+  /** What the card gives back today, and the most a cycle earns. */
+  cashbackRateE4: number;
+  cashbackCap: Paise;
+  /** Earned and not credited yet — the open cycle's — and the day it lands. */
+  cashbackPending: Paise;
+  cashbackCreditsOn: string | null;
+  /** What the window's purchases earned back, and everything ever credited. */
+  cashback: Paise;
+  cashbackTotal: Paise;
   /** The last dozen cycles, oldest first, the open one last. */
   cycles: CardCycle[];
   topCategories: CategorySlice[];

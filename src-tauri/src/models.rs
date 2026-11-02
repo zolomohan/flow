@@ -30,6 +30,11 @@ pub struct Account {
     /// billed on the 2nd and due on the 22nd is the same month, and one due
     /// on the 1st is the month after.
     pub due_day: i64,
+    /// What the card gives back on a purchase today, as a percentage scaled
+    /// by 10^4 (10% is 100_000), and the most it gives back in one cycle.
+    /// Read off its terms; zero on either means none, or no cap.
+    pub cashback_rate_e4: i64,
+    pub cashback_cap: Paise,
     /// Derived: opening balance folded with every posting that touches it.
     pub balance: Paise,
     /// Derived: what the holdings parked in this account are worth today, less
@@ -135,6 +140,21 @@ pub struct Transaction {
     /// How much of *this* posting has been given back — the refunds naming
     /// it, added up. Zero on almost everything.
     pub refunded: Paise,
+    /// What the card gave back on this purchase: its part of the cycle's
+    /// cashback. The posting is what was paid; what it cost is this much
+    /// less, and that is the figure every total counts.
+    pub cashback: Paise,
+    /// The cashback as it was said by hand, when the card's rate is not the
+    /// answer. `None` lets the card work it out.
+    pub cashback_set: Option<Paise>,
+    /// Set on the credit a cycle's cashback lands as: the day the cycle
+    /// closed. The book writes these and keeps them in step; they are not
+    /// money earned, because the purchases already count what came back.
+    pub cashback_cycle: Option<String>,
+    /// Cashback written down by hand — a Rewards row on the card — that the
+    /// card's offer covers. It is the cycle's credit arriving, so it is not
+    /// income, and the credit the book writes only tops up what it leaves.
+    pub pays_cashback: bool,
 }
 
 /// A label as it sits on a posting. The count lives on `Label`, which is the
@@ -263,6 +283,10 @@ pub struct TransactionInput {
     /// that gives nothing back, which is how a refund is taken off again.
     #[serde(default)]
     pub refund_of: Option<String>,
+    /// What the card gave back on it, said by hand. Set on every save as
+    /// well: `None` leaves it to the card's rate.
+    #[serde(default)]
+    pub cashback: Option<Paise>,
 }
 
 /// A folder: postings kept together because they belong together, with what
@@ -577,6 +601,10 @@ pub struct CardTerm {
     pub credit_limit: Option<Paise>,
     pub statement_day: Option<i64>,
     pub due_day: Option<i64>,
+    /// What the card gives back from this day: a percentage scaled by 10^4,
+    /// and the most it gives back in a cycle. Zero is none, and no cap.
+    pub cashback_rate_e4: Option<i64>,
+    pub cashback_cap: Option<Paise>,
     pub note: Option<String>,
 }
 
@@ -606,6 +634,9 @@ pub struct CardCycle {
     pub spend: Paise,
     /// Payments that landed inside the cycle.
     pub paid: Paise,
+    /// What the cycle's purchases earned back — credited the day it closed,
+    /// and still to come on the one that is open.
+    pub cashback: Paise,
     pub open: bool,
 }
 
@@ -654,6 +685,17 @@ pub struct CardStat {
     pub paid: Paise,
     pub charges: i64,
     pub last_used: Option<String>,
+    /// What the card gives back today, and the most it gives in a cycle.
+    pub cashback_rate_e4: i64,
+    pub cashback_cap: Paise,
+    /// Cashback earned and not credited yet — the open cycle's, which lands
+    /// the day it closes — and that day.
+    pub cashback_pending: Paise,
+    pub cashback_credits_on: Option<String>,
+    /// What the window's purchases earned back, and everything the card has
+    /// ever given back.
+    pub cashback: Paise,
+    pub cashback_total: Paise,
     /// The last dozen cycles, oldest first, the open one last.
     pub cycles: Vec<CardCycle>,
     pub top_categories: Vec<CategorySlice>,
@@ -680,6 +722,21 @@ pub struct CardsOverview {
     /// both. A year of it, or the window if that reaches back further.
     pub monthly: Vec<FlowPoint>,
     pub cards: Vec<CardStat>,
+}
+
+/// What a purchase would earn on a card, asked while it is being written:
+/// the card's terms that day and how much of the cycle's cap is gone.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CashbackQuote {
+    /// What the card's rate gives this purchase, the cap allowing.
+    pub cashback: Paise,
+    pub rate_e4: i64,
+    pub cap: Paise,
+    /// What the rest of the cycle has already earned.
+    pub earned: Paise,
+    /// The day the cycle closes and its cashback is credited.
+    pub credits_on: Option<String>,
 }
 
 // --------------------------------------------------------------------- debts

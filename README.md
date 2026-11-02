@@ -33,6 +33,22 @@ credit card's balance goes negative as you spend and the card screen labels it
 shows how much is left and how much of the limit is used. Opening balances may
 be negative — an imported account often starts overdrawn.
 
+A card can also give **cashback**: a rate and a cap a cycle, recorded as one
+of its terms (*Edit card → Card terms*) from the day the offer began. A
+purchase on it is written at what was paid; the book works out its share of
+the cycle's cashback — at the rate, in the order the purchases were made, until
+the cap runs out — and every total counts what is left, the *effective*
+amount. A share can be said by hand on the purchase instead (an excluded spend
+is ₹0). The card page shows what the open cycle has earned so far, and the
+day the cycle closes the book writes the cycle's total onto the card as one
+*Cashback* credit, so the balance matches the bank's. That credit is left out
+of income like a refund is, since the purchases already counted it. Cashback
+written down by hand — income on the card filed under *Rewards* (or a
+*Cashback* category) — is read the same way while the offer covers its day:
+it stops counting as income, and the book's credit only tops up what such rows
+leave. Nothing before the offer's first day earns anything, so entries already
+written net of cashback stay as they are.
+
 Categories nest one level deep: top-level **groups** (Food & Drink, Transport)
 each holding **sub-categories** (Restaurant, Snacks, Coffee / Taxi, Fuel,
 Parking). A group can hold transactions directly as well. Lists show the leaf

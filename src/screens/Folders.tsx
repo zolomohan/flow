@@ -7,7 +7,7 @@ import {
 } from '../components/ui';
 import { useStore } from '../lib/store';
 import { FolderDetail } from './FolderDetail';
-import { countedAmount, dateRangeLabel, money } from '../lib/format';
+import { countedAmount, dateRangeLabel, isCashbackCredit, money } from '../lib/format';
 import { itemVariants, listVariants, spring } from '../lib/motion';
 import type { Folder, Paise, Transaction } from '../lib/types';
 
@@ -129,7 +129,7 @@ export function Folders({
     const side = new Map(folders.map((f) => [f.id, outward(f) ? 'expense' : 'income']));
     const out = new Map<string, Map<string, Share>>();
     for (const t of inside) {
-      if (t.refundOf) continue;
+      if (t.refundOf || isCashbackCredit(t)) continue;
       const left = countedAmount(t);
       const parts = t.splits.length
         ? t.splits.map((p) => ({

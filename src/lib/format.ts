@@ -446,14 +446,16 @@ export function debtProgress(debt: {
 
 /**
  * What a posting counts for, the way the book's totals count it: less what
- * was refunded, and — for a bill shared with people — less their shares.
- * The bill left your account in full, but only your part was spending; the
- * rest is money out with them, and their debts carry it.
+ * was refunded, less what the card gave back on it, and — for a bill shared
+ * with people — less their shares. The bill left your account in full, but
+ * only your part was spending; the rest is money out with them, and their
+ * debts carry it.
  */
 export function countedAmount(t: {
   kind: string;
   amount: Paise;
   refunded: Paise;
+  cashback: Paise;
   shares: { direction: string; amount: Paise }[];
 }) {
   const left = t.amount - t.refunded;
@@ -461,5 +463,24 @@ export function countedAmount(t: {
   const theirs = t.shares
     .filter((s) => s.direction === 'lent')
     .reduce((sum, s) => sum + s.amount, 0);
-  return Math.max(0, left - theirs);
+  return Math.max(0, left - theirs - t.cashback);
+}
+
+/** A card's cashback paying out, whether the book wrote the credit or it was
+ *  written down by hand under Rewards. Either way the purchases already count
+ *  it, so it is not money earned. */
+export function isCashbackCredit(t: { cashbackCycle: string | null; paysCashback: boolean }) {
+  return !!t.cashbackCycle || t.paysCashback;
+}
+
+/** What a purchase cost once the card's cashback is off it — the effective
+ *  figure, beside the one that was paid. */
+export function effectiveAmount(t: { kind: string; amount: Paise; cashback: Paise }) {
+  return t.kind === 'expense' ? t.amount - t.cashback : t.amount;
+}
+
+/** A cashback rate as a person writes it: 10% rather than 100000. */
+export function cashbackRate(rateE4: number) {
+  const pct = rateE4 / 10_000;
+  return `${Number.isInteger(pct) ? pct : pct.toFixed(2).replace(/0+$/, '')}%`;
 }

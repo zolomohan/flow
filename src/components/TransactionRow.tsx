@@ -5,7 +5,9 @@ import { MerchantLogo } from './MerchantLogo';
 import { Amount } from './Money';
 import { MoreMenu, type MenuItem } from './ui';
 import { spring } from '../lib/motion';
-import { initials, money, timeLabel } from '../lib/format';
+import {
+  effectiveAmount, initials, isCashbackCredit as paysOut, money, shortDayLabel, timeLabel,
+} from '../lib/format';
 import type { Paise, Transaction, TransactionSplit } from '../lib/types';
 
 /** One posting. Transfers borrow the source account's colour; the rest use
@@ -81,6 +83,14 @@ export function TransactionRow({
   // the balance still has it, so nothing else would give it away.
   const isRefund = !!tx.refundOf;
   const givenBack = tx.refunded >= tx.amount ? 'all' : tx.refunded > 0 ? 'part' : 'none';
+  // The credit a card's cashback lands as is the same kind of thing: it pays
+  // back what the cycle's purchases already count as given back, so it is
+  // not money earned. A purchase that earned some shows what it cost, with
+  // what was paid beside it.
+  // A Rewards row written by hand while the card's offer covers it is the
+  // same credit arriving, and reads the same — under its own words.
+  const isCashbackCredit = paysOut(tx);
+  const earnedBack = tx.kind === 'expense' && tx.cashback > 0;
   // The whole of it owed by one person, with nothing filed under anything:
   // that is not a division of the posting, it is what the posting is. A row
   // like that says so on its own line rather than hiding the fact behind a
@@ -111,6 +121,8 @@ export function TransactionRow({
     ? [`Gives back ${tx.refundOfMerchant || 'a transaction'}`, tx.accountName]
         .filter(Boolean)
         .join(' · ')
+    : tx.cashbackCycle
+      ? `${tx.accountName} · the cycle that closed ${shortDayLabel(tx.cashbackCycle)}`
     : isTransfer
       // A hand-off names the person on the far side of it, not the account
       // the book files it against: the money went to them.
@@ -131,7 +143,7 @@ export function TransactionRow({
   return (
     <motion.div
       className={`tx-bill ${open ? 'is-open' : ''} ${selected ? 'is-picked' : ''} ${
-        givenBack === 'all' || isRefund ? 'is-undone' : ''
+        givenBack === 'all' || isRefund || isCashbackCredit ? 'is-undone' : ''
       }`}
       layout="position"
     >
@@ -172,6 +184,15 @@ export function TransactionRow({
                 Refund
               </span>
             )}
+            {isCashbackCredit && (
+              <span
+                className="tx-label is-cashback"
+                title="The cycle's cashback, credited to the card. Its purchases already count it, so it is not income."
+              >
+                <Icon name="percent" size={11} strokeWidth={2.4} />
+                Cashback credit
+              </span>
+            )}
             {wholeDebt && owed > 0 && (
               <span
                 className="tx-label"
@@ -189,6 +210,16 @@ export function TransactionRow({
           </span>
           <span className="tx-sub">
             {subtitle}
+            {earnedBack && (
+              <span
+                className="tx-cashback"
+                title={`Paid ${money(tx.amount)}; ${money(tx.cashback)} of it comes back as cashback${
+                  tx.cashbackSet != null ? ' (set by hand)' : ''
+                }`}
+              >
+                {money(tx.amount)} paid · <em>{money(tx.cashback)} back</em>
+              </span>
+            )}
             {tx.note && (
               <span className="tx-note" title={tx.note}>
                 {tx.note}
@@ -229,7 +260,7 @@ export function TransactionRow({
             ))}
         </span>
         <span className="tx-right">
-          <Amount value={tx.amount} kind={tx.kind} />
+          <Amount value={effectiveAmount(tx)} kind={tx.kind} />
           <span className="tx-time">{showDate ?? timeLabel(tx.occurredAt)}</span>
         </span>
         <span className="tx-chevron">

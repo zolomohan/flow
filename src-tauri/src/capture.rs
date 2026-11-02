@@ -1488,6 +1488,7 @@ fn input_from(r: &Resolved) -> TransactionInput {
         shares: None,
         label_ids: None,
         refund_of: None,
+        cashback: None,
     }
 }
 
@@ -1826,6 +1827,7 @@ mod tests {
                 shares: None,
                 label_ids: None,
                 refund_of: None,
+                cashback: None,
             },
         )
         .unwrap();
@@ -1859,6 +1861,7 @@ mod tests {
                 shares: None,
                 label_ids: None,
                 refund_of: None,
+                cashback: None,
             },
         )
         .unwrap();
@@ -1990,6 +1993,7 @@ mod tests {
                     shares: None,
                     label_ids: None,
                     refund_of: None,
+                    cashback: None,
                 },
             )
             .unwrap();
@@ -2030,6 +2034,7 @@ mod tests {
                 shares: None,
                 label_ids: None,
                 refund_of: None,
+                cashback: None,
             },
         )
         .unwrap();
@@ -2277,6 +2282,7 @@ mod tests {
                 shares: None,
                 label_ids: None,
                 refund_of: None,
+                cashback: None,
             },
         )
         .unwrap();

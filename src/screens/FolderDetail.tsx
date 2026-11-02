@@ -9,6 +9,7 @@ import { Button, Card, CardHead, Confirm, Empty } from '../components/ui';
 import { useStore } from '../lib/store';
 import {
   countedAmount,
+  isCashbackCredit,
   compactMoney, dateRangeLabel, dayKey, dayLabel, daySpan, money,
 } from '../lib/format';
 import { itemVariants, listVariants } from '../lib/motion';
@@ -74,8 +75,9 @@ export function FolderDetail({
   const stats = useMemo(() => {
     const kind = outward ? 'expense' : 'income';
     // A refund is not money of its own: it comes off the posting it gives
-    // back, exactly as the ledger's own totals read it.
-    const side = (rows ?? []).filter((t) => t.kind === kind && !t.refundOf);
+    // back, exactly as the ledger's own totals read it. Nor is a card's
+    // cashback credit, which the purchases already count.
+    const side = (rows ?? []).filter((t) => t.kind === kind && !t.refundOf && !isCashbackCredit(t));
     const left = countedAmount;
     const slices = new Map<string, Slice>();
     for (const t of side) {

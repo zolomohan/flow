@@ -15,7 +15,7 @@
 
 use rusqlite::{params, params_from_iter, Connection};
 
-use crate::db::{new_id, now, oops, placeholders, Result, NOT_A_REFUND, REFUNDED, SHARED};
+use crate::db::{new_id, now, oops, placeholders, Result, CASHBACK, NOT_A_REFUND, REFUNDED, SHARED};
 use crate::models::{Folder, FolderInput};
 
 /// Every folder, with what is in it and what it comes to.
@@ -31,7 +31,7 @@ pub fn list_folders(conn: &Connection) -> Result<Vec<Folder>> {
                 COALESCE(SUM(CASE WHEN t.kind = 'income'  AND {NOT_A_REFUND}
                                   THEN t.amount - {REFUNDED} ELSE 0 END), 0),
                 COALESCE(SUM(CASE WHEN t.kind = 'expense' AND {NOT_A_REFUND}
-                                  THEN MAX(0, t.amount - {REFUNDED} - {SHARED}) ELSE 0 END), 0),
+                                  THEN MAX(0, t.amount - {REFUNDED} - {SHARED} - {CASHBACK}) ELSE 0 END), 0),
                 COALESCE(SUM(CASE WHEN t.kind = 'transfer' THEN t.amount ELSE 0 END), 0),
                 MIN(t.occurred_at), MAX(t.occurred_at)
          FROM folders f
@@ -74,7 +74,7 @@ pub fn get_folder(conn: &Connection, id: &str) -> Result<Folder> {
                 COALESCE(SUM(CASE WHEN t.kind = 'income'  AND {NOT_A_REFUND}
                                   THEN t.amount - {REFUNDED} ELSE 0 END), 0),
                 COALESCE(SUM(CASE WHEN t.kind = 'expense' AND {NOT_A_REFUND}
-                                  THEN MAX(0, t.amount - {REFUNDED} - {SHARED}) ELSE 0 END), 0),
+                                  THEN MAX(0, t.amount - {REFUNDED} - {SHARED} - {CASHBACK}) ELSE 0 END), 0),
                 COALESCE(SUM(CASE WHEN t.kind = 'transfer' THEN t.amount ELSE 0 END), 0),
                 MIN(t.occurred_at), MAX(t.occurred_at)
          FROM folders f
@@ -224,6 +224,7 @@ mod tests {
                 shares: None,
                 label_ids: None,
                 refund_of: None,
+                cashback: None,
             },
         )
         .unwrap()

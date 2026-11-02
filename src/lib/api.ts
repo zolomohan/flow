@@ -6,6 +6,8 @@ import type {
   CaptureSync,
   CardsOverview,
   CardTerm,
+  CardTermChange,
+  CashbackQuote,
   Category,
   CategoryInput,
   Holding,
@@ -96,7 +98,7 @@ export const api = {
   saveCardTerm: (
     accountId: string,
     effectiveOn: string,
-    terms: { creditLimit?: Paise | null; statementDay?: number | null; dueDay?: number | null },
+    terms: CardTermChange,
     note: string | null = null,
   ) => call<CardTerm>('save_card_term', {
     accountId,
@@ -104,8 +106,13 @@ export const api = {
     creditLimit: terms.creditLimit ?? null,
     statementDay: terms.statementDay ?? null,
     dueDay: terms.dueDay ?? null,
+    cashbackRateE4: terms.cashbackRateE4 ?? null,
+    cashbackCap: terms.cashbackCap ?? null,
     note,
   }),
+  /** What a purchase being written would earn back on the card it is on. */
+  cashbackQuote: (accountId: string, occurredAt: string, amount: Paise, id: string | null) =>
+    call<CashbackQuote>('cashback_quote', { accountId, occurredAt, amount, id }),
   deleteCardTerm: (id: string) => call<void>('delete_card_term', { id }),
 
   /** Every card over a window. Months on the strip by default; `from`/`to`

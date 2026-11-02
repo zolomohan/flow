@@ -375,6 +375,7 @@ pub fn seed(conn: &Connection) -> Result<()> {
             ]),
             label_ids: None,
             refund_of: None,
+            cashback: None,
         },
     )?;
 

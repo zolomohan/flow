@@ -569,7 +569,7 @@ kbd {
 }
 .terms-panes {
   display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   background: var(--surface);
@@ -679,6 +679,16 @@ kbd {
    of wells says nothing about what belongs in it. */
 .terms-write .field + .field, .terms-write .field + .btn { margin-top: 10px; }
 .terms-write .btn { margin-top: 12px; }
+/* The rate and its cap are one term said in two numbers, so they share a
+   line rather than reading as two more things that changed. */
+.terms-cashback {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+.terms-cashback .field + .field { margin-top: 0; }
+.terms-cashback .rupee-input.is-suffix .input { padding-right: 30px; }
 .terms-foot {
   margin-top: 8px;
   font-size: 11px;
@@ -1418,6 +1428,19 @@ kbd {
   content: ' · ';
   font-style: normal;
   color: var(--ink-4);
+}
+
+/* A purchase a card gave something back on: the figure on the right is what
+   it cost, and the subtitle keeps what was actually paid, with the cashback
+   in green — money that came back, not money undone. */
+.tx-cashback { color: var(--ink-3); }
+.tx-cashback::before {
+  content: ' · ';
+  color: var(--ink-4);
+}
+.tx-cashback em {
+  font-style: normal;
+  color: var(--green);
 }
 
 /* Pins and collections, on the figure's side and centred against both its
@@ -2884,6 +2907,37 @@ kbd {
   font-weight: 500;
   color: var(--red);
 }
+
+/* What the card gives back on a purchase, right under what was paid for it:
+   the two figures are one fact, and what it cost is what the totals count. */
+.tx-cashback-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  margin-top: -6px;
+  padding: 6px 8px 6px 12px;
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--green) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--green) 22%, transparent);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink-2);
+}
+.tx-cashback-line > svg { flex: none; color: var(--green); }
+.tx-cashback-words { flex: 1; min-width: 0; }
+.tx-cashback-words strong { font-weight: 650; color: var(--ink); }
+.tx-cashback-line .rupee-input { flex: 1; }
+.tx-cashback-line .rupee-input .input { height: 28px; }
+.tx-cashback-acts { display: flex; gap: 2px; flex: none; }
+.tx-cashback-acts button {
+  padding: 3px 8px;
+  border-radius: var(--r-full);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--green);
+}
+.tx-cashback-acts button:hover { background: color-mix(in srgb, var(--green) 12%, transparent); }
 
 /* =================================================================
    Option rail
@@ -5557,6 +5611,14 @@ kbd {
   gap: 4px;
   padding-left: 6px;
 }
+/* The credit a cycle's cashback lands as. Green, because it is money that
+   came back — but struck through on the row like a refund, because the
+   purchases already counted it. */
+.tx-label.is-cashback {
+  --tint: var(--green);
+  gap: 4px;
+  padding-left: 6px;
+}
 
 .tx-label {
   display: inline-flex;
@@ -7488,6 +7550,14 @@ kbd {
   font-weight: 600;
   color: var(--ink);
   font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+/* What the cycle's purchases earned back, credited on the statement above. */
+.cycle-amount small {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--green);
 }
 .cycle-paid {
   display: inline-flex;

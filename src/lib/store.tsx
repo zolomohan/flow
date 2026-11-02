@@ -20,6 +20,7 @@ import type {
   Category,
   CategoryDeleteOptions,
   CardTerm,
+  CardTermChange,
   CategoryInput,
   Debt,
   DebtInput,
@@ -36,7 +37,6 @@ import type {
   Label,
   LabelInput,
   Overview,
-  Paise,
   Plan,
   PlanInput,
   Transaction,
@@ -142,7 +142,7 @@ interface Store {
   saveCardTerm: (
     accountId: string,
     effectiveOn: string,
-    terms: { creditLimit?: Paise | null; statementDay?: number | null; dueDay?: number | null },
+    terms: CardTermChange,
   ) => Promise<CardTerm>;
   deleteCardTerm: (id: string) => Promise<void>;
   saveCategory: (input: CategoryInput) => Promise<Category>;

@@ -7,7 +7,7 @@ import {
 } from './ui';
 import { useStore } from '../lib/store';
 import {
-  amountChars, dayLabel, money, paiseToRupeeString, rupeesToPaise, settleAmount,
+  amountChars, cashbackRate, dayLabel, money, paiseToRupeeString, rupeesToPaise, settleAmount,
 } from '../lib/format';
 import { itemVariants, listVariants, spring } from '../lib/motion';
 import type { Account, AccountKind, CardTerm, Paise } from '../lib/types';
@@ -41,6 +41,8 @@ interface TermRow {
   creditLimit: Paise | null;
   statementDay: number | null;
   dueDay: number | null;
+  cashbackRateE4: number | null;
+  cashbackCap: Paise | null;
   /** Whether that due day falls in the month after the bill is cut, which it
    *  does whenever it is not later in the month than the closing day. */
   nextMonth?: boolean;
@@ -52,18 +54,36 @@ interface PendingTerm {
   creditLimit: Paise | null;
   statementDay: number | null;
   dueDay: number | null;
+  cashbackRateE4: number | null;
+  cashbackCap: Paise | null;
+}
+
+/** The cashback a change sets, in words: "10% back, up to ₹1,500 a cycle". */
+function cashbackWords(rateE4: number | null, cap: Paise | null) {
+  if (rateE4 == null && cap == null) return null;
+  if (rateE4 === 0) return 'no cashback';
+  const rate = rateE4 != null ? `${cashbackRate(rateE4)} back` : 'cashback';
+  return cap ? `${rate}, up to ${money(cap)} a cycle` : cap === 0 ? `${rate}, no cap` : rate;
 }
 
 /** What a change says, in the order a card is read in. A term it says nothing
  *  about is left out: silence means carry on as before. */
 function termWords(term: {
   creditLimit: Paise | null; statementDay: number | null; dueDay: number | null;
+  cashbackRateE4: number | null; cashbackCap: Paise | null;
 }) {
   return [
     term.creditLimit ? money(term.creditLimit) : null,
     term.statementDay ? `closes the ${ordinalDay(term.statementDay)}` : null,
     term.dueDay ? `due the ${ordinalDay(term.dueDay)}` : null,
+    term.cashbackRateE4 ? cashbackWords(term.cashbackRateE4, term.cashbackCap) : null,
   ].filter(Boolean).join(' · ');
+}
+
+/** A percentage as typed, scaled the way the book keeps rates: 10 → 100000. */
+function rateE4Of(typed: string): number | null {
+  const pct = Number.parseFloat(typed);
+  return typed.trim() && Number.isFinite(pct) ? Math.round(pct * 10_000) : null;
 }
 
 /** Today as a plain ISO day, by the wall clock rather than UTC. */
@@ -100,6 +120,10 @@ export function AccountSheet({
   const [termLimit, setTermLimit] = useState('');
   const [termStatement, setTermStatement] = useState(0);
   const [termDue, setTermDue] = useState(0);
+  // What the card gives back from that day: a percentage, and the most one
+  // cycle earns. Blank on either is unchanged, as on every other term.
+  const [termRate, setTermRate] = useState('');
+  const [termCap, setTermCap] = useState('');
   const [termError, setTermError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -125,6 +149,8 @@ export function AccountSheet({
     setTermLimit('');
     setTermStatement(0);
     setTermDue(0);
+    setTermRate('');
+    setTermCap('');
     setTermError(null);
     setPending([]);
   }, [open, editing]);
@@ -152,12 +178,21 @@ export function AccountSheet({
   const recordTerm = async () => {
     if (!termOn) return setTermError('Pick the day it changed.');
     const limit = termLimit.trim() ? rupeesToPaise(termLimit) : null;
+    const rate = rateE4Of(termRate);
+    if (rate != null && (rate < 0 || rate > 1_000_000)) {
+      return setTermError('Cashback is a share of what was paid: 0–100%.');
+    }
     const change = {
       creditLimit: limit && limit > 0 ? limit : null,
       statementDay: termStatement || null,
       dueDay: termDue || null,
+      cashbackRateE4: rate,
+      cashbackCap: termCap.trim() ? Math.max(0, rupeesToPaise(termCap)) : null,
     };
-    if (!change.creditLimit && !change.statementDay && !change.dueDay) {
+    if (
+      !change.creditLimit && !change.statementDay && !change.dueDay
+      && change.cashbackRateE4 == null && change.cashbackCap == null
+    ) {
       return setTermError('Nothing changed on that day.');
     }
     if (editing) {
@@ -180,6 +215,8 @@ export function AccountSheet({
     setTermLimit(row.creditLimit ? paiseToRupeeString(row.creditLimit) : '');
     setTermStatement(row.statementDay ?? 0);
     setTermDue(row.dueDay ?? 0);
+    setTermRate(row.cashbackRateE4 != null ? String(row.cashbackRateE4 / 10_000) : '');
+    setTermCap(row.cashbackCap != null ? paiseToRupeeString(row.cashbackCap) : '');
     setTermError(null);
   };
 
@@ -189,6 +226,8 @@ export function AccountSheet({
     setTermLimit('');
     setTermStatement(0);
     setTermDue(0);
+    setTermRate('');
+    setTermCap('');
     setTermError(null);
   };
 
@@ -212,6 +251,8 @@ export function AccountSheet({
       creditLimit: t.creditLimit,
       statementDay: t.statementDay,
       dueDay: t.dueDay,
+      cashbackRateE4: t.cashbackRateE4,
+      cashbackCap: t.cashbackCap,
     }))
     : pending.map((r) => ({ key: r.effectiveOn, on: r.effectiveOn, ...r }));
   // A due day at or before the closing day belongs to the month after — so
@@ -238,14 +279,26 @@ export function AccountSheet({
         creditLimit: r.creditLimit ?? held.creditLimit,
         statementDay: r.statementDay ?? held.statementDay,
         dueDay: r.dueDay ?? held.dueDay,
+        cashbackRateE4: r.cashbackRateE4 ?? held.cashbackRateE4,
+        cashbackCap: r.cashbackCap ?? held.cashbackCap,
       }),
+      // Cashback starts from nothing rather than from the account: a card is
+      // on no offer until a change says it is.
       editing && editing.kind === 'credit'
         ? {
           creditLimit: editing.creditLimit || null,
           statementDay: editing.statementDay || null,
           dueDay: editing.dueDay || null,
+          cashbackRateE4: null as number | null,
+          cashbackCap: null as Paise | null,
         }
-        : { creditLimit: null as Paise | null, statementDay: null as number | null, dueDay: null as number | null },
+        : {
+          creditLimit: null as Paise | null,
+          statementDay: null as number | null,
+          dueDay: null as number | null,
+          cashbackRateE4: null as number | null,
+          cashbackCap: null as Paise | null,
+        },
     );
 
   const submit = async () => {
@@ -279,7 +332,7 @@ export function AccountSheet({
           ? `Live balance ${money(editing.balance)}`
           : 'Where the money sits: a bank, a card, a wallet, a fund'
       }
-      width={kind === 'credit' ? 760 : 520}
+      width={kind === 'credit' ? 900 : 520}
       footer={
         <>
           {editing ? (
@@ -410,6 +463,7 @@ export function AccountSheet({
                             <th scope="col" className="is-num">Limit</th>
                             <th scope="col" className="is-day">Closes</th>
                             <th scope="col" className="is-day">Due</th>
+                            <th scope="col" className="is-num">Cashback</th>
                             <th scope="col" className="is-act">
                               <span className="sr-only">Remove</span>
                             </th>
@@ -450,6 +504,22 @@ export function AccountSheet({
                                   <>
                                     {ordinalDay(row.dueDay)}
                                     {row.nextMonth && <small>next mo.</small>}
+                                  </>
+                                ) : <em>—</em>}
+                              </td>
+                              <td className="is-num">
+                                {row.cashbackRateE4 != null || row.cashbackCap != null ? (
+                                  <>
+                                    {row.cashbackRateE4 === 0
+                                      ? 'None'
+                                      : row.cashbackRateE4 != null
+                                        ? cashbackRate(row.cashbackRateE4)
+                                        : <em>—</em>}
+                                    {row.cashbackRateE4 !== 0 && row.cashbackCap != null && (
+                                      <small>
+                                        {row.cashbackCap ? `up to ${money(row.cashbackCap)}` : 'no cap'}
+                                      </small>
+                                    )}
                                   </>
                                 ) : <em>—</em>}
                               </td>
@@ -520,6 +590,42 @@ export function AccountSheet({
                       placeholder="Unchanged"
                     />
                   </Field>
+
+                  {/* What the card gives back from this day. The book takes
+                      it off every purchase that earns it, so a purchase is
+                      written down at what was paid and counted at what it
+                      cost; the cycle's total is credited the day it closes. */}
+                  <div className="terms-cashback">
+                    <Field label="Cashback">
+                      <div className="rupee-input is-suffix">
+                        <TextInput
+                          inputMode="decimal"
+                          value={termRate}
+                          placeholder="Unchanged"
+                          onChange={(e) => {
+                            setTermRate(e.target.value.replace(/[^\d.]/g, ''));
+                            setTermError(null);
+                          }}
+                        />
+                        <span>%</span>
+                      </div>
+                    </Field>
+                    <Field label="Most a cycle">
+                      <div className="rupee-input">
+                        <span>₹</span>
+                        <TextInput
+                          inputMode="decimal"
+                          value={termCap}
+                          placeholder={termRate.trim() ? 'No cap' : 'Unchanged'}
+                          onChange={(e) => {
+                            setTermCap(amountChars(e.target.value));
+                            setTermError(null);
+                          }}
+                          onBlur={() => setTermCap(settleAmount(termCap))}
+                        />
+                      </div>
+                    </Field>
+                  </div>
 
                   <Button tone="primary" icon={editingTerm ? 'check' : 'plus'} block onClick={recordTerm}>
                     {editingTerm ? 'Save' : 'Record'}

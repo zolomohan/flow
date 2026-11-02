@@ -34,6 +34,19 @@ const BALANCE_EXPR: &str = "
   + COALESCE((SELECT SUM(t.amount) FROM transactions t WHERE t.to_account_id = a.id AND t.kind = 'transfer'), 0)
 ";
 
+/// What a card gives back today: the last rate and the last cap recorded
+/// against it on or before today, each on its own since a change can name
+/// one without the other. Nothing recorded is nothing given back — the book
+/// never assumes an offer it was not told about.
+const CASHBACK_RATE_NOW: &str = "COALESCE((SELECT ct.cashback_rate_e4 FROM card_terms ct
+     WHERE ct.account_id = a.id AND ct.cashback_rate_e4 IS NOT NULL
+       AND ct.effective_on <= date('now')
+     ORDER BY ct.effective_on DESC LIMIT 1), 0)";
+const CASHBACK_CAP_NOW: &str = "COALESCE((SELECT ct.cashback_cap FROM card_terms ct
+     WHERE ct.account_id = a.id AND ct.cashback_cap IS NOT NULL
+       AND ct.effective_on <= date('now')
+     ORDER BY ct.effective_on DESC LIMIT 1), 0)";
+
 /// Joined once, used by both the row query and the totals that go with it —
 /// the filters reach into account and category names, so they have to be here.
 pub(crate) const TX_FROM: &str = "
@@ -59,9 +72,19 @@ pub(crate) const REFUNDED: &str =
 pub(crate) const SHARED: &str = "COALESCE((SELECT SUM(d.principal) FROM debts d
      WHERE d.transaction_id = t.id AND d.from_split = 1 AND d.direction = 'lent'), 0)";
 
+/// What the card gave back on a purchase: its part of the cycle's cashback.
+/// The purchase left the card in full and the cycle's credit pays part of it
+/// back, so only the rest was ever spending. Kept on the posting itself by
+/// `cashback::settle`, and zero on anything no card gives anything back on.
+pub(crate) const CASHBACK: &str = "t.cashback";
+
 /// Postings that are money of their own. A refund is not: it undoes the one
-/// it names, and both are netted rather than counted.
-pub(crate) const NOT_A_REFUND: &str = "t.refund_of IS NULL";
+/// it names, and both are netted rather than counted. Nor is the credit a
+/// card's cashback lands as — it pays back what the cycle's purchases already
+/// count as given back, and counting it as well would count it twice — and
+/// that goes for one written by hand as much as for one the book wrote.
+pub(crate) const NOT_A_REFUND: &str =
+    "(t.refund_of IS NULL AND t.cashback_cycle IS NULL AND t.pays_cashback = 0)";
 
 /// Built rather than pasted: the figure it reads for what has come back is
 /// the same expression every total nets by.
@@ -71,7 +94,8 @@ pub(crate) fn tx_select() -> String {
                 t.merchant, t.note, t.occurred_at, t.created_at,
                 a.name, a.color, ta.name, c.name, c.icon, c.color,
                 COALESCE(p.id, c.id), COALESCE(p.name, c.name),
-                t.refund_of, o.merchant, o.amount, {REFUNDED}"
+                t.refund_of, o.merchant, o.amount, {REFUNDED},
+                t.cashback, t.cashback_set, t.cashback_cycle, t.pays_cashback"
     )
 }
 
@@ -85,11 +109,13 @@ pub(crate) fn tx_select() -> String {
 /// part of one comes off the line items in order, earliest first, so the
 /// parts still add up to what the bill is now worth.
 pub(crate) const ATTRIBUTED: &str = "
-SELECT id, kind, occurred_at, merchant, refund_of, account_id, category_id, amount,
-       -- Only your part of a bill shared with people is spending. It comes
-       -- off the line items in proportion, each part's running total scaled
-       -- and the parts taken as differences, so they still add up to exactly
-       -- your part rather than drifting a paisa per line.
+SELECT id, kind, occurred_at, merchant, refund_of, cashback_cycle, pays_cashback, account_id,
+       category_id, amount,
+       -- Only your part of a bill shared with people is spending, and only
+       -- what the card did not give back. Both come off the line items in
+       -- proportion, each part's running total scaled and the parts taken as
+       -- differences, so they still add up to exactly your part rather than
+       -- drifting a paisa per line.
        CASE WHEN shared = 0 OR whole <= 0 THEN net_amount
             ELSE upto * MAX(0, whole - shared) / whole
                - (upto - net_amount) * MAX(0, whole - shared) / whole
@@ -99,7 +125,8 @@ FROM (
          SUM(x.net_amount) OVER (PARTITION BY x.id ORDER BY x.sort_order, x.split_id) AS upto,
          SUM(x.net_amount) OVER (PARTITION BY x.id) AS whole
   FROM (
-    SELECT t.id, t.kind, t.occurred_at, t.merchant, t.refund_of, t.account_id,
+    SELECT t.id, t.kind, t.occurred_at, t.merchant, t.refund_of, t.cashback_cycle,
+           t.pays_cashback, t.account_id,
            COALESCE(s.category_id, t.category_id) AS category_id,
            COALESCE(s.amount, t.amount)           AS amount,
            CASE
@@ -111,7 +138,7 @@ FROM (
                              - rb.given_back))
            END AS net_amount,
            s.sort_order, s.id AS split_id,
-           CASE WHEN t.kind = 'expense' THEN COALESCE(sh.shared, 0) ELSE 0 END AS shared
+           CASE WHEN t.kind = 'expense' THEN COALESCE(sh.shared, 0) + t.cashback ELSE 0 END AS shared
     FROM transactions t
     LEFT JOIN transaction_splits s ON s.transaction_id = t.id
     LEFT JOIN (SELECT refund_of, SUM(amount) AS given_back
@@ -615,6 +642,39 @@ pub(crate) fn migrate(conn: &Connection) -> Result<()> {
     // import time so confirming it can teach a rule however the note has
     // been rewritten since. Null on anything entered by hand.
     add_column_if_missing(conn, "transactions", "import_key", "import_key TEXT")?;
+    // Cashback, which nothing in a book written before it earned: zero is
+    // exactly what every posting got back, and no cycle has been credited.
+    // What a card gives back is worked out by `cashback::settle` and kept on
+    // the posting; what it was said to be by hand, when the card's rate is not
+    // the answer, beside it. The credit the cycle's total lands as carries the
+    // day that cycle closed, and only the book writes one.
+    add_column_if_missing(
+        conn,
+        "transactions",
+        "cashback",
+        "cashback INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_missing(conn, "transactions", "cashback_set", "cashback_set INTEGER")?;
+    add_column_if_missing(conn, "transactions", "cashback_cycle", "cashback_cycle TEXT")?;
+    // Cashback written down by hand before the book worked it out — a Rewards
+    // row on the card for each payout. While the card's offer covers it, the
+    // book reads it as the cycle's credit arriving rather than as income.
+    add_column_if_missing(
+        conn,
+        "transactions",
+        "pays_cashback",
+        "pays_cashback INTEGER NOT NULL DEFAULT 0",
+    )?;
+    conn.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_tx_cashback_cycle
+             ON transactions(account_id, cashback_cycle) WHERE cashback_cycle IS NOT NULL;",
+    )
+    .map_err(oops)?;
+    // What a card gives back, as a term like its limit: a rate and a cap on
+    // each cycle, from the day they began. A change that says nothing about
+    // them leaves them as they were, which is what a null says.
+    add_column_if_missing(conn, "card_terms", "cashback_rate_e4", "cashback_rate_e4 INTEGER")?;
+    add_column_if_missing(conn, "card_terms", "cashback_cap", "cashback_cap INTEGER")?;
     // Whether a repayment wrote the posting it names. One it wrote goes with
     // it; one you linked is your own record and outlives it. Repayments made
     // before this existed never wrote any, so the default is right.
@@ -1159,6 +1219,8 @@ fn account_from_row(r: &Row) -> rusqlite::Result<Account> {
         credit_limit: r.get(11)?,
         statement_day: r.get(12)?,
         due_day: r.get(13)?,
+        cashback_rate_e4: r.get(14)?,
+        cashback_cap: r.get(15)?,
         // Both filled in by `apply_marks`: the ledger alone knows nothing
         // about what a holding is worth today, nor which account is the
         // book's own.
@@ -1171,7 +1233,8 @@ pub fn list_accounts(conn: &Connection) -> Result<Vec<Account>> {
     let sql = format!(
         "SELECT a.id, a.name, a.kind, a.institution, a.opening_balance, a.color, a.icon,
                 a.archived, a.sort_order, a.created_at, {BALANCE_EXPR} AS balance,
-                a.credit_limit, a.statement_day, a.due_day
+                a.credit_limit, a.statement_day, a.due_day,
+                {CASHBACK_RATE_NOW}, {CASHBACK_CAP_NOW}
          FROM accounts a
          ORDER BY a.archived ASC, a.sort_order ASC, a.created_at ASC"
     );
@@ -1186,7 +1249,8 @@ fn get_account(conn: &Connection, id: &str) -> Result<Account> {
     let sql = format!(
         "SELECT a.id, a.name, a.kind, a.institution, a.opening_balance, a.color, a.icon,
                 a.archived, a.sort_order, a.created_at, {BALANCE_EXPR} AS balance,
-                a.credit_limit, a.statement_day, a.due_day
+                a.credit_limit, a.statement_day, a.due_day,
+                {CASHBACK_RATE_NOW}, {CASHBACK_CAP_NOW}
          FROM accounts a WHERE a.id = ?1"
     );
     let mut one = vec![conn
@@ -1702,6 +1766,10 @@ pub(crate) fn tx_from_row(r: &Row) -> rusqlite::Result<Transaction> {
         refund_of_merchant: r.get(19)?,
         refund_of_amount: r.get(20)?,
         refunded: r.get(21)?,
+        cashback: r.get(22)?,
+        cashback_set: r.get(23)?,
+        cashback_cycle: r.get(24)?,
+        pays_cashback: r.get::<_, i64>(25)? != 0,
         // Filled in by `attach_parts`: each is its own table, and reading
         // them per row would turn one list into three hundred queries.
         splits: Vec::new(),
@@ -2067,7 +2135,7 @@ pub fn transaction_summary(conn: &Connection, q: TransactionQuery) -> Result<Tra
                 COALESCE(SUM(CASE WHEN t.kind = 'income'  AND {NOT_A_REFUND}
                                   THEN t.amount - {REFUNDED} ELSE 0 END), 0),
                 COALESCE(SUM(CASE WHEN t.kind = 'expense' AND {NOT_A_REFUND}
-                                  THEN MAX(0, t.amount - {REFUNDED} - {SHARED}) ELSE 0 END), 0),
+                                  THEN MAX(0, t.amount - {REFUNDED} - {SHARED} - {CASHBACK}) ELSE 0 END), 0),
                 COALESCE(SUM(CASE WHEN t.kind = 'transfer' THEN t.amount ELSE 0 END), 0)
          {TX_FROM}{clause}"
     );
@@ -2511,6 +2579,19 @@ pub fn save_transaction(conn: &Connection, input: TransactionInput) -> Result<Tr
     } else {
         None
     };
+    // What the card gave back, when it was said by hand rather than left to
+    // the card's rate — a spend the offer excludes, or a figure off the
+    // statement. Only a purchase earns anything, and none earns back more
+    // than it cost.
+    let cashback_set = match input.cashback {
+        Some(back) if input.kind == "expense" => {
+            if back < 0 || back > input.amount {
+                return Err("Cashback can be anything from nothing up to what was paid.".into());
+            }
+            Some(back)
+        }
+        _ => None,
+    };
 
     // Every debt runs through one account. Money handed to somebody has not
     // left your books — it is out with them — so a transfer with a debt
@@ -2580,7 +2661,7 @@ pub fn save_transaction(conn: &Connection, input: TransactionInput) -> Result<Tr
             conn.execute(
                 "UPDATE transactions SET kind = ?2, amount = ?3, account_id = ?4,
                         to_account_id = ?5, category_id = ?6, merchant = ?7, note = ?8,
-                        occurred_at = ?9, refund_of = ?10
+                        occurred_at = ?9, refund_of = ?10, cashback_set = ?11
                  WHERE id = ?1",
                 params![
                     id,
@@ -2592,7 +2673,8 @@ pub fn save_transaction(conn: &Connection, input: TransactionInput) -> Result<Tr
                     input.merchant,
                     input.note,
                     input.occurred_at,
-                    refund_of
+                    refund_of,
+                    cashback_set
                 ],
             )
             .map_err(oops)?;
@@ -2603,8 +2685,8 @@ pub fn save_transaction(conn: &Connection, input: TransactionInput) -> Result<Tr
             conn.execute(
                 "INSERT INTO transactions (id, kind, amount, account_id, to_account_id,
                                            category_id, merchant, note, occurred_at,
-                                           created_at, refund_of)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                                           created_at, refund_of, cashback_set)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
                     id,
                     input.kind,
@@ -2616,7 +2698,8 @@ pub fn save_transaction(conn: &Connection, input: TransactionInput) -> Result<Tr
                     input.note,
                     input.occurred_at,
                     now(),
-                    refund_of
+                    refund_of,
+                    cashback_set
                 ],
             )
             .map_err(oops)?;
@@ -4302,6 +4385,7 @@ fn write_debt_transfer(
             shares: None,
             label_ids: None,
             refund_of: None,
+            cashback: None,
         },
     )?;
     Ok(tx.id)
@@ -5378,6 +5462,7 @@ pub fn save_investment_lot(conn: &Connection, mut input: InvestmentLotInput) -> 
                             shares: None,
                             label_ids: None,
                             refund_of: None,
+                            cashback: None,
                         },
                     )?;
                 }
@@ -5430,6 +5515,7 @@ pub fn save_investment_lot(conn: &Connection, mut input: InvestmentLotInput) -> 
                     shares: None,
                     label_ids: None,
                     refund_of: None,
+                    cashback: None,
                 },
             )?;
             (Some(tx.id), true)
@@ -6427,7 +6513,7 @@ fn flow_for(conn: &Connection, from: &str, to: &str) -> Result<(Paise, Paise)> {
         &format!(
             "SELECT COALESCE(SUM(CASE WHEN t.kind = 'income'  THEN t.amount - {REFUNDED} ELSE 0 END), 0),
                     COALESCE(SUM(CASE WHEN t.kind = 'expense'
-                                      THEN MAX(0, t.amount - {REFUNDED} - {SHARED}) ELSE 0 END), 0)
+                                      THEN MAX(0, t.amount - {REFUNDED} - {SHARED} - {CASHBACK}) ELSE 0 END), 0)
              FROM transactions t
              WHERE {NOT_A_REFUND} AND t.occurred_at >= ?1 AND t.occurred_at <= ?2"
         ),
@@ -6605,7 +6691,7 @@ pub fn overview(conn: &Connection, month: &str, span: u32) -> Result<Overview> {
                     COALESCE(SUM(CASE WHEN t.kind = 'income'  AND {NOT_A_REFUND}
                                       THEN t.amount - {REFUNDED} ELSE 0 END), 0),
                     COALESCE(SUM(CASE WHEN t.kind = 'expense' AND {NOT_A_REFUND}
-                                      THEN MAX(0, t.amount - {REFUNDED} - {SHARED}) ELSE 0 END), 0)
+                                      THEN MAX(0, t.amount - {REFUNDED} - {SHARED} - {CASHBACK}) ELSE 0 END), 0)
              FROM transactions t
              WHERE t.occurred_at >= ?1 AND t.occurred_at <= ?2
              GROUP BY day ORDER BY day"
@@ -6675,13 +6761,13 @@ pub fn overview(conn: &Connection, month: &str, span: u32) -> Result<Overview> {
     let mut stmt = conn
         .prepare(
             &format!(
-                "SELECT t.merchant, SUM(MAX(0, t.amount - {REFUNDED} - {SHARED})), COUNT(*)
+                "SELECT t.merchant, SUM(MAX(0, t.amount - {REFUNDED} - {SHARED} - {CASHBACK})), COUNT(*)
                  FROM transactions t
                  WHERE t.kind = 'expense' AND {NOT_A_REFUND} AND t.merchant <> ''
                    AND t.occurred_at >= ?1 AND t.occurred_at <= ?2
                  GROUP BY LOWER(t.merchant)
-                 HAVING SUM(MAX(0, t.amount - {REFUNDED} - {SHARED})) > 0
-                 ORDER BY SUM(MAX(0, t.amount - {REFUNDED} - {SHARED})) DESC LIMIT 6"
+                 HAVING SUM(MAX(0, t.amount - {REFUNDED} - {SHARED} - {CASHBACK})) > 0
+                 ORDER BY SUM(MAX(0, t.amount - {REFUNDED} - {SHARED} - {CASHBACK})) DESC LIMIT 6"
             ),
         )
         .map_err(oops)?;
@@ -6903,6 +6989,7 @@ mod tests {
                 shares: None,
                 label_ids: None,
                 refund_of: None,
+                cashback: None,
             },
         )
         .unwrap();
@@ -7329,6 +7416,7 @@ mod tests {
                 shares: None,
                 label_ids: None,
                 refund_of: None,
+                cashback: None,
             },
         )
         .unwrap();
@@ -7514,6 +7602,7 @@ mod tests {
                 shares: None,
                 label_ids: None,
                 refund_of: None,
+                cashback: None,
             },
         )
         .unwrap();
@@ -7570,6 +7659,7 @@ mod tests {
                 shares: None,
                 label_ids: None,
                 refund_of: None,
+                cashback: None,
             },
         )
         .unwrap();
@@ -7622,6 +7712,7 @@ mod tests {
                 shares: None,
                 label_ids: None,
                 refund_of: None,
+                cashback: None,
             },
         )
         .unwrap();
@@ -7686,6 +7777,7 @@ mod tests {
                 shares: None,
                 label_ids: None,
                 refund_of: None,
+                cashback: None,
             },
         )
         .unwrap();
@@ -7732,6 +7824,7 @@ mod tests {
                 shares: None,
                 label_ids: None,
                 refund_of: None,
+                cashback: None,
             },
         )
         .unwrap();
@@ -7777,6 +7870,7 @@ mod tests {
                     shares: None,
                     label_ids: None,
                     refund_of: None,
+                    cashback: None,
                 },
             )
             .unwrap();
@@ -7827,6 +7921,7 @@ mod tests {
                     shares: None,
                     label_ids: None,
                     refund_of: None,
+                    cashback: None,
                 },
             )
             .unwrap();
@@ -7895,6 +7990,7 @@ mod tests {
                     shares: None,
                     label_ids: None,
                     refund_of: None,
+                    cashback: None,
                 },
             )
             .unwrap();
@@ -8126,6 +8222,7 @@ mod tests {
                 shares: None,
                 label_ids: None,
                 refund_of: None,
+                cashback: None,
             },
         )
         .unwrap()
@@ -8176,6 +8273,7 @@ mod tests {
                 shares: Some(vec![owed_to(who, amount)]),
                 label_ids: None,
                 refund_of: None,
+                cashback: None,
             },
         )
         .unwrap()
@@ -8204,6 +8302,7 @@ mod tests {
                 shares,
                 label_ids: None,
                 refund_of: None,
+                cashback: None,
             },
         )
     }
@@ -8406,6 +8505,7 @@ mod tests {
                 }]),
                 label_ids: None,
                 refund_of: None,
+                cashback: None,
             },
         )
         .unwrap();
@@ -8445,6 +8545,7 @@ mod tests {
             shares: None,
             label_ids: None,
             refund_of: None,
+            cashback: None,
         };
         assert!(save_transaction(&conn, income).is_err(), "money in");
 
@@ -8619,6 +8720,7 @@ mod tests {
                 shares: None,
                 label_ids: None,
                 refund_of: None,
+                cashback: None,
             },
         )
         .unwrap();
@@ -8989,6 +9091,7 @@ mod tests {
                 shares: None,
                 label_ids: None,
                 refund_of: None,
+                cashback: None,
             },
         )
         .unwrap();
@@ -9086,6 +9189,7 @@ mod tests {
                     shares,
                     label_ids: None,
                     refund_of: None,
+                    cashback: None,
                 },
             )
         };
@@ -9144,6 +9248,7 @@ mod tests {
                 shares: None,
                 label_ids: None,
                 refund_of: None,
+                cashback: None,
             },
         );
         assert!(direct.is_err(), "a group cannot take a posting of its own");
@@ -9273,6 +9378,7 @@ mod tests {
                     shares: None,
                     label_ids: None,
                     refund_of: None,
+                    cashback: None,
                 },
                 triage: true,
                 learn: false,
@@ -9353,6 +9459,7 @@ mod tests {
                     shares: None,
                     label_ids: None,
                     refund_of: None,
+                    cashback: None,
                 },
                 triage: true,
                 learn: false,
@@ -9415,6 +9522,7 @@ mod tests {
                 shares: None,
                 label_ids: None,
                 refund_of: None,
+                cashback: None,
             },
             triage: false,
             learn: false,
@@ -9495,6 +9603,7 @@ mod tests {
             shares: None,
             label_ids: Some(ids),
             refund_of: None,
+            cashback: None,
         };
         let saved = save_transaction(&conn, relabel(vec![label.id.clone()])).unwrap();
         assert_eq!(saved.labels.len(), 1);
@@ -10213,6 +10322,7 @@ mod tests {
                 shares: None,
                 label_ids: None,
                 refund_of: None,
+                cashback: None,
             },
         )
         .unwrap();
@@ -10288,6 +10398,7 @@ mod tests {
                 shares: None,
                 label_ids: None,
                 refund_of: refund_of.map(str::to_string),
+                cashback: None,
             },
         )
         .map(|t| t.id)
@@ -10395,6 +10506,7 @@ mod tests {
                 shares: None,
                 label_ids: None,
                 refund_of: None,
+                cashback: None,
             },
         )
         .unwrap()
@@ -10473,6 +10585,7 @@ mod tests {
                 shares: None,
                 label_ids: None,
                 refund_of: None,
+                cashback: None,
             },
         )
         .unwrap()
@@ -10506,6 +10619,7 @@ mod tests {
                 shares: None,
                 label_ids: None,
                 refund_of: None,
+                cashback: None,
             },
         );
         assert!(err.is_err());

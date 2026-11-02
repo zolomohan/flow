@@ -21,13 +21,14 @@
 use chrono::{Datelike, Duration, NaiveDate, Utc};
 use rusqlite::{params, Connection};
 
-use crate::db::{self, month_bounds, oops, shift_month, Result, NOT_A_REFUND, REFUNDED};
+use crate::cashback;
+use crate::db::{self, month_bounds, oops, shift_month, Result, CASHBACK, NOT_A_REFUND, REFUNDED};
 use crate::models::*;
 
 /// How many closed cycles the card carries with it, before the open one.
 const CYCLES_BACK: i64 = 12;
 
-fn today() -> NaiveDate {
+pub(crate) fn today() -> NaiveDate {
     Utc::now().date_naive()
 }
 
@@ -71,7 +72,7 @@ fn first_after(on: NaiveDate, day: i64) -> NaiveDate {
     day_in(y, m, day)
 }
 
-fn iso(date: NaiveDate) -> String {
+pub(crate) fn iso(date: NaiveDate) -> String {
     date.format("%Y-%m-%d").to_string()
 }
 
@@ -84,6 +85,8 @@ struct Movement {
     credited: Paise,
     /// What was paid off it.
     paid: Paise,
+    /// What the day's purchases earned back.
+    earned: Paise,
 }
 
 /// Every day this card moved, oldest first. One query answers the whole tab:
@@ -97,7 +100,9 @@ fn movements(conn: &Connection, card: &str) -> Result<Vec<(NaiveDate, Movement)>
                     COALESCE(SUM(CASE WHEN t.account_id = ?1 AND t.kind = 'income'
                                       THEN t.amount ELSE 0 END), 0),
                     COALESCE(SUM(CASE WHEN t.to_account_id = ?1 AND t.kind = 'transfer'
-                                      THEN t.amount ELSE 0 END), 0)
+                                      THEN t.amount ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN t.account_id = ?1 AND t.kind = 'expense'
+                                      THEN t.cashback ELSE 0 END), 0)
              FROM transactions t
              WHERE t.account_id = ?1 OR t.to_account_id = ?1
              GROUP BY day ORDER BY day",
@@ -107,7 +112,12 @@ fn movements(conn: &Connection, card: &str) -> Result<Vec<(NaiveDate, Movement)>
         .query_map(params![card], |r| {
             Ok((
                 r.get::<_, String>(0)?,
-                Movement { charged: r.get(1)?, credited: r.get(2)?, paid: r.get(3)? },
+                Movement {
+                    charged: r.get(1)?,
+                    credited: r.get(2)?,
+                    paid: r.get(3)?,
+                    earned: r.get(4)?,
+                },
             ))
         })
         .map_err(oops)?
@@ -127,17 +137,19 @@ fn between(days: &[(NaiveDate, Movement)], from: NaiveDate, to: NaiveDate) -> Mo
             sum.charged += m.charged;
             sum.credited += m.credited;
             sum.paid += m.paid;
+            sum.earned += m.earned;
             sum
         })
 }
 
 /// What the card was spent on over a window, the book's way: expenses only,
-/// less whatever has been refunded against them. A payment is not spending
-/// and neither is a refund, so neither is in here.
+/// less whatever has been refunded against them and whatever the card gave
+/// back on them. A payment is not spending and neither is a refund, so
+/// neither is in here.
 fn netted_spend(conn: &Connection, card: &str, from: &str, to: &str) -> Result<(Paise, i64)> {
     conn.query_row(
         &format!(
-            "SELECT COALESCE(SUM(t.amount - {REFUNDED}), 0), COUNT(*)
+            "SELECT COALESCE(SUM(t.amount - {REFUNDED} - {CASHBACK}), 0), COUNT(*)
              FROM transactions t
              WHERE t.account_id = ?1 AND t.kind = 'expense' AND {NOT_A_REFUND}
                AND t.occurred_at >= ?2 AND t.occurred_at <= ?3"
@@ -153,13 +165,13 @@ fn netted_spend(conn: &Connection, card: &str, from: &str, to: &str) -> Result<(
 fn top_merchants(conn: &Connection, card: &str, from: &str, to: &str) -> Result<Vec<MerchantSlice>> {
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT t.merchant, SUM(t.amount - {REFUNDED}), COUNT(*)
+            "SELECT t.merchant, SUM(t.amount - {REFUNDED} - {CASHBACK}), COUNT(*)
              FROM transactions t
              WHERE t.account_id = ?1 AND t.kind = 'expense' AND {NOT_A_REFUND}
                AND t.merchant <> '' AND t.occurred_at >= ?2 AND t.occurred_at <= ?3
              GROUP BY LOWER(t.merchant)
-             HAVING SUM(t.amount - {REFUNDED}) > 0
-             ORDER BY SUM(t.amount - {REFUNDED}) DESC LIMIT 5"
+             HAVING SUM(t.amount - {REFUNDED} - {CASHBACK}) > 0
+             ORDER BY SUM(t.amount - {REFUNDED} - {CASHBACK}) DESC LIMIT 5"
         ))
         .map_err(oops)?;
     let rows = stmt
@@ -192,7 +204,7 @@ fn last_used(conn: &Connection, card: &str) -> Result<Option<String>> {
 ///
 /// `None` where the card keeps no cycle from here on, which is the one case
 /// with no answer to give.
-fn close_after(from: NaiveDate, terms: &[CardTerm], live: Terms) -> Option<NaiveDate> {
+pub(crate) fn close_after(from: NaiveDate, terms: &[CardTerm], live: Terms) -> Option<NaiveDate> {
     let day_on = |d: NaiveDate| terms_on(terms, &iso(d), live).statement_day;
     let mut open = from;
     let mut day = day_on(open);
@@ -273,6 +285,7 @@ fn cycles_of(
                 closed_on: iso(*close),
                 spend: m.charged - m.credited,
                 paid: m.paid,
+                cashback: m.earned,
                 open: *close > on,
             }
         })
@@ -345,6 +358,26 @@ fn stat_of(
             (None, None, 0, 0, owed, 0)
         };
 
+    // What the card gives back. Earned on every purchase and credited a
+    // cycle at a time, so what has been earned and not yet credited is the
+    // cycle still open — and it lands the day that cycle closes.
+    let (earned_ever, credited_ever, earned_in_window): (Paise, Paise, Paise) = conn
+        .query_row(
+            "SELECT COALESCE(SUM(CASE WHEN kind = 'expense' THEN cashback ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN cashback_cycle IS NOT NULL OR pays_cashback = 1
+                                      THEN amount ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN kind = 'expense'
+                                       AND occurred_at >= ?2 AND occurred_at <= ?3
+                                      THEN cashback ELSE 0 END), 0)
+             FROM transactions WHERE account_id = ?1",
+            params![card.id, start, end],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .map_err(oops)?;
+    let cashback_pending = (earned_ever - credited_ever).max(0);
+    let cashback_credits_on = (cashback_pending > 0 || card.cashback_rate_e4 > 0)
+        .then(|| iso(cashback::closes_on(&terms, live, now)));
+
     let (spend, charges) = netted_spend(conn, &card.id, start, end)?;
     let prev_spend = match prev {
         Some((pstart, pend)) => netted_spend(conn, &card.id, pstart, pend)?.0,
@@ -381,6 +414,12 @@ fn stat_of(
         paid: window.paid,
         charges,
         last_used: last_used(conn, &card.id)?,
+        cashback_rate_e4: card.cashback_rate_e4,
+        cashback_cap: card.cashback_cap,
+        cashback_pending,
+        cashback_credits_on,
+        cashback: earned_in_window,
+        cashback_total: credited_ever,
         cycles: cycles_of(&days, &terms, live, now),
         top_categories: db::spend_by_category_in(conn, start, end, Some(&card.id))?,
         top_merchants: top_merchants(conn, &card.id, start, end)?,
@@ -399,7 +438,7 @@ fn monthly_flow(conn: &Connection, cards: &[String], from: &str, to: &str) -> Re
         "SELECT substr(t.occurred_at, 1, 7) AS m,
                 COALESCE(SUM(CASE WHEN t.kind = 'expense' AND {NOT_A_REFUND}
                                    AND t.account_id IN ({holes})
-                                  THEN t.amount - {REFUNDED} ELSE 0 END), 0),
+                                  THEN t.amount - {REFUNDED} - {CASHBACK} ELSE 0 END), 0),
                 COALESCE(SUM(CASE WHEN t.kind = 'transfer' AND t.to_account_id IN ({holes})
                                   THEN t.amount ELSE 0 END), 0)
          FROM transactions t
@@ -434,7 +473,8 @@ fn monthly_flow(conn: &Connection, cards: &[String], from: &str, to: &str) -> Re
 pub fn card_terms(conn: &Connection, account: &str) -> Result<Vec<CardTerm>> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, account_id, effective_on, credit_limit, statement_day, due_day, note
+            "SELECT id, account_id, effective_on, credit_limit, statement_day, due_day, note,
+                    cashback_rate_e4, cashback_cap
              FROM card_terms WHERE account_id = ?1 ORDER BY effective_on",
         )
         .map_err(oops)?;
@@ -448,6 +488,8 @@ pub fn card_terms(conn: &Connection, account: &str) -> Result<Vec<CardTerm>> {
                 statement_day: r.get(4)?,
                 due_day: r.get(5)?,
                 note: r.get(6)?,
+                cashback_rate_e4: r.get(7)?,
+                cashback_cap: r.get(8)?,
             })
         })
         .map_err(oops)?
@@ -465,7 +507,7 @@ pub fn card_terms(conn: &Connection, account: &str) -> Result<Vec<CardTerm>> {
 /// that is still a better answer than today's, which is the one that made
 /// the old cycle read wrong in the first place. A card with nothing recorded
 /// at all is simply on the terms it is on now.
-fn terms_on(rows: &[CardTerm], day: &str, live: Terms) -> Terms {
+pub(crate) fn terms_on(rows: &[CardTerm], day: &str, live: Terms) -> Terms {
     let mut terms = Terms { credit_limit: 0, statement_day: 0, due_day: 0 };
     let mut known = (false, false, false);
     for row in rows.iter().filter(|r| r.effective_on.as_str() <= day) {
@@ -517,6 +559,11 @@ fn terms_on(rows: &[CardTerm], day: &str, live: Terms) -> Terms {
 /// Records what a card's terms became on a day. A change dated today or
 /// earlier moves the card itself too, so the account never disagrees with
 /// its own history.
+///
+/// The cashback a card gives is a term like the rest: a rate, as a
+/// percentage scaled by 10^4, and the most a cycle earns. Zero on the rate
+/// is a card that stopped giving any back, and zero on the cap is no cap.
+#[allow(clippy::too_many_arguments)]
 pub fn save_card_term(
     conn: &Connection,
     account: &str,
@@ -524,20 +571,36 @@ pub fn save_card_term(
     credit_limit: Option<Paise>,
     statement_day: Option<i64>,
     due_day: Option<i64>,
+    cashback_rate_e4: Option<i64>,
+    cashback_cap: Option<Paise>,
     note: Option<&str>,
 ) -> Result<CardTerm> {
-    if credit_limit.is_none() && statement_day.is_none() && due_day.is_none() {
+    if credit_limit.is_none()
+        && statement_day.is_none()
+        && due_day.is_none()
+        && cashback_rate_e4.is_none()
+        && cashback_cap.is_none()
+    {
         return Err(oops("a change has to change something"));
+    }
+    if cashback_rate_e4.is_some_and(|r| !(0..=1_000_000).contains(&r)) {
+        return Err(oops("cashback is a share of what was paid, so 0–100%"));
+    }
+    if cashback_cap.is_some_and(|c| c < 0) {
+        return Err(oops("a cap on cashback can't be below nothing"));
     }
     conn.execute(
         "INSERT INTO card_terms
-             (id, account_id, effective_on, credit_limit, statement_day, due_day, note, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             (id, account_id, effective_on, credit_limit, statement_day, due_day, note, created_at,
+              cashback_rate_e4, cashback_cap)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(account_id, effective_on)
          DO UPDATE SET credit_limit = excluded.credit_limit,
                        statement_day = excluded.statement_day,
                        due_day = excluded.due_day,
-                       note = excluded.note",
+                       note = excluded.note,
+                       cashback_rate_e4 = excluded.cashback_rate_e4,
+                       cashback_cap = excluded.cashback_cap",
         params![
             db::new_id(),
             account,
@@ -546,7 +609,9 @@ pub fn save_card_term(
             statement_day,
             due_day,
             note,
-            db::now()
+            db::now(),
+            cashback_rate_e4,
+            cashback_cap
         ],
     )
     .map_err(oops)?;
@@ -957,13 +1022,15 @@ mod tests {
         let day = today();
         let raised = day - Duration::days(30);
 
-        save_card_term(&conn, &card, &iso(raised), Some(2_00_000_00), None, None, Some("raised"))
+        save_card_term(&conn, &card, &iso(raised), Some(2_00_000_00), None, None, None, None, Some("raised"))
             .unwrap();
         save_card_term(
             &conn,
             &card,
             &iso(raised - Duration::days(400)),
             Some(80_000_00),
+            None,
+            None,
             None,
             None,
             None,
@@ -1023,6 +1090,8 @@ mod tests {
             Some(2),
             Some(22),
             None,
+            None,
+            None,
         )
         .unwrap();
         assert_eq!(row_of(&conn, &card), (1_00_000_00, 2, 22));
@@ -1056,7 +1125,7 @@ mod tests {
     fn the_recorded_terms_outrank_the_account_row() {
         let (conn, _path) = book();
         let card = account(&conn, "credit", 0, 0, 0);
-        save_card_term(&conn, &card, &iso(today() - Duration::days(40)), None, Some(2), Some(22), None)
+        save_card_term(&conn, &card, &iso(today() - Duration::days(40)), None, Some(2), Some(22), None, None, None)
             .unwrap();
         // As if something had blanked the copy behind the card's back.
         conn.execute(
@@ -1079,7 +1148,7 @@ mod tests {
         let (conn, _path) = book();
         let card = account(&conn, "credit", 50_000_00, 5, 22);
         let ahead = iso(today() + Duration::days(30));
-        save_card_term(&conn, &card, &ahead, Some(3_00_000_00), Some(20), None, None).unwrap();
+        save_card_term(&conn, &card, &ahead, Some(3_00_000_00), Some(20), None, None, None, None).unwrap();
 
         let month = Utc::now().format("%Y-%m").to_string();
         let stat = cards_overview(&conn, &month, 1, None, None).unwrap().cards.remove(0);
@@ -1101,13 +1170,15 @@ mod tests {
         // ago. Only the change says so — the account carries today's terms.
         let card = account(&conn, "credit", 0, 20, 0);
         let moved = day_in(today().year(), today().month(), 1) - Duration::days(100);
-        save_card_term(&conn, &card, &iso(moved), None, Some(20), None, None).unwrap();
+        save_card_term(&conn, &card, &iso(moved), None, Some(20), None, None, None, None).unwrap();
         save_card_term(
             &conn,
             &card,
             &iso(moved - Duration::days(700)),
             None,
             Some(5),
+            None,
+            None,
             None,
             None,
         )

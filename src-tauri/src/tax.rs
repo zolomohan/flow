@@ -115,7 +115,7 @@ fn totals_by_tag(
                 COUNT(DISTINCT att.id)
          FROM att
          LEFT JOIN tax_map m ON m.category_id = att.category_id
-         WHERE att.kind = ?1 AND att.refund_of IS NULL
+         WHERE att.kind = ?1 AND att.refund_of IS NULL AND att.cashback_cycle IS NULL AND att.pays_cashback = 0
            AND att.occurred_at >= ?2 AND att.occurred_at <= ?3
          GROUP BY 1"
     );
@@ -142,7 +142,7 @@ fn categories_by_tag(
          FROM att
          LEFT JOIN tax_map m ON m.category_id = att.category_id
          LEFT JOIN categories c ON c.id = att.category_id
-         WHERE att.kind = ?1 AND att.refund_of IS NULL
+         WHERE att.kind = ?1 AND att.refund_of IS NULL AND att.cashback_cycle IS NULL AND att.pays_cashback = 0
            AND att.occurred_at >= ?2 AND att.occurred_at <= ?3
          GROUP BY 1, 2
          ORDER BY 6 DESC"
@@ -187,7 +187,7 @@ fn sources_by_tag(
                 COALESCE(SUM(att.net_amount), 0), COUNT(DISTINCT att.id)
          FROM att
          LEFT JOIN tax_map m ON m.category_id = att.category_id
-         WHERE att.kind = ?1 AND att.refund_of IS NULL AND att.merchant <> ''
+         WHERE att.kind = ?1 AND att.refund_of IS NULL AND att.cashback_cycle IS NULL AND att.pays_cashback = 0 AND att.merchant <> ''
            AND att.occurred_at >= ?2 AND att.occurred_at <= ?3
          GROUP BY 1, 2
          ORDER BY 3 DESC"
@@ -235,7 +235,7 @@ fn monthly_by_tag(
                 COALESCE(SUM(att.net_amount), 0)
          FROM att
          LEFT JOIN tax_map m ON m.category_id = att.category_id
-         WHERE att.kind = ?1 AND att.refund_of IS NULL
+         WHERE att.kind = ?1 AND att.refund_of IS NULL AND att.cashback_cycle IS NULL AND att.pays_cashback = 0
            AND att.occurred_at >= ?2 AND att.occurred_at <= ?3
          GROUP BY 1, 2"
     );
@@ -303,7 +303,7 @@ fn interest_by_account(conn: &Connection, from: &str, to: &str) -> Result<Vec<Ta
          FROM att
          JOIN tax_map m ON m.category_id = att.category_id AND m.tag = 'interest'
          JOIN accounts a ON a.id = att.account_id
-         WHERE att.kind = 'income' AND att.refund_of IS NULL
+         WHERE att.kind = 'income' AND att.refund_of IS NULL AND att.cashback_cycle IS NULL AND att.pays_cashback = 0
            AND att.occurred_at >= ?1 AND att.occurred_at <= ?2
          GROUP BY 1
          ORDER BY 5 DESC"
@@ -329,7 +329,7 @@ fn income_through(conn: &Connection, from: &str, upto: &str) -> Result<Paise> {
     let sql = format!(
         "WITH att AS ({ATTRIBUTED})
          SELECT COALESCE(SUM(att.net_amount), 0) FROM att
-         WHERE att.kind = 'income' AND att.refund_of IS NULL
+         WHERE att.kind = 'income' AND att.refund_of IS NULL AND att.cashback_cycle IS NULL AND att.pays_cashback = 0
            AND att.occurred_at >= ?1 AND att.occurred_at <= ?2"
     );
     conn.query_row(&sql, params![from, upto], |r| r.get(0)).map_err(oops)
@@ -370,12 +370,12 @@ fn unfiled(conn: &Connection, from: &str, to: &str) -> Result<Vec<Transaction>> 
     let sql = format!(
         "WITH att AS ({ATTRIBUTED})
          {}{TX_FROM}
-         WHERE t.kind = 'income' AND t.refund_of IS NULL
+         WHERE t.kind = 'income' AND t.refund_of IS NULL AND t.cashback_cycle IS NULL AND t.pays_cashback = 0
            AND t.occurred_at >= ?1 AND t.occurred_at <= ?2
            AND t.id IN (
              SELECT att.id FROM att
              LEFT JOIN tax_map m ON m.category_id = att.category_id
-             WHERE m.tag IS NULL AND att.kind = 'income' AND att.refund_of IS NULL
+             WHERE m.tag IS NULL AND att.kind = 'income' AND att.refund_of IS NULL AND att.cashback_cycle IS NULL AND att.pays_cashback = 0
            )
          ORDER BY t.occurred_at DESC, t.created_at DESC
          LIMIT {UNFILED_CAP}",
@@ -478,7 +478,7 @@ pub fn tax_export(conn: &Connection, fy: i32) -> Result<String> {
          LEFT JOIN tax_map m ON m.category_id = att.category_id
          LEFT JOIN categories c ON c.id = att.category_id
          JOIN accounts a ON a.id = att.account_id
-         WHERE att.refund_of IS NULL AND att.net_amount <> 0
+         WHERE att.refund_of IS NULL AND att.cashback_cycle IS NULL AND att.pays_cashback = 0 AND att.net_amount <> 0
            AND att.occurred_at >= ?1 AND att.occurred_at <= ?2
            AND (att.kind = 'income' OR m.tag IS NOT NULL)
          ORDER BY att.occurred_at"

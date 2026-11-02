@@ -1,5 +1,6 @@
 mod capture;
 mod cards;
+mod cashback;
 mod db;
 mod demo;
 mod folders;
@@ -18,14 +19,32 @@ use models::*;
 type R<T> = std::result::Result<T, String>;
 
 /// Runs `f` with the single shared connection held open for the app's lifetime.
+///
+/// Anything that wrote to the book is followed by bringing card cashback into
+/// line with it. A purchase can reach a card from a dozen places — the sheet,
+/// an import, a plan paid, a sentence said to the phone, a bulk edit — and
+/// every one of them changes what the cycle earned and what it is credited,
+/// so it is done once here rather than remembered at each of them.
 fn with_db<T>(db: &State<Db>, f: impl FnOnce(&rusqlite::Connection) -> R<T>) -> R<T> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
-    f(&conn)
+    let before = conn.total_changes();
+    let out = f(&conn);
+    if conn.total_changes() != before {
+        if let Err(e) = cashback::settle(&conn) {
+            eprintln!("cashback could not be settled: {e}");
+        }
+    }
+    out
 }
 
 #[tauri::command]
 fn list_accounts(db: State<Db>) -> R<Vec<Account>> {
-    with_db(&db, db::list_accounts)
+    with_db(&db, |c| {
+        // Read on every refresh, so it is also where a cycle that closed while
+        // the app sat open gets its credit: nothing else changed to say so.
+        cashback::settle(c)?;
+        db::list_accounts(c)
+    })
 }
 
 #[tauri::command]
@@ -181,6 +200,8 @@ fn save_card_term(
     credit_limit: Option<Paise>,
     statement_day: Option<i64>,
     due_day: Option<i64>,
+    cashback_rate_e4: Option<i64>,
+    cashback_cap: Option<Paise>,
     note: Option<String>,
 ) -> R<CardTerm> {
     with_db(&db, |c| {
@@ -191,9 +212,24 @@ fn save_card_term(
             credit_limit,
             statement_day,
             due_day,
+            cashback_rate_e4,
+            cashback_cap,
             note.as_deref(),
         )
     })
+}
+
+/// What a purchase being written would earn back on the card it is on —
+/// asked before it is saved, so the sheet can say what it will cost.
+#[tauri::command]
+fn cashback_quote(
+    db: State<Db>,
+    account_id: String,
+    occurred_at: String,
+    amount: Paise,
+    id: Option<String>,
+) -> R<CashbackQuote> {
+    with_db(&db, |c| cashback::quote(c, &account_id, &occurred_at, amount, id.as_deref()))
 }
 
 #[tauri::command]
@@ -212,6 +248,10 @@ fn cards(
     to: Option<String>,
 ) -> R<CardsOverview> {
     with_db(&db, |c| {
+        // The card page can be the first thing read after a cycle closes, so
+        // the credit is written before it is read rather than on the next
+        // refresh.
+        cashback::settle(c)?;
         cards::cards_overview(c, &month, span.unwrap_or(1), from.as_deref(), to.as_deref())
     })
 }
@@ -738,6 +778,8 @@ pub fn run() {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
             let conn = db::open(&dir.join("midas.sqlite3")).map_err(std::io::Error::other)?;
+            // Cycles that closed while the app was shut are credited now.
+            cashback::settle(&conn).map_err(std::io::Error::other)?;
 
             // A brand-new book gets sample data once, so the first launch has
             // something to show. Wiping from Settings sets the flag and sticks.
@@ -777,6 +819,7 @@ pub fn run() {
             overview,
             cards,
             card_terms,
+            cashback_quote,
             save_card_term,
             delete_card_term,
             tax_year,

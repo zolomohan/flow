@@ -8,7 +8,9 @@ import {
 } from '../components/ui';
 import { MonthNav, periodLabel } from '../components/MonthNav';
 import { useStore } from '../lib/store';
-import { dayKey, dayLabel, money, monthWindowBounds } from '../lib/format';
+import {
+  dayKey, dayLabel, effectiveAmount, isCashbackCredit, money, monthWindowBounds,
+} from '../lib/format';
 import { itemVariants, listVariants, popover, spring } from '../lib/motion';
 import type {
   Transaction, TransactionPatch, TransactionSummary, TxKind,
@@ -295,9 +297,18 @@ export function Transactions({
     return [...map.entries()].map(([key, items]) => ({
       key,
       items,
+      // A purchase counts for what it cost once the card's cashback is off
+      // it, so the credit that later pays that cashback out adds nothing.
       net: items.reduce(
         (sum, tx) =>
-          sum + (tx.kind === 'income' ? tx.amount : tx.kind === 'expense' ? -tx.amount : 0),
+          isCashbackCredit(tx)
+            ? sum
+            : sum +
+              (tx.kind === 'income'
+                ? tx.amount
+                : tx.kind === 'expense'
+                  ? -effectiveAmount(tx)
+                  : 0),
         0,
       ),
     }));

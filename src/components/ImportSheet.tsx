@@ -298,6 +298,12 @@ export function ImportSheet({ open: isOpen, onClose }: { open: boolean; onClose:
       refundOfMerchant: null,
       refundOfAmount: null,
       refunded: 0,
+      // Nor has a card worked out what it gives back on it: that happens
+      // once it is in the book, against the rest of its cycle.
+      cashback: 0,
+      cashbackSet: null,
+      cashbackCycle: null,
+      paysCashback: false,
     };
   };
 

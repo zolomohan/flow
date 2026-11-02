@@ -12,7 +12,8 @@ import { periodLabel } from '../components/MonthNav';
 import { api } from '../lib/api';
 import { useStore } from '../lib/store';
 import {
-  compactMoney, money, monthKey, monthWindowBounds, percent, shiftMonth, shortDayLabel,
+  cashbackRate, compactMoney, money, monthKey, monthWindowBounds, percent, shiftMonth,
+  shortDayLabel,
 } from '../lib/format';
 import { itemVariants, listVariants } from '../lib/motion';
 import type { CardStat, Paise, Transaction, TransactionSummary } from '../lib/types';
@@ -463,6 +464,12 @@ export function CardPage({
     ? daysUntil(card.cycles[card.cycles.length - 1].closedOn)
     : null;
   const categoryPeak = card.topCategories[0]?.total ?? 1;
+  // What the card gives back. Earned on every purchase and paid a cycle at a
+  // time, so what is shown is what the open cycle has earned and not been
+  // credited yet — it goes back to nothing the day the cycle closes, when it
+  // lands on the card.
+  const givesBack = card.cashbackRateE4 > 0 || card.cashbackPending > 0 || card.cashbackTotal > 0;
+  const capLeft = card.cashbackCap > 0 ? Math.max(0, card.cashbackCap - card.cashbackPending) : null;
 
   // What each cycle came to. What was paid against it is the statements list
   // below, where it can be read as a fact rather than guessed off a bar.
@@ -607,6 +614,23 @@ export function CardPage({
                 : 'nothing since the statement'
             }
           />
+          {givesBack && (
+            <Figure
+              label={card.cashbackRateE4 > 0 ? `Cashback · ${cashbackRate(card.cashbackRateE4)}` : 'Cashback'}
+              value={money(card.cashbackPending)}
+              tone={card.cashbackPending > 0 ? 'good' : 'flat'}
+              hint={[
+                card.cashbackCreditsOn ? `credited ${shortDayLabel(card.cashbackCreditsOn)}` : null,
+                capLeft !== null
+                  ? capLeft > 0
+                    ? `${compactMoney(capLeft)} of ${compactMoney(card.cashbackCap)} left`
+                    : `${compactMoney(card.cashbackCap)} cap reached`
+                  : card.cashbackTotal > 0
+                    ? `${compactMoney(card.cashbackTotal)} credited so far`
+                    : null,
+              ].filter(Boolean).join(' · ') || 'earned this cycle'}
+            />
+          )}
         </div>
 
         {points.length > 0 && (
@@ -645,7 +669,10 @@ export function CardPage({
                       {shortDayLabel(cycle.closedOn)}
                       <small>from {shortDayLabel(cycle.from)}</small>
                     </span>
-                    <span className="cycle-amount">{money(cycle.spend)}</span>
+                    <span className="cycle-amount">
+                      {money(cycle.spend)}
+                      {cycle.cashback > 0 && <small>{money(cycle.cashback)} back</small>}
+                    </span>
                     <span className={`cycle-paid ${cleared ? 'is-clear' : ''}`}>
                       {cleared && <Icon name="check" size={11} strokeWidth={3} />}
                       {cycle.paid > 0 ? money(cycle.paid) : 'unpaid'}

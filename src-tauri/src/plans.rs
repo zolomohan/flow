@@ -1078,6 +1078,7 @@ mod tests {
                 shares: None,
                 label_ids: None,
                 refund_of: None,
+                cashback: None,
             },
         )
         .unwrap();
@@ -1119,6 +1120,7 @@ mod tests {
             shares: None,
             label_ids: None,
             refund_of: None,
+            cashback: None,
         }
     }
 }
