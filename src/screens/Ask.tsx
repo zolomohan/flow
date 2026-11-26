@@ -1,15 +1,24 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
+import { open as pickFiles } from '@tauri-apps/plugin-dialog';
 import { Icon } from '../components/Icon';
-import { Button } from '../components/ui';
+import { Button, Confirm } from '../components/ui';
 import { ChatMarkdown } from '../components/ChatMarkdown';
-import { api } from '../lib/api';
+import { api, isDesktop } from '../lib/api';
 import {
-  ask, decide, decideAll, newChat, stop, takeReturned, turns, useChat,
+  ask, attach, decide, decideAll, deleteChat, detach, newChat, openChat, refreshChats, stop,
+  takeReturned, turns, useChat,
   type Part,
 } from '../lib/chat';
 import { spring } from '../lib/motion';
 import type { AiPendingChange, AiStatus } from '../lib/types';
+
+/** What the statement reader can open. */
+const STATEMENT_EXTENSIONS = ['pdf', 'csv', 'tsv', 'txt', 'xls', 'xlsx', 'xlsm', 'ods', 'png', 'jpg', 'jpeg', 'webp', 'gif'];
+const isStatement = (path: string) =>
+  STATEMENT_EXTENSIONS.includes(path.split('.').pop()?.toLowerCase() ?? '');
+const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
 /** Somewhere to start, for a book you haven't asked anything yet. */
 const STARTERS = [
@@ -31,12 +40,55 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
   const chat = useChat();
   const [draft, setDraft] = useState('');
   const [status, setStatus] = useState<AiStatus | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const [refused, setRefused] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const bottom = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     api.aiStatus().then(setStatus).catch(() => setStatus(null));
+    void refreshChats();
   }, []);
+
+  // Statements dropped anywhere on the window while Ask is open are
+  // attached to the next question. The webview hands over real paths,
+  // which is what the reader needs.
+  useEffect(() => {
+    if (!isDesktop) return;
+    const off = getCurrentWebview().onDragDropEvent((e) => {
+      const p = e.payload;
+      if (p.type === 'enter' || p.type === 'over') setDragging(true);
+      else if (p.type === 'leave') setDragging(false);
+      else if (p.type === 'drop') {
+        setDragging(false);
+        const ok = p.paths.filter(isStatement);
+        const not = p.paths.filter((x) => !isStatement(x));
+        if (ok.length) attach(ok);
+        setRefused(
+          not.length
+            ? `${not.map(fileName).join(', ')} ${not.length === 1 ? "isn't a statement" : "aren't statements"} Claude can read.`
+            : null,
+        );
+        input.current?.focus({ preventScroll: true });
+      }
+    });
+    return () => {
+      void off.then((f) => f());
+    };
+  }, []);
+
+  const browse = async () => {
+    const picked = await pickFiles({
+      title: 'Which statements should Claude read?',
+      multiple: true,
+      directory: false,
+      filters: [{ name: 'Statements', extensions: STATEMENT_EXTENSIONS }],
+    });
+    if (!picked) return;
+    attach(Array.isArray(picked) ? picked : [picked]);
+    input.current?.focus({ preventScroll: true });
+  };
 
   // A question that didn't get an answer comes back to be asked again.
   useEffect(() => {
@@ -71,11 +123,14 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
     return () => pane.removeEventListener('scroll', onScroll);
   }, []);
   useEffect(() => {
-    if (following.current) bottom.current?.scrollIntoView({ block: 'end' });
+    // Scrolls only the log's own pane: scrollIntoView would also nudge every
+    // scrollable ancestor, the window and the sidebar included.
+    const pane = scrollParent(bottom.current);
+    if (following.current && pane) pane.scrollTop = pane.scrollHeight;
   }, [chat.live, chat.messages, chat.pending, chat.asking]);
 
   const submit = (text = draft) => {
-    if (!text.trim() || busy || waiting) return;
+    if ((!text.trim() && chat.files.length === 0) || busy || waiting) return;
     following.current = true;
     setDraft('');
     void ask(text);
@@ -91,21 +146,71 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
   const empty = history.length === 0 && !chat.asking;
 
   return (
+    <div className="ask-layout">
+    <aside className="ask-chats">
+      <Button icon="plus" tone="secondary" onClick={newChat} disabled={busy} block>
+        New chat
+      </Button>
+      <div className="ask-chats-list">
+        {chat.chats.length === 0 && <p className="ask-chats-none">Your chats will be kept here.</p>}
+        {chat.chats.map((c) => (
+          <div key={c.id} className={`ask-chat-item ${c.id === chat.chatId ? 'is-active' : ''}`}>
+            <button className="ask-chat-open" onClick={() => void openChat(c.id)} disabled={busy} title={c.title}>
+              <span className="ask-chat-title">{c.title}</span>
+              <span className="ask-chat-when">{when(c.updatedAt)}</span>
+            </button>
+            <button
+              className="ask-chat-delete"
+              onClick={() => setDeleting(c.id)}
+              disabled={busy && c.id === chat.chatId}
+              aria-label="Delete chat"
+              title="Delete chat"
+            >
+              <Icon name="trash-2" size={14} />
+            </button>
+          </div>
+        ))}
+      </div>
+    </aside>
+    <Confirm
+      open={deleting !== null}
+      title="Delete this chat?"
+      onCancel={() => setDeleting(null)}
+      onConfirm={async () => {
+        const id = deleting;
+        setDeleting(null);
+        if (id) await deleteChat(id);
+      }}
+    >
+      The conversation goes for good. Anything it changed in your book stays as it is.
+    </Confirm>
     <div className="screen ask-screen">
       <header className="screen-head">
         <div>
           <h1>Ask</h1>
           <p>
-            Questions about your money, answered from your book by Claude. It can make changes
-            too, and asks you before each one.
+            Questions about your money, answered from your book by Claude. Drop a statement here
+            to import it. Claude asks you before every change.
           </p>
         </div>
-        {!empty && (
-          <Button icon="plus" tone="ghost" onClick={newChat}>
-            New chat
-          </Button>
-        )}
       </header>
+
+      <AnimatePresence>
+        {dragging && (
+          <motion.div
+            className="ask-drop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <div>
+              <Icon name="file-text" size={26} />
+              <strong>Drop statements to attach them</strong>
+              <span>PDF, CSV, Excel or a picture of one</span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {status && !connected && (
         <div className="ask-notice">
@@ -124,7 +229,10 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
               <Icon name="sparkles" size={22} />
             </div>
             <strong>Ask anything about your book</strong>
-            <p>Spending, income, cards, debts, investments: Claude looks it up and shows its working.</p>
+            <p>
+              Spending, income, cards, debts, investments: Claude looks it up and shows its working.
+              Drop a statement anywhere on this screen to have it imported.
+            </p>
             <div className="ask-starters">
               {STARTERS.map((s) => (
                 <button key={s} className="ask-starter" onClick={() => submit(s)} disabled={busy}>
@@ -137,12 +245,12 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
 
         {history.map((turn, i) => (
           <div key={i} className="ask-turn">
-            <Question text={turn.question} />
+            <Question text={turn.question} files={turn.files} />
             <Answer parts={turn.answer} />
           </div>
         ))}
 
-        {chat.asking && <Question text={chat.asking} />}
+        {chat.asking && <Question text={chat.asking} files={chat.askingFiles} />}
         {chat.live && <Answer parts={chat.live} live />}
 
         <AnimatePresence>
@@ -183,6 +291,30 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
       </div>
 
       <div className="ask-composer">
+        {(chat.files.length > 0 || refused) && (
+          <div className="ask-attached">
+            {chat.files.map((f) => (
+              <span key={f} className="ask-file" title={f}>
+                <Icon name="file-text" size={13} />
+                {fileName(f)}
+                <button onClick={() => detach(f)} aria-label={`Remove ${fileName(f)}`}>
+                  <Icon name="x" size={12} strokeWidth={2.4} />
+                </button>
+              </span>
+            ))}
+            {refused && <span className="ask-refused">{refused}</span>}
+          </div>
+        )}
+        <div className="ask-compose-row">
+        <button
+          className="ask-clip"
+          onClick={browse}
+          disabled={busy || waiting}
+          aria-label="Attach a statement"
+          title="Attach a statement"
+        >
+          <Icon name="paperclip" size={17} />
+        </button>
         <textarea
           ref={input}
           rows={1}
@@ -190,7 +322,9 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
           placeholder={
             waiting
               ? 'Apply or decline the change above first'
-              : 'Ask about your spending, or ask for a change…'
+              : chat.files.length > 0
+                ? 'Which account is it for? Or just send to import it'
+                : 'Ask about your spending, or ask for a change…'
           }
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKey}
@@ -205,24 +339,50 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
           <button
             className="ask-send"
             onClick={() => submit()}
-            disabled={!draft.trim() || waiting}
+            disabled={(!draft.trim() && chat.files.length === 0) || waiting}
             aria-label="Send"
             title="Send  ↵"
           >
             <Icon name="arrow-up" size={17} strokeWidth={2.4} />
           </button>
         )}
+        </div>
       </div>
+    </div>
     </div>
   );
 }
 
-function Question({ text }: { text: string }) {
+function Question({ text, files = [] }: { text: string; files?: string[] }) {
   return (
     <div className="ask-q">
-      <div className="ask-q-bubble">{text}</div>
+      {files.length > 0 && (
+        <div className="ask-q-files">
+          {files.map((f) => (
+            <span key={f} className="ask-file" title={f}>
+              <Icon name="file-text" size={13} />
+              {fileName(f)}
+            </span>
+          ))}
+        </div>
+      )}
+      {text && <div className="ask-q-bubble">{text}</div>}
     </div>
   );
+}
+
+/** When a chat was last touched, the way the list wants it: a time today,
+ *  a day this week, a date otherwise. */
+function when(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const now = new Date();
+  const days = Math.floor((now.getTime() - d.getTime()) / 86_400_000);
+  if (d.toDateString() === now.toDateString()) {
+    return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  }
+  if (days < 7) return d.toLocaleDateString(undefined, { weekday: 'short' });
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 }
 
 function Answer({ parts, live = false }: { parts: Part[]; live?: boolean }) {
@@ -260,8 +420,11 @@ function LookupLine({ part }: { part: Part & { kind: 'lookup' } }) {
   const [open, setOpen] = useState(false);
   const sql = (part.input as { sql?: string } | undefined)?.sql;
   const month = (part.input as { month?: string } | undefined)?.month;
+  const path = (part.input as { path?: string } | undefined)?.path;
   const label =
-    part.tool === 'query_book'
+    part.tool === 'read_statement'
+      ? `Read ${path ? fileName(path) : 'the statement'}`
+      : part.tool === 'query_book'
       ? 'Looked in the book'
       : part.tool === 'list_accounts'
         ? 'Read account balances'
@@ -269,7 +432,11 @@ function LookupLine({ part }: { part: Part & { kind: 'lookup' } }) {
           ? `Read the overview${month ? ` for ${month}` : ''}`
           : part.tool;
   const detail = !part.done
-    ? 'looking…'
+    ? part.tool === 'read_statement'
+      ? part.found
+        ? `${part.found} found so far…`
+        : 'reading…'
+      : 'looking…'
     : part.error
       ? 'failed'
       : part.rows !== undefined

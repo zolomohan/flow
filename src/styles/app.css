@@ -131,6 +131,7 @@ kbd {
      bits slide off the bottom with it. */
   grid-template-rows: minmax(0, 1fr);
   height: 100%;
+  overflow: hidden;
   background: var(--bg);
 }
 
@@ -8512,6 +8513,7 @@ kbd {
 
 .ask-screen {
   max-width: 860px;
+  width: 100%;
   padding-bottom: 18px;
 }
 .ask-log {
@@ -8766,9 +8768,9 @@ kbd {
   position: sticky;
   bottom: 14px;
   display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  padding: 8px 8px 8px 16px;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 8px 8px 8px;
   border: 1px solid var(--line);
   border-radius: var(--r-xl);
   background: var(--surface);
@@ -8776,6 +8778,158 @@ kbd {
   z-index: 2;
 }
 .ask-composer:focus-within { border-color: var(--line-strong); }
+.ask-compose-row { display: flex; align-items: flex-end; gap: 6px; }
+.ask-clip {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--r-full);
+  background: none;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+.ask-clip:hover:not(:disabled) { background: var(--surface-inset); color: var(--ink); }
+.ask-clip:disabled { opacity: 0.4; cursor: default; }
+.ask-attached { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 2px 4px 0; }
+.ask-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 5px 6px 5px 9px;
+  border-radius: var(--r-sm);
+  background: var(--surface-inset);
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.ask-file svg { color: var(--ink-3); flex-shrink: 0; }
+.ask-file button {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: var(--r-full);
+  background: none;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+.ask-file button:hover { background: var(--line); color: var(--ink); }
+.ask-refused { font-size: 12px; color: var(--red); font-weight: 500; }
+.ask-q { flex-direction: column; align-items: flex-end; gap: 6px; }
+.ask-q-files { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.ask-q-files .ask-file { padding-right: 10px; background: var(--surface); border: 1px solid var(--line-soft); }
+
+.ask-layout {
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  min-height: 100%;
+}
+.ask-chats {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100vh;
+  padding: calc(var(--titlebar-h) + 10px) 10px 16px 16px;
+  border-right: 1px solid var(--line-soft);
+}
+.ask-chats-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 -4px;
+  padding: 0 4px;
+}
+.ask-chats-none { padding: 8px 6px; font-size: 12.5px; color: var(--ink-3); font-weight: 500; }
+.ask-chat-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  border-radius: var(--r-md);
+}
+.ask-chat-item:hover,
+.ask-chat-item.is-active { background: var(--surface); }
+.ask-chat-item.is-active { box-shadow: var(--shadow-xs); }
+.ask-chat-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 8px 4px 8px 10px;
+  border: none;
+  background: none;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.ask-chat-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.ask-chat-when { font-size: 11.5px; color: var(--ink-3); font-weight: 500; }
+.ask-chat-delete {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin-right: 4px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--ink-3);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--fast) var(--ease);
+}
+.ask-chat-item:hover .ask-chat-delete,
+.ask-chat-delete:focus-visible { opacity: 1; }
+.ask-chat-delete:hover { background: var(--red-soft); color: var(--red); }
+
+.ask-drop {
+  position: fixed;
+  inset: 0 0 0 var(--sidebar-w);
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter: blur(3px);
+  pointer-events: none;
+}
+.ask-drop > div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: min(520px, 100%);
+  padding: 44px 24px;
+  border: 2px dashed var(--blue);
+  border-radius: var(--r-xl);
+  background: var(--surface);
+  color: var(--ink);
+  text-align: center;
+}
+.ask-drop svg { color: var(--blue); }
+.ask-drop strong { font-size: 16px; font-weight: 600; }
+.ask-drop span { font-size: 13px; color: var(--ink-3); font-weight: 500; }
+
 .ask-composer textarea {
   flex: 1;
   min-height: 24px;
@@ -8808,6 +8962,17 @@ kbd {
 .ask-send.is-stop { background: var(--ink-2); }
 
 @media (max-width: 720px) {
+  .ask-layout { grid-template-columns: minmax(0, 1fr); }
+  .ask-chats {
+    position: static;
+    height: auto;
+    max-height: 220px;
+    padding: calc(var(--titlebar-h) + 10px) 16px 8px;
+    border-right: none;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .ask-chat-delete { opacity: 1; }
+  .ask-drop { inset: 0; }
   .ask-q-bubble { max-width: 90%; }
   .ask-pending-card { flex-direction: column; }
   .ask-composer { bottom: 8px; }

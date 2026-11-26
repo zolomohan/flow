@@ -1,7 +1,9 @@
 import { useSyncExternalStore } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { api, isDesktop } from './api';
-import type { AiChatProgress, AiChatReply, AiPendingChange } from './types';
+import type {
+  AiChatProgress, AiChatReply, AiPendingChange, AiReadProgress, ChatSummary,
+} from './types';
 
 /**
  * The conversation on the Ask screen. It lives here rather than in the
@@ -17,7 +19,14 @@ import type { AiChatProgress, AiChatReply, AiPendingChange } from './types';
  * changes `pending` and the transcript ending on Claude's turn. Each one is
  * applied or declined here, and once all of them have an answer the
  * conversation is sent back with those answers to carry on.
+ *
+ * Every conversation is saved to the book after each reply, pending changes
+ * and all, so it can be opened again from the list beside it.
  */
+
+/** How attached statements are written into a question: this line, then
+ *  one `- /path` line per file. Rust reads the same marker. */
+export const ATTACHED = 'Attached statement files:';
 
 /** The tools that change the book, as against the ones that read it. */
 const WRITE_TOOLS = new Set([
@@ -27,6 +36,7 @@ const WRITE_TOOLS = new Set([
   'delete_transactions',
   'add_category',
   'label_transactions',
+  'import_statement',
 ]);
 
 export const isWriteTool = (tool: string) => WRITE_TOOLS.has(tool);
@@ -38,6 +48,8 @@ export interface Lookup {
   rows?: number;
   error?: string;
   done: boolean;
+  /** Transactions found so far, while a statement is being read. */
+  found?: number;
 }
 
 /** A change Claude made, or was told not to. */
@@ -57,16 +69,26 @@ export type Part =
 /** One exchange as the screen draws it. */
 export interface Turn {
   question: string;
+  /** Statements attached to the question, by path. */
+  files: string[];
   answer: Part[];
 }
 
 interface State {
+  /** The conversation open now; null until its first question. */
+  chatId: string | null;
+  title: string;
+  /** Every saved conversation, latest first. */
+  chats: ChatSummary[];
+  /** Statements waiting in the composer for the next question. */
+  files: string[];
   messages: unknown[];
   /** The answer streaming in, while one is. */
   live: Part[] | null;
   run: string | null;
-  /** The question being answered, until it is. */
+  /** The question being answered, until it is, and what came with it. */
   asking: string | null;
+  askingFiles: string[];
   /** Changes waiting on the user, and what they have said so far. */
   pending: AiPendingChange[];
   decisions: Record<string, boolean>;
@@ -76,6 +98,11 @@ interface State {
 }
 
 let state: State = {
+  chatId: null,
+  title: '',
+  chats: [],
+  files: [],
+  askingFiles: [],
   messages: [],
   live: null,
   run: null,
@@ -101,6 +128,7 @@ let listening = false;
 function startListening() {
   if (listening || !isDesktop) return;
   listening = true;
+  startReadListening();
   void listen<AiChatProgress>('ai-chat-progress', (e) => {
     const p = e.payload;
     if (p.run !== state.run || state.live === null) return;
@@ -126,6 +154,18 @@ function startListening() {
     } else {
       return;
     }
+    set({ live });
+  });
+}
+
+function startReadListening() {
+  void listen<AiReadProgress>('ai-read-progress', (e) => {
+    const p = e.payload;
+    if (p.run !== state.run || state.live === null) return;
+    const i = findLast(state.live, (x) => x.kind === 'lookup' && !x.done && x.tool === 'read_statement');
+    if (i === -1) return;
+    const live = [...state.live];
+    live[i] = { ...(live[i] as LookupPart), found: p.found };
     set({ live });
   });
 }
@@ -156,6 +196,9 @@ async function send(
       live: null,
       run: null,
       asking: null,
+      askingFiles: [],
+      // What was attached goes back with the question.
+      files: asking !== null ? state.askingFiles : state.files,
       error: message === 'Stopped.' ? null : message,
       returned: asking,
     });
@@ -168,18 +211,91 @@ async function send(
     live: null,
     run: null,
     asking: null,
+    askingFiles: [],
     pending: reply.pending,
     decisions: {},
   });
+  await persist();
+}
+
+/** Saves the open conversation, and refreshes the list it appears in. */
+async function persist() {
+  if (!state.chatId || state.messages.length === 0) return;
+  try {
+    await api.chatSave(state.chatId, state.title, state.messages, state.pending);
+    await refreshChats();
+  } catch (err) {
+    set({ error: `The chat couldn't be saved: ${err instanceof Error ? err.message : String(err)}` });
+  }
+}
+
+export async function refreshChats() {
+  try {
+    set({ chats: await api.chatList() });
+  } catch {
+    /* the list stays as it was */
+  }
+}
+
+/** Opens a saved conversation where it was left. */
+export async function openChat(id: string) {
+  if (state.run || id === state.chatId) return;
+  try {
+    const chat = await api.chatLoad(id);
+    for (const p of chat.pending) titles.set(p.id, p.title);
+    set({
+      chatId: chat.id,
+      title: chat.title,
+      messages: chat.messages,
+      pending: chat.pending,
+      decisions: {},
+      live: null,
+      asking: null,
+      askingFiles: [],
+      error: null,
+      returned: null,
+    });
+  } catch (err) {
+    set({ error: err instanceof Error ? err.message : String(err) });
+    void refreshChats();
+  }
+}
+
+export async function deleteChat(id: string) {
+  await api.chatDelete(id);
+  if (id === state.chatId) newChat();
+  await refreshChats();
+}
+
+export function attach(paths: string[]) {
+  const have = new Set(state.files);
+  const added = paths.filter((p) => !have.has(p));
+  if (added.length) set({ files: [...state.files, ...added] });
+}
+
+export function detach(path: string) {
+  set({ files: state.files.filter((f) => f !== path) });
 }
 
 export async function ask(question: string) {
-  const q = question.trim();
+  const files = state.files;
+  const q = question.trim() || (files.length > 0 ? 'Import this statement.' : '');
   if (!q || state.run || state.pending.length > 0) return;
   const before = state.messages;
+  const content =
+    files.length === 0
+      ? q
+      : [
+          { type: 'text', text: q },
+          { type: 'text', text: `${ATTACHED}\n${files.map((f) => `- ${f}`).join('\n')}` },
+        ];
+  if (!state.chatId) {
+    set({ chatId: crypto.randomUUID(), title: q.replace(/\s+/g, ' ').slice(0, 80) });
+  }
+  set({ files: [], askingFiles: files });
   // The question goes back in the composer if this fails: nothing about it
   // reached the transcript, so asking again is asking it fresh.
-  await send([...before, { role: 'user', content: q }], before, q);
+  await send([...before, { role: 'user', content }], before, q);
 }
 
 /** Records the answer to one waiting change; the last answer sends them. */
@@ -205,6 +321,9 @@ async function resume(decisions: Record<string, boolean>) {
   if (state.error && state.messages === messages && state.pending.length === 0) {
     set({ pending, decisions: {} });
   }
+  // A stop or failure still leaves the transcript where it was; keep the
+  // saved copy in step with what is on screen.
+  if (state.messages === messages) await persist();
 }
 
 export function stop() {
@@ -214,6 +333,10 @@ export function stop() {
 export function newChat() {
   if (state.run) stop();
   set({
+    chatId: null,
+    title: '',
+    files: [],
+    askingFiles: [],
     messages: [],
     live: null,
     run: null,
@@ -269,7 +392,14 @@ export function turns(messages: unknown[]): Turn[] {
         try {
           const v = JSON.parse(content);
           results.set(id, {
-            rows: typeof v?.row_count === 'number' ? v.row_count : Array.isArray(v) ? v.length : undefined,
+            rows:
+              typeof v?.row_count === 'number'
+                ? v.row_count
+                : typeof v?.rows_found === 'number'
+                  ? v.rows_found
+                  : Array.isArray(v)
+                    ? v.length
+                    : undefined,
             done: typeof v?.done === 'string' ? v.done : undefined,
           });
         } catch {
@@ -281,14 +411,17 @@ export function turns(messages: unknown[]): Turn[] {
 
   for (const m of messages as Message[]) {
     if (m.role === 'user') {
-      const text =
+      const texts =
         typeof m.content === 'string'
-          ? m.content
-          : m.content
-              .filter((b) => b.type === 'text')
-              .map((b) => String(b.text))
-              .join('\n');
-      if (text) out.push({ question: text, answer: [] });
+          ? [m.content]
+          : m.content.filter((b) => b.type === 'text').map((b) => String(b.text));
+      const files = texts
+        .filter((t) => t.startsWith(ATTACHED))
+        .flatMap((t) => t.split('\n').slice(1))
+        .map((l) => l.replace(/^\s*-\s*/, '').trim())
+        .filter(Boolean);
+      const text = texts.filter((t) => !t.startsWith(ATTACHED)).join('\n');
+      if (text || files.length) out.push({ question: text, files, answer: [] });
       continue;
     }
     const turn = out[out.length - 1];
@@ -325,6 +458,7 @@ function changeName(tool: string): string {
     case 'delete_transactions': return 'Delete transactions';
     case 'add_category': return 'Add a category';
     case 'label_transactions': return 'Label transactions';
+    case 'import_statement': return 'Import a statement';
     default: return tool;
   }
 }

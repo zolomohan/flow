@@ -941,6 +941,21 @@ export interface AiChatReply {
   pending: AiPendingChange[];
 }
 
+/** A saved conversation, as the list shows it. */
+export interface ChatSummary {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SavedChat {
+  id: string;
+  title: string;
+  messages: unknown[];
+  pending: AiPendingChange[];
+}
+
 /** What a chat run is doing, as it does it. */
 export interface AiChatProgress {
   run: string;

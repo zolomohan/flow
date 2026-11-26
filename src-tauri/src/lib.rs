@@ -393,6 +393,39 @@ async fn ai_chat(
     chat::ask(app, run, book.0.clone(), messages, decisions.unwrap_or_default()).await
 }
 
+/// The saved conversations, latest first.
+#[tauri::command]
+fn chat_list(db: State<Db>) -> R<Vec<chat::ChatSummary>> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    chat::list_chats(&conn)
+}
+
+#[tauri::command]
+fn chat_load(db: State<Db>, id: String) -> R<chat::SavedChat> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    chat::load_chat(&conn, &id)
+}
+
+/// Kept on the app's connection directly rather than through `with_db`:
+/// a conversation being saved is not the book changing.
+#[tauri::command]
+fn chat_save(
+    db: State<Db>,
+    id: String,
+    title: String,
+    messages: Vec<serde_json::Value>,
+    pending: Vec<serde_json::Value>,
+) -> R<()> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    chat::save_chat(&conn, &id, &title, &messages, &pending)
+}
+
+#[tauri::command]
+fn chat_delete(db: State<Db>, id: String) -> R<()> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    chat::delete_chat(&conn, &id)
+}
+
 /// Asks a chat run to stop where it is.
 #[tauri::command]
 fn ai_chat_stop(run: String) {
@@ -845,6 +878,8 @@ fn import_book(db: State<Db>, from: String) -> R<String> {
 fn reset_all(db: State<Db>) -> R<()> {
     with_db(&db, |c| {
         db::reset(c)?;
+        // Conversations are about the book that was there; they go with it.
+        chat::clear_chats(c)?;
         let _ = capture::write_book(c);
         Ok(())
     })
@@ -921,6 +956,10 @@ pub fn run() {
             ai_read_statements,
             ai_chat,
             ai_chat_stop,
+            chat_list,
+            chat_load,
+            chat_save,
+            chat_delete,
             list_labels,
             label_transactions,
             save_label,

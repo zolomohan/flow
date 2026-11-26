@@ -35,7 +35,10 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::ai::{self, Credential, FALLBACK_BETA, MODEL};
 use crate::db::{self, Db};
 use crate::capture;
-use crate::models::{CategoryInput, Paise, TransactionInput, TransactionPatch};
+use crate::cashback;
+use crate::models::{
+    CategoryInput, ImportCommitRow, Paise, StatementRow, TransactionInput, TransactionPatch,
+};
 use std::collections::HashMap;
 
 type Result<T> = std::result::Result<T, String>;
@@ -254,7 +257,7 @@ fn schema(conn: &Connection) -> Result<String> {
     let mut stmt = conn
         .prepare(
             "SELECT sql FROM sqlite_master
-             WHERE type = 'table' AND sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
+             WHERE type = 'table' AND sql IS NOT NULL AND name NOT LIKE 'sqlite_%' AND name != 'chats'
              ORDER BY name",
         )
         .map_err(|e| e.to_string())?;
@@ -317,6 +320,26 @@ fn read_tools() -> Vec<Value> {
                 "properties": {
                     "month": { "type": "string", "description": "YYYY-MM. Defaults to the current month." }
                 },
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "read_statement",
+            "description": "Read a bank or card statement the user attached to this chat (PDF, CSV, \
+                spreadsheet or picture) against one of their accounts. Answers with every transaction on \
+                it dated in the range, each numbered n, with a suggested filing and whether the book \
+                already has it, plus a statement_id to import it with. Reading a long statement takes a \
+                minute or two. Nothing is written.",
+            "eager_input_streaming": true,
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "The file's path exactly as attached." },
+                    "account_id": { "type": "string", "description": "The account the statement belongs to." },
+                    "from": { "type": "string", "description": "YYYY-MM-DD. Leave out to take the whole statement." },
+                    "to": { "type": "string", "description": "YYYY-MM-DD. Leave out to take the whole statement." }
+                },
+                "required": ["path", "account_id"],
                 "additionalProperties": false
             }
         }
@@ -393,6 +416,7 @@ fn is_write(name: &str) -> bool {
             | "delete_transactions"
             | "add_category"
             | "label_transactions"
+            | "import_statement"
     )
 }
 
@@ -508,6 +532,44 @@ fn write_tools() -> Vec<Value> {
                     "on": { "type": "boolean", "description": "true to pin, false to take off." }
                 },
                 "required": ["ids", "label_id", "on"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "import_statement",
+            "description": format!("Import the rows of a statement read with read_statement into the book, \
+                the way the Import with Claude sheet does: rows already in the book are always left out, \
+                rows Claude wasn't sure of and you didn't change arrive labelled Triage, and the rest teach \
+                the importer how to file that counterparty next time. Skip rows or refile them by their \
+                row number n.{note}"),
+            "eager_input_streaming": true,
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "statement_id": { "type": "string" },
+                    "skip": { "type": "array", "items": { "type": "integer" }, "description": "Row numbers to leave out." },
+                    "changes": {
+                        "type": "array",
+                        "description": "Filings to use instead of the suggested ones.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "n": { "type": "integer" },
+                                "kind": { "type": "string", "enum": ["expense", "income", "transfer"] },
+                                "category_id": { "type": "string" },
+                                "transfer_account_id": { "type": "string" },
+                                "merchant": { "type": "string" }
+                            },
+                            "required": ["n"],
+                            "additionalProperties": false
+                        }
+                    },
+                    "already_in_balance": {
+                        "type": "boolean",
+                        "description": "True when the account's balance in the app already includes these rows (filling in history); they are then recorded without moving any balance. Ask the user if unsure; default false."
+                    }
+                },
+                "required": ["statement_id"],
                 "additionalProperties": false
             }
         }),
@@ -742,6 +804,7 @@ fn describe_change(conn: &Connection, name: &str, input: &Value) -> Result<(Stri
                 postings_lines(conn, &ids),
             ))
         }
+        "import_statement" => describe_import(conn, input),
         other => Err(format!("There is no change called {other}.")),
     }
 }
@@ -867,8 +930,13 @@ fn apply_change(conn: &Connection, name: &str, input: &Value) -> Result<Value> {
             )?;
             json!({ "done": title, "changed": n })
         }
+        "import_statement" => apply_import(conn, input, title)?,
         other => return Err(format!("There is no change called {other}.")),
     };
+    // Whatever landed on a card changes what its cycle earns back.
+    if let Err(e) = cashback::settle(conn) {
+        eprintln!("cashback could not be settled: {e}");
+    }
     // The phone's word list is written from accounts and categories.
     let _ = capture::write_book(conn);
     Ok(result)
@@ -892,6 +960,474 @@ pub struct ChatReply {
     /// Changes Claude has asked to make. When there are any, the
     /// conversation ends on Claude's turn and waits for the user's answer.
     pub pending: Vec<PendingChange>,
+}
+
+// ------------------------------------------------------------- statements
+//
+// A statement dropped on the Ask screen arrives as a path in the user's
+// message, under ATTACHED. Claude reads it with `read_statement`, which runs
+// the same reader the import sheet uses and holds what it found against the
+// book's duplicate check; `import_statement` then posts the rows the way the
+// sheet's commit does, once the user applies it. What was read is kept in
+// memory by id until then, so the rows Claude talks about are the rows that
+// go in.
+
+/// How the screen marks files attached to a question: this line, then one
+/// `- /path` line per file.
+pub const ATTACHED: &str = "Attached statement files:";
+
+/// Every file attached anywhere in the conversation. Only these can be read.
+fn attached_paths(messages: &[Value]) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for m in messages.iter().filter(|m| m["role"] == "user") {
+        let Some(blocks) = m["content"].as_array() else { continue };
+        for b in blocks {
+            let Some(text) = b["text"].as_str() else { continue };
+            let Some(rest) = text.strip_prefix(ATTACHED) else { continue };
+            for line in rest.lines() {
+                if let Some(path) = line.trim().strip_prefix("- ") {
+                    out.insert(path.trim().to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
+#[derive(Debug, Clone)]
+struct Found {
+    row: StatementRow,
+    /// Already in the book, by the importer's own matching.
+    in_book: Option<String>,
+    kind: String,
+    category_id: Option<String>,
+    transfer_account_id: Option<String>,
+    merchant: String,
+    note: String,
+    confidence: String,
+    /// The filing came from a rule someone confirmed by hand.
+    remembered: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ReadStatement {
+    account_id: String,
+    account_name: String,
+    file: String,
+    rows: Vec<Found>,
+    imported: bool,
+}
+
+static STATEMENTS: Mutex<Option<HashMap<String, ReadStatement>>> = Mutex::new(None);
+
+fn with_statement<T>(id: &str, f: impl FnOnce(&mut ReadStatement) -> Result<T>) -> Result<T> {
+    let mut all = STATEMENTS.lock().map_err(|e| e.to_string())?;
+    let s = all
+        .get_or_insert_with(HashMap::new)
+        .get_mut(id)
+        .ok_or("That statement isn't held any more (the app was restarted). Read it again with read_statement.")?;
+    f(s)
+}
+
+/// Reads one attached statement against an account, and answers with every
+/// row: what Claude made of it, and whether the book already has it.
+async fn read_statement(
+    app: &AppHandle,
+    run: &str,
+    book: &Path,
+    input: &Value,
+    allowed: &HashSet<String>,
+) -> Result<Value> {
+    let path = want_str(input, "path")?;
+    if !allowed.contains(&path) {
+        return Err("Only statements attached to this chat can be read. Use the exact path from the attachment.".into());
+    }
+    let account_id = want_str(input, "account_id")?;
+    let from = opt_str(input, "from").unwrap_or_else(|| "2000-01-01".into());
+    let to = opt_str(input, "to").unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
+
+    let (account, categories, accounts) = {
+        let book = book.to_path_buf();
+        let account_id = account_id.clone();
+        tauri::async_runtime::spawn_blocking(move || -> Result<_> {
+            let conn = open_reader(&book)?;
+            let accounts = db::list_accounts(&conn)?;
+            let categories = db::list_categories(&conn)?;
+            let account = accounts
+                .iter()
+                .find(|a| a.id == account_id)
+                .cloned()
+                .ok_or("There is no account with that id.")?;
+            let accounts: Vec<_> = accounts.into_iter().filter(|a| !a.archived && !a.system).collect();
+            Ok((account, categories, accounts))
+        })
+        .await
+        .map_err(|e| e.to_string())??
+    };
+    let file = Path::new(&path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.clone());
+    let account_name = account.name.clone();
+
+    let read = ai::read_statements(
+        app.clone(),
+        run.to_string(),
+        vec![path.clone()],
+        account,
+        from,
+        to,
+        categories,
+        accounts,
+    )
+    .await?;
+
+    // The same line listed twice is one line.
+    let mut seen = HashSet::new();
+    let read: Vec<ai::AiRow> = read
+        .into_iter()
+        .filter(|r| {
+            seen.insert(format!("{}|{}|{}|{}", r.row.date, r.row.amount, r.row.direction, r.row.narration))
+        })
+        .collect();
+
+    let preview = {
+        let book = book.to_path_buf();
+        let account_id = account_id.clone();
+        let rows: Vec<StatementRow> = read.iter().map(|r| r.row.clone()).collect();
+        tauri::async_runtime::spawn_blocking(move || {
+            let conn = open_reader(&book)?;
+            db::preview_import(&conn, &account_id, rows)
+        })
+        .await
+        .map_err(|e| e.to_string())??
+    };
+
+    let mut rows: Vec<Found> = read
+        .into_iter()
+        .zip(preview)
+        .map(|(ai, p)| {
+            let remembered = p.from_rule && p.rule_confirmed;
+            Found {
+                in_book: (p.status == "matched")
+                    .then(|| p.matched_summary.clone().unwrap_or_else(|| "a posting already in the book".into())),
+                kind: if remembered { p.kind.clone() } else { ai.kind.clone() },
+                category_id: if remembered { p.category_id.clone() } else { ai.category_id.clone() },
+                transfer_account_id: if remembered {
+                    p.transfer_account_id.clone()
+                } else {
+                    ai.transfer_account_id.clone()
+                },
+                merchant: if remembered { p.merchant.clone() } else { ai.description.clone() },
+                note: ai.note.clone(),
+                confidence: ai.confidence.clone(),
+                remembered,
+                row: ai.row,
+            }
+        })
+        .collect();
+    rows.sort_by(|a, b| a.row.date.cmp(&b.row.date));
+
+    let id = format!("st_{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);
+    let listed: Vec<Value> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, f)| {
+            let mut v = json!({
+                "n": i + 1,
+                "date": f.row.date,
+                "narration": f.row.narration,
+                "amount": f.row.amount,
+                "direction": f.row.direction,
+                "kind": f.kind,
+                "category_id": f.category_id,
+                "merchant": f.merchant,
+                "confidence": f.confidence,
+            });
+            if let Some(t) = &f.transfer_account_id {
+                v["transfer_account_id"] = json!(t);
+            }
+            if let Some(m) = &f.in_book {
+                v["already_in_book"] = json!(m);
+            }
+            if f.remembered {
+                v["filed_by_rule"] = json!(true);
+            }
+            v
+        })
+        .collect();
+    let new = rows.iter().filter(|r| r.in_book.is_none()).count();
+    let answer = json!({
+        "statement_id": id,
+        "account": account_name,
+        "file": file,
+        "rows_found": rows.len(),
+        "already_in_book": rows.len() - new,
+        "new": new,
+        "rows": listed,
+    });
+    STATEMENTS
+        .lock()
+        .map_err(|e| e.to_string())?
+        .get_or_insert_with(HashMap::new)
+        .insert(
+            id,
+            ReadStatement { account_id, account_name, file, rows, imported: false },
+        );
+    Ok(answer)
+}
+
+/// The postings an import would write, after the rows Claude skipped and
+/// refiled. Mirrors the import sheet: a guess nobody changed and Claude
+/// wasn't sure of arrives in Triage; everything else teaches its rule.
+fn import_rows(s: &ReadStatement, input: &Value) -> Result<Vec<ImportCommitRow>> {
+    let skip: HashSet<u64> = input["skip"]
+        .as_array()
+        .map(|a| a.iter().filter_map(Value::as_u64).collect())
+        .unwrap_or_default();
+    let mut changes: HashMap<u64, &Value> = HashMap::new();
+    for c in input["changes"].as_array().into_iter().flatten() {
+        let n = c["n"].as_u64().ok_or("Every change needs the row number `n`.")?;
+        if n == 0 || n as usize > s.rows.len() {
+            return Err(format!("There is no row {n} on that statement."));
+        }
+        changes.insert(n, c);
+    }
+    let affects_balance = !input["already_in_balance"].as_bool().unwrap_or(false);
+    let mut out = Vec::new();
+    for (i, f) in s.rows.iter().enumerate() {
+        let n = (i + 1) as u64;
+        if f.in_book.is_some() || skip.contains(&n) {
+            continue;
+        }
+        let change = changes.get(&n);
+        let edited = change.is_some();
+        let pick = |key: &str, was: &Option<String>| -> Option<String> {
+            match change.map(|c| &c[key]) {
+                Some(Value::String(s)) if !s.trim().is_empty() => Some(s.trim().to_string()),
+                Some(Value::Null) if change.map(|c| c.get(key).is_some()).unwrap_or(false) => None,
+                _ => was.clone(),
+            }
+        };
+        let kind = pick("kind", &Some(f.kind.clone())).unwrap_or_else(|| f.kind.clone());
+        let category_id = pick("category_id", &f.category_id);
+        let transfer = pick("transfer_account_id", &f.transfer_account_id);
+        let merchant = pick("merchant", &Some(f.merchant.clone())).unwrap_or_default();
+        let debit = f.row.direction == "debit";
+        let (kind, account_id, to_account_id, category_id) = match (kind.as_str(), transfer) {
+            ("transfer", Some(other)) => {
+                if debit {
+                    ("transfer".to_string(), s.account_id.clone(), Some(other), None)
+                } else {
+                    ("transfer".to_string(), other, Some(s.account_id.clone()), None)
+                }
+            }
+            _ => (
+                if debit { "expense" } else { "income" }.to_string(),
+                s.account_id.clone(),
+                None,
+                category_id,
+            ),
+        };
+        let unsure = !edited
+            && !f.remembered
+            && (f.confidence == "low" || (kind != "transfer" && category_id.is_none()));
+        out.push(ImportCommitRow {
+            row: f.row.clone(),
+            input: TransactionInput {
+                id: None,
+                kind,
+                amount: f.row.amount,
+                account_id,
+                to_account_id,
+                category_id,
+                merchant,
+                note: (!f.note.trim().is_empty()).then(|| f.note.trim().to_string()),
+                occurred_at: format!("{}T12:00", f.row.date),
+                splits: None,
+                shares: None,
+                label_ids: None,
+                refund_of: None,
+                cashback: None,
+            },
+            triage: unsure,
+            learn: !unsure,
+            affects_balance,
+        });
+    }
+    Ok(out)
+}
+
+fn describe_import(conn: &Connection, input: &Value) -> Result<(String, Vec<String>)> {
+    let id = want_str(input, "statement_id")?;
+    with_statement(&id, |s| {
+        if s.imported {
+            return Err("That statement has already been imported.".into());
+        }
+        let rows = import_rows(s, input)?;
+        let in_book = s.rows.iter().filter(|r| r.in_book.is_some()).count();
+        let skipped = s.rows.len() - in_book - rows.len();
+        let spent: Paise = rows.iter().filter(|r| r.row.direction == "debit").map(|r| r.row.amount).sum();
+        let came: Paise = rows.iter().filter(|r| r.row.direction != "debit").map(|r| r.row.amount).sum();
+        let triage = rows.iter().filter(|r| r.triage).count();
+        let mut lines = vec![format!("{} out · {} in", inr(spent), inr(came))];
+        if in_book > 0 {
+            lines.push(format!("{} already in the book, left out", plural(in_book, "row")));
+        }
+        if skipped > 0 {
+            lines.push(format!("{} skipped", plural(skipped, "row")));
+        }
+        if triage > 0 {
+            lines.push(format!("{} Claude wasn't sure of will be labelled Triage", plural(triage, "row")));
+        }
+        if !rows.first().map(|r| r.affects_balance).unwrap_or(true) {
+            lines.push("Recorded as history, without moving any balance".into());
+        }
+        for r in rows.iter().take(5) {
+            let filed = match (&r.input.category_id, r.input.kind.as_str()) {
+                (_, "transfer") => "transfer".to_string(),
+                (Some(c), _) => category_label(conn, c),
+                (None, _) => "no category".into(),
+            };
+            lines.push(format!(
+                "{} · {} · {}{} · {filed}",
+                r.row.date,
+                if r.input.merchant.is_empty() { &r.row.narration } else { &r.input.merchant },
+                if r.row.direction == "debit" { "−" } else { "+" },
+                inr(r.row.amount),
+            ));
+        }
+        if rows.len() > 5 {
+            lines.push(format!("and {} more", rows.len() - 5));
+        }
+        Ok((
+            format!("Import {} into {} from {}", plural(rows.len(), "transaction"), s.account_name, s.file),
+            lines,
+        ))
+    })
+}
+
+fn apply_import(conn: &Connection, input: &Value, title: String) -> Result<Value> {
+    let id = want_str(input, "statement_id")?;
+    with_statement(&id, |s| {
+        if s.imported {
+            return Err("That statement has already been imported.".into());
+        }
+        let rows = import_rows(s, input)?;
+        if rows.is_empty() {
+            return Err("There is nothing left to import from that statement.".into());
+        }
+        let done = db::commit_import(conn, &s.account_id, rows)?;
+        s.imported = true;
+        Ok(json!({
+            "done": title,
+            "inserted": done.inserted,
+            "triaged": done.triaged,
+            "balance_neutral": done.balance_neutral,
+            "opening_adjustment": done.opening_adjustment,
+        }))
+    })
+}
+
+// ------------------------------------------------------------- saved chats
+//
+// Conversations are kept in the book, so they travel with it and go when
+// it is wiped. The transcript is the API's own JSON, kept whole so a chat
+// opened later carries on exactly where it stopped.
+
+pub fn ensure_table(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS chats (
+            id         TEXT PRIMARY KEY,
+            title      TEXT NOT NULL,
+            messages   TEXT NOT NULL,
+            pending    TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );",
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatSummary {
+    pub id: String,
+    pub title: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedChat {
+    pub id: String,
+    pub title: String,
+    pub messages: Vec<Value>,
+    pub pending: Vec<Value>,
+}
+
+pub fn list_chats(conn: &Connection) -> Result<Vec<ChatSummary>> {
+    ensure_table(conn)?;
+    let mut stmt = conn
+        .prepare("SELECT id, title, created_at, updated_at FROM chats ORDER BY updated_at DESC")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(ChatSummary { id: r.get(0)?, title: r.get(1)?, created_at: r.get(2)?, updated_at: r.get(3)? })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string());
+    rows
+}
+
+pub fn load_chat(conn: &Connection, id: &str) -> Result<SavedChat> {
+    ensure_table(conn)?;
+    let (title, messages, pending): (String, String, String) = conn
+        .query_row("SELECT title, messages, pending FROM chats WHERE id = ?1", [id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
+        .map_err(|_| "That chat no longer exists.".to_string())?;
+    Ok(SavedChat {
+        id: id.to_string(),
+        title,
+        messages: serde_json::from_str(&messages).map_err(|e| e.to_string())?,
+        pending: serde_json::from_str(&pending).unwrap_or_default(),
+    })
+}
+
+pub fn save_chat(conn: &Connection, id: &str, title: &str, messages: &[Value], pending: &[Value]) -> Result<()> {
+    ensure_table(conn)?;
+    let now = db::now();
+    let title: String = title.trim().chars().take(120).collect();
+    conn.execute(
+        "INSERT INTO chats (id, title, messages, pending, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+         ON CONFLICT(id) DO UPDATE SET title = excluded.title, messages = excluded.messages,
+                                       pending = excluded.pending, updated_at = excluded.updated_at",
+        rusqlite::params![
+            id,
+            if title.is_empty() { "Untitled chat".to_string() } else { title },
+            serde_json::to_string(messages).map_err(|e| e.to_string())?,
+            serde_json::to_string(pending).map_err(|e| e.to_string())?,
+            now,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn delete_chat(conn: &Connection, id: &str) -> Result<()> {
+    ensure_table(conn)?;
+    conn.execute("DELETE FROM chats WHERE id = ?1", [id]).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn clear_chats(conn: &Connection) -> Result<()> {
+    ensure_table(conn)?;
+    conn.execute("DELETE FROM chats", []).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 // ----------------------------------------------------------------- prompt
@@ -931,6 +1467,10 @@ You can also change the book, but only with the change tools (add_transaction, e
 - Debts: `debts.direction` is 'lent' or 'borrowed'; outstanding is principal plus `debt_additions` minus `debt_payments`, and a debt with `settled_at` is closed.
 - Labels (`labels`, `transaction_labels`) and folders (`folders`, `folder_transactions`) group transactions; `plans` are recurring bills and income; `holdings` and `investment_lots` are mutual funds, gold and deposits (quantities ×10⁴ in `*_e4` columns).
 - `merchant` is free text and may be spelled inconsistently; match with LIKE and lower() when searching for one.
+
+## Statements
+
+The user can drop bank or card statements onto the chat; they arrive in their message after a line reading "Attached statement files:", one path per line. To import one: work out which account it belongs to (from the file name, the bank, or by asking — list_accounts has them), read it with read_statement (leave the dates out unless the user gave a range), then tell the user briefly what you found: how many rows, how many are already in the book, and any you're unsure how to file. Then propose import_statement, refiling any rows the user corrected or that you can file better with the categories in the book. If the user hasn't said whether the account's balance in the app already includes these transactions and it isn't obvious, ask before importing: it decides already_in_balance.
 
 ## How to answer
 
@@ -999,6 +1539,7 @@ async fn answer_calls(
     book: &Path,
     calls: Vec<Call>,
     decisions: &HashMap<String, bool>,
+    attached: &HashSet<String>,
 ) -> Result<Value> {
     let mut results = Vec::with_capacity(calls.len());
     let mut wrote = false;
@@ -1006,6 +1547,8 @@ async fn answer_calls(
         let write = is_write(&name);
         let outcome = if write && decisions.get(&id) != Some(&true) {
             Ok(json!({ "declined": DECLINED }))
+        } else if name == "read_statement" {
+            read_statement(app, run, book, &input, attached).await
         } else {
             let book = book.to_path_buf();
             let app = app.clone();
@@ -1030,7 +1573,11 @@ async fn answer_calls(
                 if write && v.get("done").is_some() {
                     wrote = true;
                 }
-                done.rows = v["row_count"].as_u64().map(|n| n as usize).or_else(|| v.as_array().map(Vec::len));
+                done.rows = v["row_count"]
+                    .as_u64()
+                    .or_else(|| v["rows_found"].as_u64())
+                    .map(|n| n as usize)
+                    .or_else(|| v.as_array().map(Vec::len));
                 let _ = app.emit("ai-chat-progress", &done);
                 let content = match v.get("declined").and_then(Value::as_str) {
                     Some(d) => d.to_string(),
@@ -1106,7 +1653,7 @@ pub async fn ask(
 
     let result = async {
         if !waiting.is_empty() {
-            let answered = answer_calls(&app, &run, &book, waiting, &decisions).await?;
+            let answered = answer_calls(&app, &run, &book, waiting, &decisions, &attached_paths(&messages)).await?;
             messages.push(answered);
         }
         for step in 0..MAX_STEPS {
@@ -1182,7 +1729,7 @@ pub async fn ask(
                 return Ok(pending);
             }
 
-            let answered = answer_calls(&app, &run, &book, calls, &HashMap::new()).await?;
+            let answered = answer_calls(&app, &run, &book, calls, &HashMap::new(), &attached_paths(&messages)).await?;
             messages.push(answered);
         }
         Ok(vec![])
@@ -1629,8 +2176,122 @@ mod tests {
         let names: Vec<String> = tools().as_array().unwrap().iter()
             .map(|t| t["name"].as_str().unwrap().to_string()).collect();
         let writes: Vec<&String> = names.iter().filter(|n| is_write(n)).collect();
-        assert_eq!(writes.len(), 6);
-        assert!(!is_write("query_book") && !is_write("list_accounts") && !is_write("book_summary"));
+        assert_eq!(writes.len(), 7);
+        assert!(!is_write("query_book") && !is_write("list_accounts") && !is_write("book_summary") && !is_write("read_statement"));
+    }
+
+    #[test]
+    fn only_attached_files_can_be_read() {
+        let messages = vec![
+            json!({ "role": "user", "content": [
+                { "type": "text", "text": "import this" },
+                { "type": "text", "text": format!("{ATTACHED}\n- /Users/me/Downloads/hdfc oct.pdf\n- /tmp/b.csv") },
+            ]}),
+            json!({ "role": "user", "content": "- /etc/passwd" }),
+        ];
+        let got = attached_paths(&messages);
+        assert!(got.contains("/Users/me/Downloads/hdfc oct.pdf"));
+        assert!(got.contains("/tmp/b.csv"));
+        assert_eq!(got.len(), 2);
+    }
+
+    fn statement_row(date: &str, narration: &str, amount: Paise, direction: &str) -> StatementRow {
+        StatementRow {
+            date: date.into(),
+            narration: narration.into(),
+            ref_no: String::new(),
+            amount,
+            direction: direction.into(),
+            balance: None,
+        }
+    }
+
+    fn found(row: StatementRow, kind: &str, category: Option<&str>, confidence: &str) -> Found {
+        Found {
+            in_book: None,
+            kind: kind.into(),
+            category_id: category.map(String::from),
+            transfer_account_id: None,
+            merchant: row.narration.clone(),
+            note: String::new(),
+            confidence: confidence.into(),
+            remembered: false,
+            row,
+        }
+    }
+
+    #[test]
+    fn a_read_statement_is_imported_once_as_shown() {
+        let (_d, path) = book();
+        let conn = db::open(&path).unwrap();
+        conn.execute_batch(
+            "INSERT INTO accounts (id, name, kind, opening_balance, color, icon, created_at)
+             VALUES ('card', 'Card', 'credit', 0, '#000', 'x', '2026-01-01');
+             INSERT INTO categories (id, kind, name, icon, color) VALUES
+               ('food', 'expense', 'Food', 'utensils', '#F2724F'),
+               ('pay', 'income', 'Salary', 'banknote', '#42C251');",
+        )
+        .unwrap();
+        let mut already = found(statement_row("2026-10-02", "CAFE", 25000, "debit"), "expense", Some("food"), "high");
+        already.in_book = Some("Cafe".into());
+        let s = ReadStatement {
+            account_id: "a".into(),
+            account_name: "Bank".into(),
+            file: "oct.pdf".into(),
+            rows: vec![
+                already,
+                found(statement_row("2026-10-05", "SWIGGY", 41250, "debit"), "expense", Some("food"), "high"),
+                found(statement_row("2026-10-06", "MYSTERY", 9900, "debit"), "expense", None, "low"),
+                found(statement_row("2026-10-07", "CC PAYMENT", 20000, "debit"), "transfer", None, "high"),
+                found(statement_row("2026-10-31", "SALARY", 9000000, "credit"), "income", Some("pay"), "high"),
+            ],
+            imported: false,
+        };
+        let mut s = s;
+        s.rows[3].transfer_account_id = Some("card".into());
+        STATEMENTS.lock().unwrap().get_or_insert_with(HashMap::new).insert("st_test".into(), s);
+
+        // Row 3 is refiled, row 5 left out.
+        let input = json!({ "statement_id": "st_test", "skip": [5], "changes": [{ "n": 3, "category_id": "food", "merchant": "Corner shop" }] });
+        let (title, lines) = describe_change(&conn, "import_statement", &input).unwrap();
+        assert_eq!(title, "Import 3 transactions into Bank from oct.pdf");
+        assert!(lines.iter().any(|l| l == "1 row already in the book, left out"), "{lines:?}");
+        assert!(lines.iter().any(|l| l == "1 row skipped"), "{lines:?}");
+        assert!(!lines.iter().any(|l| l.contains("Triage")), "{lines:?}");
+
+        let done = apply_change(&conn, "import_statement", &input).unwrap();
+        assert_eq!(done["inserted"], 3);
+        let shop: (String, Option<String>) = conn
+            .query_row("SELECT kind, category_id FROM transactions WHERE merchant = 'Corner shop'", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!(shop, ("expense".into(), Some("food".into())));
+        let transfer: (String, String, Option<String>) = conn
+            .query_row("SELECT kind, account_id, to_account_id FROM transactions WHERE amount = 20000 AND merchant = 'CC PAYMENT'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap();
+        assert_eq!(transfer, ("transfer".into(), "a".into(), Some("card".into())));
+        // Once is all.
+        assert!(apply_change(&conn, "import_statement", &input).is_err());
+    }
+
+    #[test]
+    fn chats_are_kept_listed_and_deleted() {
+        let (_d, path) = book();
+        let conn = db::open(&path).unwrap();
+        let messages = vec![json!({ "role": "user", "content": "hi" })];
+        save_chat(&conn, "c1", "First question", &messages, &[]).unwrap();
+        save_chat(&conn, "c2", "Second", &messages, &[json!({ "id": "tu" })]).unwrap();
+        save_chat(&conn, "c1", "First question, renamed", &messages, &[]).unwrap();
+        let list = list_chats(&conn).unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].id, "c1");
+        let c2 = load_chat(&conn, "c2").unwrap();
+        assert_eq!(c2.pending.len(), 1);
+        delete_chat(&conn, "c1").unwrap();
+        assert_eq!(list_chats(&conn).unwrap().len(), 1);
+        assert!(load_chat(&conn, "c1").is_err());
+        // The chat log is no business of the schema Claude is shown.
+        let reader = open_reader(&path).unwrap();
+        assert!(!schema(&reader).unwrap().contains("chats"));
     }
 
     #[test]

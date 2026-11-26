@@ -2,6 +2,9 @@ import { invoke } from '@tauri-apps/api/core';
 import type {
   Account,
   AiChatReply,
+  AiPendingChange,
+  ChatSummary,
+  SavedChat,
   AiRow,
   AiStatus,
   AccountInput,
@@ -156,6 +159,12 @@ export const api = {
   aiChat: (run: string, messages: unknown[], decisions?: Record<string, boolean>) =>
     call<AiChatReply>('ai_chat', { run, messages, decisions: decisions ?? null }),
   aiChatStop: (run: string) => call<void>('ai_chat_stop', { run }),
+  /** Saved conversations, latest first. */
+  chatList: () => call<ChatSummary[]>('chat_list'),
+  chatLoad: (id: string) => call<SavedChat>('chat_load', { id }),
+  chatSave: (id: string, title: string, messages: unknown[], pending: AiPendingChange[]) =>
+    call<void>('chat_save', { id, title, messages, pending }),
+  chatDelete: (id: string) => call<void>('chat_delete', { id }),
   /** Posts the agreed rows, wearing the Triage label where asked. A row
    *  marked as not affecting the balance is absorbed by the openings it
    *  touches, so recording it moves nothing. */
