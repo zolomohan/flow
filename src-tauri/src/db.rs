@@ -16,12 +16,16 @@ pub(crate) fn oops<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
 
+/// The time, unless a change from the phone is being applied: then the
+/// moment it was made there, so the row is the same on both sides.
 pub(crate) fn now() -> String {
-    Utc::now().to_rfc3339()
+    crate::companion::issue_now(|| Utc::now().to_rfc3339())
 }
 
+/// A fresh id, unless a change from the phone is being applied: then the
+/// one the phone made for the same row.
 pub(crate) fn new_id() -> String {
-    Uuid::new_v4().to_string()
+    crate::companion::issue_id(|| Uuid::new_v4().to_string())
 }
 
 /// Every account's live balance, expressed as a correlated subquery so that a

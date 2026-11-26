@@ -4,6 +4,7 @@ mod chat;
 mod chat_actions;
 mod chat_files;
 mod cards;
+mod companion;
 mod cashback;
 mod db;
 mod demo;
@@ -36,6 +37,13 @@ fn with_db<T>(db: &State<Db>, f: impl FnOnce(&rusqlite::Connection) -> R<T>) -> 
     if conn.total_changes() != before {
         if let Err(e) = cashback::settle(&conn) {
             eprintln!("cashback could not be settled: {e}");
+        }
+        // The phone's copy follows every change. Nothing when no companion
+        // folder is set.
+        if let Ok(Some(dir)) = companion::dir(&conn) {
+            if let Err(e) = companion::publish(&conn, &dir) {
+                eprintln!("the companion snapshot could not be published: {e}");
+            }
         }
     }
     out
@@ -535,7 +543,39 @@ fn confirm_triage(db: State<Db>, ids: Vec<String>) -> R<i64> {
 /// a line already read is refused by its own digest.
 #[tauri::command]
 fn sync_captures(db: State<Db>) -> R<CaptureSync> {
-    with_db(&db, capture::sync)
+    with_db(&db, |c| {
+        // Polled when the window comes forward, which is also when the
+        // phone's changes are worth taking in.
+        if let Err(e) = companion::sync(c) {
+            eprintln!("the companion queue could not be read: {e}");
+        }
+        capture::sync(c)
+    })
+}
+
+/// Where the phone's half of the book stands: the folder, the last
+/// snapshot, how far each device has been applied, and what is held.
+#[tauri::command]
+fn companion_status(db: State<Db>) -> R<companion::Status> {
+    with_db(&db, companion::status)
+}
+
+/// Takes in the phone's changes now and publishes the book.
+#[tauri::command]
+fn companion_sync(db: State<Db>) -> R<Option<companion::Applied>> {
+    with_db(&db, companion::sync)
+}
+
+/// The phone's changes that were not applied, waiting on a person.
+#[tauri::command]
+fn companion_conflicts(db: State<Db>) -> R<Vec<companion::Conflict>> {
+    with_db(&db, companion::conflicts)
+}
+
+/// Applies a held change over the row as it is now, or drops it.
+#[tauri::command]
+fn companion_resolve(db: State<Db>, id: String, accept: bool) -> R<()> {
+    with_db(&db, |c| companion::resolve(c, &id, accept))
 }
 
 #[tauri::command]
@@ -980,6 +1020,10 @@ pub fn run() {
             remove_from_folder,
             confirm_triage,
             sync_captures,
+            companion_status,
+            companion_sync,
+            companion_conflicts,
+            companion_resolve,
             list_captures,
             capture_history,
             known_merchants,

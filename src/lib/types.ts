@@ -1257,3 +1257,33 @@ export interface TaxYear {
   unfiled: Transaction[];
   untaggedCategories: number;
 }
+
+/* ------------------------------------------------------------ companion */
+
+/** Where the phone's half of the book stands, as the Mac sees it. */
+export interface CompanionStatus {
+  /** The folder the two devices share; null is off. */
+  dir: string | null;
+  /** How many snapshots have been published. */
+  version: number;
+  /** Per device, the last of its changes applied. */
+  applied: Record<string, number>;
+  /** Changes held for a person. */
+  conflicts: number;
+}
+
+export interface CompanionApplied {
+  applied: number;
+  held: number;
+}
+
+/** A change from the phone that was not applied, and why. */
+export interface CompanionConflict {
+  id: string;
+  device: string;
+  seq: number;
+  cmd: string;
+  args: unknown;
+  reason: string;
+  createdAt: string;
+}

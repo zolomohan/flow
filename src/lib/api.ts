@@ -10,6 +10,9 @@ import type {
   AccountInput,
   Capture,
   CaptureSync,
+  CompanionApplied,
+  CompanionConflict,
+  CompanionStatus,
   CardsOverview,
   CardTerm,
   CardTermChange,
@@ -199,6 +202,17 @@ export const api = {
    *  can, writing the phone's word list back out on the way. Safe to call as
    *  often as you like: a line already read is refused by its own digest. */
   syncCaptures: () => call<CaptureSync>('sync_captures'),
+
+  /** Where the phone's half of the book stands. See docs/companion.md. */
+  companionStatus: () => call<CompanionStatus>('companion_status'),
+  /** Takes in the phone's changes now and publishes the book. Null when no
+   *  companion folder is set. */
+  companionSync: () => call<CompanionApplied | null>('companion_sync'),
+  /** The phone's changes that were held rather than applied. */
+  companionConflicts: () => call<CompanionConflict[]>('companion_conflicts'),
+  /** Applies a held change over the row as it is now, or drops it. */
+  companionResolve: (id: string, accept: boolean) =>
+    call<void>('companion_resolve', { id, accept }),
   /** The captures still waiting for a person, newest first. */
   listCaptures: () => call<Capture[]>('list_captures'),
   /** Everything said out loud that made it into the ledger, newest first.
