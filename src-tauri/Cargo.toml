@@ -42,3 +42,7 @@ tauri-plugin-dialog = "2.7.2"
 # Bank statements arrive as the .xls files banks still export — legacy BIFF,
 # not zipped XML — and calamine reads both without a JS bridge in the middle.
 calamine = "0.26"
+# Statements go to Claude as base64 — PDFs and pictures as themselves.
+base64 = "0.22"
+# A pasted Claude API key lives in the macOS Keychain, never in the book.
+keyring = { version = "3", features = ["apple-native", "windows-native"] }

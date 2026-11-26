@@ -8,6 +8,7 @@ import type { InvestmentTab } from '../lib/types';
 export type Route =
   | 'overview'
   | 'transactions'
+  | 'ask'
   | 'siri'
   | 'planned'
   | 'debts'
@@ -51,6 +52,7 @@ export interface NavItem {
 export const NAV: NavItem[] = [
   { id: 'overview', label: 'Overview', icon: 'layout-dashboard' },
   { id: 'transactions', label: 'Transactions', icon: 'list-filter' },
+  { id: 'ask', label: 'Ask', icon: 'messages-square' },
   { id: 'siri', label: 'Siri', icon: 'sparkles' },
   { id: 'planned', label: 'Planned', icon: 'repeat' },
   { id: 'debts', label: 'Debts', icon: 'arrow-left-right' },

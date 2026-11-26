@@ -1,4 +1,6 @@
+mod ai;
 mod capture;
+mod chat;
 mod cards;
 mod cashback;
 mod db;
@@ -315,6 +317,86 @@ fn commit_statement_import(
     rows: Vec<ImportCommitRow>,
 ) -> R<ImportResult> {
     with_db(&db, |c| db::commit_import(c, &account_id, rows))
+}
+
+/// Where Claude's credential would come from, and what else is set up.
+/// Asking `ant` for a token blocks on a subprocess, so it runs off the main
+/// thread.
+#[tauri::command]
+async fn ai_status() -> R<ai::AiStatus> {
+    tauri::async_runtime::spawn_blocking(ai::status)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ai_save_key(key: String) -> R<()> {
+    ai::save_key(&key)
+}
+
+#[tauri::command]
+fn ai_forget_key() -> R<()> {
+    ai::forget_key()
+}
+
+/// Checks the credential against the API; answers with the model's name.
+#[tauri::command]
+async fn ai_test() -> R<String> {
+    ai::test().await
+}
+
+/// Reads statements with Claude into rows the importer can preview. The
+/// book is only read, for the categories and accounts to choose between,
+/// and the lock is let go before the first byte is sent.
+#[tauri::command]
+async fn ai_read_statements(
+    app: tauri::AppHandle,
+    db: State<'_, Db>,
+    run: String,
+    paths: Vec<String>,
+    account_id: String,
+    from: String,
+    to: String,
+) -> R<Vec<ai::AiRow>> {
+    let (account, categories, accounts) = {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        let accounts = db::list_accounts(&conn)?;
+        let categories = db::list_categories(&conn)?;
+        let account = accounts
+            .iter()
+            .find(|a| a.id == account_id)
+            .cloned()
+            .ok_or("That account no longer exists.")?;
+        let accounts: Vec<Account> =
+            accounts.into_iter().filter(|a| !a.archived && !a.system).collect();
+        (account, categories, accounts)
+    };
+    ai::read_statements(app, run, paths, account, from, to, categories, accounts).await
+}
+
+/// Answers a question about the book with Claude. `messages` is the whole
+/// conversation in the API's own shape, ending with the new question; the
+/// answer comes back as that conversation with Claude's turns added, and
+/// streams in meanwhile as `ai-chat-progress` events tagged with `run`.
+/// Claude reads through a read-only connection of its own. A change it asks
+/// for ends the call with the change pending; calling again with the user's
+/// `decisions` (tool call id → applied) makes the applied ones through the
+/// app's own save functions and carries on.
+#[tauri::command]
+async fn ai_chat(
+    app: tauri::AppHandle,
+    book: State<'_, chat::BookPath>,
+    run: String,
+    messages: Vec<serde_json::Value>,
+    decisions: Option<std::collections::HashMap<String, bool>>,
+) -> R<chat::ChatReply> {
+    chat::ask(app, run, book.0.clone(), messages, decisions.unwrap_or_default()).await
+}
+
+/// Asks a chat run to stop where it is.
+#[tauri::command]
+fn ai_chat_stop(run: String) {
+    chat::stop(&run);
 }
 
 #[tauri::command]
@@ -777,7 +859,8 @@ pub fn run() {
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
-            let conn = db::open(&dir.join("midas.sqlite3")).map_err(std::io::Error::other)?;
+            let book = dir.join("midas.sqlite3");
+            let conn = db::open(&book).map_err(std::io::Error::other)?;
             // Cycles that closed while the app was shut are credited now.
             cashback::settle(&conn).map_err(std::io::Error::other)?;
 
@@ -795,6 +878,7 @@ pub fn run() {
             let _ = capture::write_book(&conn);
 
             app.manage(Db(Mutex::new(conn)));
+            app.manage(chat::BookPath(book));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -830,6 +914,13 @@ pub fn run() {
             parse_statement,
             preview_statement_import,
             commit_statement_import,
+            ai_status,
+            ai_save_key,
+            ai_forget_key,
+            ai_test,
+            ai_read_statements,
+            ai_chat,
+            ai_chat_stop,
             list_labels,
             label_transactions,
             save_label,
