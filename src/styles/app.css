@@ -8973,7 +8973,10 @@ kbd {
 .ask-q-files { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .ask-q-files .ask-file { padding-right: 10px; background: var(--surface); border: 1px solid var(--line-soft); }
 
-.ask-layout { min-height: 100%; }
+/* A column the full height of the window, so the composer sits at the
+   bottom even before there is anything above it. */
+.ask-layout { min-height: 100%; display: flex; flex-direction: column; }
+.ask-layout > .ask-screen { flex: 1; }
 
 /* The chat's own name heads the page; it opens the list of chats. */
 .ask-head { align-items: center; }
