@@ -194,23 +194,21 @@ until confirmed in the app. Its key derivation mirrors
 
 ## Importing with Claude
 
-**Transactions → Import with Claude** is a guided version of the statement
-import for files the spreadsheet reader can't parse: PDFs, CSVs, other banks'
-spreadsheets, even screenshots. Four steps, no chat:
-
-1. **Range** — the account the statements belong to and the dates wanted.
-2. **Statements** — one or more files.
-3. **Reading** — Claude (`claude-opus-5-5`, from Rust in `ai.rs`) lists every
-   transaction in the range and suggests a description, a category from your
-   own list and a note for each. Progress streams in as it writes.
-4. **Review** — a table to edit descriptions, categories and notes inline,
-   open any row in the full transaction editor, and accept or skip rows.
+For files the spreadsheet reader can't parse (PDFs, CSVs, other banks'
+spreadsheets, even screenshots), drop the statement onto **Ask** and send it.
+Claude (`claude-opus-5-5`, from Rust in `ai.rs`) reads every transaction,
+works out the account, suggests a description and a category from your own
+list for each, and says what's new and what's already in the book. Nothing
+is written until you apply the import card it shows.
 
 Accepted rows go through the same `preview_import` / `commit_import` as the
 spreadsheet importer, so duplicates are set aside, a counterparty whose
 filing you confirmed before keeps that filing, and accepting a row teaches its
 rule. Rows Claude was unsure of and you left untouched arrive labelled
 **Triage**.
+
+Rows picked in the ledger can be taken to Ask too: **Ask Claude** in the bar
+at the bottom brings them into a new chat or an existing one.
 
 **Connecting Claude** (Settings → Claude). Anthropic has no "Sign in with
 Claude" for a local app — its third-party OAuth needs a server and an identity

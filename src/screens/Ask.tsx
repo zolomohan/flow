@@ -7,8 +7,8 @@ import { Button, Confirm } from '../components/ui';
 import { ChatMarkdown } from '../components/ChatMarkdown';
 import { api, isDesktop } from '../lib/api';
 import {
-  ask, attach, decide, decideAll, deleteChat, detach, newChat, openChat, refreshChats, stop,
-  takeReturned, turns, useChat,
+  ask, attach, decide, decideAll, deleteChat, detach, dropSelection, newChat, openChat,
+  refreshChats, renameChat, stop, takeReturned, turns, useChat,
   type Part,
 } from '../lib/chat';
 import { spring } from '../lib/motion';
@@ -43,6 +43,7 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [dragging, setDragging] = useState(false);
   const [refused, setRefused] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const bottom = useRef<HTMLDivElement>(null);
 
@@ -90,6 +91,24 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
     input.current?.focus({ preventScroll: true });
   };
 
+  // Transactions brought over from the ledger wait for the question about them.
+  useEffect(() => {
+    if (chat.selection) input.current?.focus({ preventScroll: true });
+  }, [chat.selection]);
+
+  const saveRename = async () => {
+    const r = renaming;
+    setRenaming(null);
+    if (!r) return;
+    const was = chat.chats.find((c) => c.id === r.id)?.title;
+    if (!r.title.trim() || r.title.trim() === was) return;
+    try {
+      await renameChat(r.id, r.title);
+    } catch {
+      void refreshChats();
+    }
+  };
+
   // A question that didn't get an answer comes back to be asked again.
   useEffect(() => {
     if (chat.returned === null) return;
@@ -130,7 +149,7 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
   }, [chat.live, chat.messages, chat.pending, chat.asking]);
 
   const submit = (text = draft) => {
-    if ((!text.trim() && chat.files.length === 0) || busy || waiting) return;
+    if ((!text.trim() && chat.files.length === 0 && !chat.selection) || busy || waiting) return;
     following.current = true;
     setDraft('');
     void ask(text);
@@ -155,9 +174,40 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
         {chat.chats.length === 0 && <p className="ask-chats-none">Your chats will be kept here.</p>}
         {chat.chats.map((c) => (
           <div key={c.id} className={`ask-chat-item ${c.id === chat.chatId ? 'is-active' : ''}`}>
-            <button className="ask-chat-open" onClick={() => void openChat(c.id)} disabled={busy} title={c.title}>
-              <span className="ask-chat-title">{c.title}</span>
-              <span className="ask-chat-when">{when(c.updatedAt)}</span>
+            {renaming?.id === c.id ? (
+              <input
+                className="ask-chat-rename"
+                value={renaming.title}
+                maxLength={120}
+                autoFocus
+                onFocus={(e) => e.currentTarget.select()}
+                onChange={(e) => setRenaming({ id: c.id, title: e.target.value })}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void saveRename();
+                  else if (e.key === 'Escape') setRenaming(null);
+                }}
+                onBlur={() => void saveRename()}
+                aria-label="Chat name"
+              />
+            ) : (
+              <button
+                className="ask-chat-open"
+                onClick={() => void openChat(c.id)}
+                onDoubleClick={() => setRenaming({ id: c.id, title: c.title })}
+                disabled={busy}
+                title={c.title}
+              >
+                <span className="ask-chat-title">{c.title}</span>
+                <span className="ask-chat-when">{when(c.updatedAt)}</span>
+              </button>
+            )}
+            <button
+              className="ask-chat-delete is-rename"
+              onClick={() => setRenaming({ id: c.id, title: c.title })}
+              aria-label="Rename chat"
+              title="Rename chat"
+            >
+              <Icon name="pencil" size={14} />
             </button>
             <button
               className="ask-chat-delete"
@@ -245,12 +295,14 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
 
         {history.map((turn, i) => (
           <div key={i} className="ask-turn">
-            <Question text={turn.question} files={turn.files} />
+            <Question text={turn.question} files={turn.files} selected={turn.selected} />
             <Answer parts={turn.answer} />
           </div>
         ))}
 
-        {chat.asking && <Question text={chat.asking} files={chat.askingFiles} />}
+        {chat.asking && (
+          <Question text={chat.asking} files={chat.askingFiles} selected={chat.askingSelection?.count ?? 0} />
+        )}
         {chat.live && <Answer parts={chat.live} live />}
 
         <AnimatePresence>
@@ -291,8 +343,17 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
       </div>
 
       <div className="ask-composer">
-        {(chat.files.length > 0 || refused) && (
+        {(chat.files.length > 0 || refused || chat.selection) && (
           <div className="ask-attached">
+            {chat.selection && (
+              <span className="ask-file is-selection">
+                <Icon name="receipt" size={13} />
+                {transactionsLabel(chat.selection.count)} from the ledger
+                <button onClick={dropSelection} aria-label="Remove the transactions">
+                  <Icon name="x" size={12} strokeWidth={2.4} />
+                </button>
+              </span>
+            )}
             {chat.files.map((f) => (
               <span key={f} className="ask-file" title={f}>
                 <Icon name="file-text" size={13} />
@@ -324,7 +385,9 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
               ? 'Apply or decline the change above first'
               : chat.files.length > 0
                 ? 'Which account is it for? Or just send to import it'
-                : 'Ask about your spending, or ask for a change…'
+                : chat.selection
+                  ? 'What would you like to know, or change, about these?'
+                  : 'Ask about your spending, or ask for a change…'
           }
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKey}
@@ -339,7 +402,7 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
           <button
             className="ask-send"
             onClick={() => submit()}
-            disabled={(!draft.trim() && chat.files.length === 0) || waiting}
+            disabled={(!draft.trim() && chat.files.length === 0 && !chat.selection) || waiting}
             aria-label="Send"
             title="Send  ↵"
           >
@@ -353,11 +416,20 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
   );
 }
 
-function Question({ text, files = [] }: { text: string; files?: string[] }) {
+const transactionsLabel = (n: number) =>
+  `${n.toLocaleString('en-IN')} ${n === 1 ? 'transaction' : 'transactions'}`;
+
+function Question({ text, files = [], selected = 0 }: { text: string; files?: string[]; selected?: number }) {
   return (
     <div className="ask-q">
-      {files.length > 0 && (
+      {(files.length > 0 || selected > 0) && (
         <div className="ask-q-files">
+          {selected > 0 && (
+            <span className="ask-file is-selection">
+              <Icon name="receipt" size={13} />
+              {transactionsLabel(selected)}
+            </span>
+          )}
           {files.map((f) => (
             <span key={f} className="ask-file" title={f}>
               <Icon name="file-text" size={13} />

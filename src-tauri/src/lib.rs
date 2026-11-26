@@ -426,6 +426,12 @@ fn chat_delete(db: State<Db>, id: String) -> R<()> {
     chat::delete_chat(&conn, &id)
 }
 
+#[tauri::command]
+fn chat_rename(db: State<Db>, id: String, title: String) -> R<()> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    chat::rename_chat(&conn, &id, &title)
+}
+
 /// Asks a chat run to stop where it is.
 #[tauri::command]
 fn ai_chat_stop(run: String) {
@@ -960,6 +966,7 @@ pub fn run() {
             chat_load,
             chat_save,
             chat_delete,
+            chat_rename,
             list_labels,
             label_transactions,
             save_label,

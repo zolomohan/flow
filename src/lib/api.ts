@@ -165,6 +165,7 @@ export const api = {
   chatSave: (id: string, title: string, messages: unknown[], pending: AiPendingChange[]) =>
     call<void>('chat_save', { id, title, messages, pending }),
   chatDelete: (id: string) => call<void>('chat_delete', { id }),
+  chatRename: (id: string, title: string) => call<void>('chat_rename', { id, title }),
   /** Posts the agreed rows, wearing the Triage label where asked. A row
    *  marked as not affecting the balance is absorbed by the openings it
    *  touches, so recording it moves nothing. */

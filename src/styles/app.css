@@ -8899,8 +8899,29 @@ kbd {
   transition: opacity var(--fast) var(--ease);
 }
 .ask-chat-item:hover .ask-chat-delete,
-.ask-chat-delete:focus-visible { opacity: 1; }
+.ask-chat-item:focus-within .ask-chat-delete { opacity: 1; }
+/* Where there's a pointer, the two buttons only take room while they show,
+   so a title isn't cut short for buttons nobody can see. */
+@media (hover: hover) {
+  .ask-chat-item:not(:hover):not(:focus-within) .ask-chat-delete { display: none; }
+}
 .ask-chat-delete:hover { background: var(--red-soft); color: var(--red); }
+.ask-chat-delete.is-rename { margin-right: 0; }
+.ask-chat-delete.is-rename:hover { background: var(--surface-3); color: var(--ink); }
+.ask-chat-rename {
+  flex: 1;
+  min-width: 0;
+  margin: 4px 4px 4px 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--blue);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+.ask-file.is-selection { color: var(--ink); }
 
 .ask-drop {
   position: fixed;

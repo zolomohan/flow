@@ -1424,6 +1424,24 @@ pub fn delete_chat(conn: &Connection, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Gives a saved chat a name of the user's own. Nothing else about it moves,
+/// its place in the list included.
+pub fn rename_chat(conn: &Connection, id: &str, title: &str) -> Result<()> {
+    ensure_table(conn)?;
+    let title: String = title.split_whitespace().collect::<Vec<_>>().join(" ");
+    if title.is_empty() {
+        return Err("A chat needs a name.".into());
+    }
+    let title: String = title.chars().take(120).collect();
+    let n = conn
+        .execute("UPDATE chats SET title = ?2 WHERE id = ?1", rusqlite::params![id, title])
+        .map_err(|e| e.to_string())?;
+    if n == 0 {
+        return Err("That chat isn't saved any more.".into());
+    }
+    Ok(())
+}
+
 pub fn clear_chats(conn: &Connection) -> Result<()> {
     ensure_table(conn)?;
     conn.execute("DELETE FROM chats", []).map_err(|e| e.to_string())?;
@@ -1467,6 +1485,10 @@ You can also change the book, but only with the change tools (add_transaction, e
 - Debts: `debts.direction` is 'lent' or 'borrowed'; outstanding is principal plus `debt_additions` minus `debt_payments`, and a debt with `settled_at` is closed.
 - Labels (`labels`, `transaction_labels`) and folders (`folders`, `folder_transactions`) group transactions; `plans` are recurring bills and income; `holdings` and `investment_lots` are mutual funds, gold and deposits (quantities ×10⁴ in `*_e4` columns).
 - `merchant` is free text and may be spelled inconsistently; match with LIKE and lower() when searching for one.
+
+## Selected transactions
+
+The user can pick transactions in the ledger and bring them here; they arrive in their message after a line reading "Selected transactions:", with the count, then one line per transaction starting with its id (with date, description, amount, account and category where the ledger had them). "These", "them" and "the selected ones" mean those rows. Look them up by id in the transactions table (`WHERE t.id IN (...)`) for anything the lines leave out, and pass those ids to the change tools when the user asks to change them. Later questions in the chat may come with a different selection; the latest one is what "these" means.
 
 ## Statements
 
@@ -2286,6 +2308,10 @@ mod tests {
         assert_eq!(list[0].id, "c1");
         let c2 = load_chat(&conn, "c2").unwrap();
         assert_eq!(c2.pending.len(), 1);
+        rename_chat(&conn, "c2", "  Trip   costs ").unwrap();
+        assert_eq!(load_chat(&conn, "c2").unwrap().title, "Trip costs");
+        assert!(rename_chat(&conn, "c2", "   ").is_err());
+        assert!(rename_chat(&conn, "gone", "x").is_err());
         delete_chat(&conn, "c1").unwrap();
         assert_eq!(list_chats(&conn).unwrap().len(), 1);
         assert!(load_chat(&conn, "c1").is_err());

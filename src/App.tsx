@@ -628,6 +628,7 @@ function Shell() {
                 categoryFocus={categoryFocus}
                 labelFocus={labelFocus}
                 onFocusUsed={forgetFocus}
+                onAskAbout={() => setRoute('ask')}
               />
             ) : route === 'planned' ? (
               <Planned

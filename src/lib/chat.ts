@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { api, isDesktop } from './api';
 import type {
-  AiChatProgress, AiChatReply, AiPendingChange, AiReadProgress, ChatSummary,
+  AiChatProgress, AiChatReply, AiPendingChange, AiReadProgress, ChatSummary, Transaction,
 } from './types';
 
 /**
@@ -27,6 +27,20 @@ import type {
 /** How attached statements are written into a question: this line, then
  *  one `- /path` line per file. Rust reads the same marker. */
 export const ATTACHED = 'Attached statement files:';
+
+/** How transactions picked in the ledger are written into a question: this
+ *  line with the count, then one line per transaction, its id first. */
+export const SELECTED = 'Selected transactions:';
+/** Past this many, the rest go by id alone, so a whole year picked at once
+ *  doesn't fill the question. */
+const SELECTED_IN_FULL = 300;
+
+/** Transactions brought over from the ledger, waiting in the composer. */
+export interface Selection {
+  count: number;
+  /** The block that goes into the question, marker line and all. */
+  text: string;
+}
 
 /** The tools that change the book, as against the ones that read it. */
 const WRITE_TOOLS = new Set([
@@ -71,6 +85,8 @@ export interface Turn {
   question: string;
   /** Statements attached to the question, by path. */
   files: string[];
+  /** How many ledger transactions came with it. */
+  selected: number;
   answer: Part[];
 }
 
@@ -82,6 +98,9 @@ interface State {
   chats: ChatSummary[];
   /** Statements waiting in the composer for the next question. */
   files: string[];
+  /** Ledger transactions waiting in the composer, and those being asked about. */
+  selection: Selection | null;
+  askingSelection: Selection | null;
   messages: unknown[];
   /** The answer streaming in, while one is. */
   live: Part[] | null;
@@ -103,6 +122,8 @@ let state: State = {
   chats: [],
   files: [],
   askingFiles: [],
+  selection: null,
+  askingSelection: null,
   messages: [],
   live: null,
   run: null,
@@ -197,8 +218,10 @@ async function send(
       run: null,
       asking: null,
       askingFiles: [],
+      askingSelection: null,
       // What was attached goes back with the question.
       files: asking !== null ? state.askingFiles : state.files,
+      selection: asking !== null ? state.askingSelection : state.selection,
       error: message === 'Stopped.' ? null : message,
       returned: asking,
     });
@@ -212,6 +235,7 @@ async function send(
     run: null,
     asking: null,
     askingFiles: [],
+    askingSelection: null,
     pending: reply.pending,
     decisions: {},
   });
@@ -261,6 +285,14 @@ export async function openChat(id: string) {
   }
 }
 
+export async function renameChat(id: string, title: string) {
+  const name = title.replace(/\s+/g, ' ').trim();
+  if (!name) return;
+  await api.chatRename(id, name);
+  if (id === state.chatId) set({ title: name });
+  await refreshChats();
+}
+
 export async function deleteChat(id: string) {
   await api.chatDelete(id);
   if (id === state.chatId) newChat();
@@ -277,22 +309,62 @@ export function detach(path: string) {
   set({ files: state.files.filter((f) => f !== path) });
 }
 
+/**
+ * Brings transactions picked in the ledger into a chat: a new one when
+ * `chatId` is null, or a saved one, opened, so what was said there is the
+ * context. They wait in the composer for the question about them.
+ * `known` carries what the ledger had on screen; any id it didn't cover is
+ * sent by id alone, for Claude to look up.
+ */
+export async function bringTransactions(ids: string[], known: Transaction[], chatId: string | null) {
+  if (ids.length === 0) return;
+  // An answer still coming in is let go: the ledger has moved on.
+  if (state.run) newChat();
+  if (chatId) {
+    await openChat(chatId);
+    if (state.chatId !== chatId) return;
+  } else {
+    newChat();
+  }
+  set({ selection: selectionOf(ids, known) });
+}
+
+export function dropSelection() {
+  set({ selection: null });
+}
+
+function selectionOf(ids: string[], known: Transaction[]): Selection {
+  const byId = new Map(known.map((t) => [t.id, t]));
+  const lines = ids.map((id, n) => {
+    const t = byId.get(id);
+    if (!t || n >= SELECTED_IN_FULL) return `- ${id}`;
+    const amount = `₹${(t.amount / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const where = t.kind === 'transfer' ? `${t.accountName} → ${t.toAccountName ?? '?'}` : t.accountName;
+    const filed = t.kind === 'transfer' ? 'transfer' : (t.categoryName ?? 'uncategorised');
+    const parts = [id, t.occurredAt.slice(0, 10), t.merchant || '(no description)', `${t.kind} ${amount}`, where, filed];
+    if (t.note) parts.push(`note: ${t.note}`);
+    return `- ${parts.join(' · ')}`;
+  });
+  return { count: ids.length, text: `${SELECTED} ${ids.length}\n${lines.join('\n')}` };
+}
+
 export async function ask(question: string) {
   const files = state.files;
-  const q = question.trim() || (files.length > 0 ? 'Import this statement.' : '');
+  const selection = state.selection;
+  const q =
+    question.trim() ||
+    (files.length > 0 ? 'Import this statement.' : selection ? 'What can you tell me about these?' : '');
   if (!q || state.run || state.pending.length > 0) return;
   const before = state.messages;
-  const content =
-    files.length === 0
-      ? q
-      : [
-          { type: 'text', text: q },
-          { type: 'text', text: `${ATTACHED}\n${files.map((f) => `- ${f}`).join('\n')}` },
-        ];
+  const extra = [
+    ...(selection ? [{ type: 'text', text: selection.text }] : []),
+    ...(files.length ? [{ type: 'text', text: `${ATTACHED}\n${files.map((f) => `- ${f}`).join('\n')}` }] : []),
+  ];
+  const content = extra.length === 0 ? q : [{ type: 'text', text: q }, ...extra];
   if (!state.chatId) {
     set({ chatId: crypto.randomUUID(), title: q.replace(/\s+/g, ' ').slice(0, 80) });
   }
-  set({ files: [], askingFiles: files });
+  set({ files: [], askingFiles: files, selection: null, askingSelection: selection });
   // The question goes back in the composer if this fails: nothing about it
   // reached the transcript, so asking again is asking it fresh.
   await send([...before, { role: 'user', content }], before, q);
@@ -337,6 +409,8 @@ export function newChat() {
     title: '',
     files: [],
     askingFiles: [],
+    selection: null,
+    askingSelection: null,
     messages: [],
     live: null,
     run: null,
@@ -420,8 +494,10 @@ export function turns(messages: unknown[]): Turn[] {
         .flatMap((t) => t.split('\n').slice(1))
         .map((l) => l.replace(/^\s*-\s*/, '').trim())
         .filter(Boolean);
-      const text = texts.filter((t) => !t.startsWith(ATTACHED)).join('\n');
-      if (text || files.length) out.push({ question: text, files, answer: [] });
+      const marked = texts.find((t) => t.startsWith(SELECTED));
+      const selected = marked ? Number(marked.slice(SELECTED.length).split('\n')[0]) || 0 : 0;
+      const text = texts.filter((t) => !t.startsWith(ATTACHED) && !t.startsWith(SELECTED)).join('\n');
+      if (text || files.length || selected) out.push({ question: text, files, selected, answer: [] });
       continue;
     }
     const turn = out[out.length - 1];

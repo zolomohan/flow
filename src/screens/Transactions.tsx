@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from '../components/Icon';
 import { TransactionRow } from '../components/TransactionRow';
-import { AiImportSheet } from '../components/AiImportSheet';
+import { bringTransactions, refreshChats, useChat } from '../lib/chat';
 import {
   Button, Card, Chip, Confirm, Empty, IconButton, Segmented, Select, TextInput,
   type SegmentOption, type SelectOption,
@@ -85,12 +85,14 @@ const PAGE = 300;
  * simply appear.
  */
 const STAGGER_UP_TO = 120;
+/** The Ask Claude menu's first choice, as against a saved chat's id. */
+const NEW_CHAT = '__new__';
 const PLAIN_LIST = { initial: {}, animate: { transition: { staggerChildren: 0 } } };
 
 export function Transactions({
   onOpenTransaction, onSplitTransaction, onOweTransaction, onRefundTransaction,
   onAddTransaction, accountFocus, categoryFocus, labelFocus, onFocusUsed,
-  picking, pickMany, initialSearch,
+  picking, pickMany, initialSearch, onAskAbout,
 }: {
   onOpenTransaction: (tx: Transaction) => void;
   /** Opens a row straight into its split editor. Absent while picking. */
@@ -131,6 +133,8 @@ export function Transactions({
   pickMany?: { label: string; onConfirm: (ids: string[]) => void };
   /** What the search box starts with, for a picker opened about something. */
   initialSearch?: string;
+  /** Goes to Ask, once picked rows have been brought into a chat there. */
+  onAskAbout?: () => void;
 }) {
   const {
     accounts, categories, labels, folders, addToFolder, labelTransactions,
@@ -153,7 +157,6 @@ export function Transactions({
   const [labelIds, setLabelIds] = useState<string[]>([]);
   const [catQuery, setCatQuery] = useState('');
   const [showFilters, setShowFilters] = useState(false);
-  const [aiImportOpen, setAiImportOpen] = useState(false);
   const [rows, setRows] = useState<Transaction[]>([]);
   const [summary, setSummary] = useState<TransactionSummary | null>(null);
   const [shown, setShown] = useState(PAGE);
@@ -458,6 +461,22 @@ export function Transactions({
   // What a change can be applied to, which is not always everything picked:
   // a transfer has no category, and a split bill takes its own from its parts.
   const chosen = rows.filter((r) => pickedSet.has(r.id));
+
+  // Picked rows can be taken to Ask: into a new chat, or into a saved one
+  // whose conversation they are then asked about alongside.
+  const { chats } = useChat();
+  const someonePicked = pickedSet.size > 0;
+  useEffect(() => {
+    if (someonePicked && onAskAbout) void refreshChats();
+  }, [someonePicked, onAskAbout]);
+  const askOptions: SelectOption[] = [
+    { value: NEW_CHAT, label: 'New chat', icon: 'plus' },
+    ...chats.map((c) => ({ value: c.id, label: c.title, icon: 'messages-square', group: 'Add to a chat' })),
+  ];
+  const askAbout = async (chatId: string | null) => {
+    await bringTransactions(chosen.map((r) => r.id), chosen, chatId);
+    onAskAbout?.();
+  };
   const categorisable = chosen.filter((r) => r.kind !== 'transfer' && !r.splits.length).length;
 
   // Where a run of rows can be gathered to. A folder holds names rather than
@@ -637,9 +656,6 @@ export function Transactions({
           {months > 0 && <MonthNav month={month} onChange={setMonth} span={months} />}
           {!picking && (
             <>
-              <Button icon="sparkles" onClick={() => setAiImportOpen(true)}>
-                Import with Claude
-              </Button>
               <Button tone="primary" icon="plus" onClick={onAddTransaction}>
                 Add transaction
               </Button>
@@ -1161,6 +1177,17 @@ export function Transactions({
             ) : (
               <>
             <div className="bulk-fields">
+              {onAskAbout && (
+                <Select
+                  options={askOptions}
+                  value={null}
+                  onChange={(id) => id && void askAbout(id === NEW_CHAT ? null : id)}
+                  placeholder="Ask Claude"
+                  searchable={chats.length > 6}
+                  searchPlaceholder="Find a chat"
+                  disabled={working}
+                />
+              )}
               <Select
                 options={bulkCategories}
                 value={null}
@@ -1292,7 +1319,6 @@ export function Transactions({
           : 'They go together, and this cannot be undone.'}
       </Confirm>
 
-      <AiImportSheet open={aiImportOpen} onClose={() => setAiImportOpen(false)} />
     </div>
   );
 }
