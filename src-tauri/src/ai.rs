@@ -37,14 +37,14 @@ use crate::models::{Account, Category, Paise, StatementRow};
 
 type Result<T> = std::result::Result<T, String>;
 
-const API: &str = "https://api.anthropic.com";
-const API_VERSION: &str = "2026-10-21";
-const MODEL: &str = "claude-opus-5-5";
+pub(crate) const API: &str = "https://api.anthropic.com";
+pub(crate) const API_VERSION: &str = "2026-10-21";
+pub(crate) const MODEL: &str = "claude-opus-5-5";
 /// Sent with a CLI sign-in's token, which is OAuth rather than a key.
 const OAUTH_BETA: &str = "oauth-2025-04-20";
 /// Lets the API re-run a declined request on another model inside the same
 /// call, instead of handing the refusal back.
-const FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
+pub(crate) const FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
 
 const KEYCHAIN_SERVICE: &str = "flow.claude";
 const KEYCHAIN_ACCOUNT: &str = "api-key";
@@ -55,7 +55,7 @@ const MAX_FILE_BYTES: u64 = 22 * 1024 * 1024;
 // ------------------------------------------------------------ credentials
 
 #[derive(Debug, Clone)]
-enum Credential {
+pub(crate) enum Credential {
     /// A short-lived OAuth access token from the CLI's sign-in.
     Bearer(String),
     ApiKey(String),
@@ -206,7 +206,7 @@ pub fn status() -> AiStatus {
     }
 }
 
-fn credential() -> Result<Credential> {
+pub(crate) fn credential() -> Result<Credential> {
     let mut ant_problem = None;
     if let Some(ant) = find_ant() {
         match ant_token(&ant) {
@@ -222,7 +222,7 @@ fn credential() -> Result<Credential> {
     }))
 }
 
-fn request(
+pub(crate) fn request(
     client: &reqwest::Client,
     method: reqwest::Method,
     path: &str,
@@ -249,7 +249,7 @@ fn request(
 
 /// The API's own words for a failed request, put the way a person reading a
 /// Settings page would want them.
-async fn api_error(resp: reqwest::Response) -> String {
+pub(crate) async fn api_error(resp: reqwest::Response) -> String {
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     let message = serde_json::from_str::<Value>(&body)
@@ -265,7 +265,7 @@ async fn api_error(resp: reqwest::Response) -> String {
     }
 }
 
-fn client(timeout: Duration) -> Result<reqwest::Client> {
+pub(crate) fn client(timeout: Duration) -> Result<reqwest::Client> {
     reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(20))
         .timeout(timeout)
@@ -709,7 +709,7 @@ async fn stream_text(
 
 /// Where the first complete event in `buf` ends: (end of its text, end of
 /// its terminating blank line).
-fn find_event_end(buf: &[u8]) -> Option<(usize, usize)> {
+pub(crate) fn find_event_end(buf: &[u8]) -> Option<(usize, usize)> {
     let lf = buf.windows(2).position(|w| w == b"\n\n").map(|i| (i, i + 2));
     let crlf = buf.windows(4).position(|w| w == b"\r\n\r\n").map(|i| (i, i + 4));
     match (lf, crlf) {

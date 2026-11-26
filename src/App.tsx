@@ -20,6 +20,7 @@ import { Button, Empty } from './components/ui';
 import { Overview } from './screens/Overview';
 import { Transactions } from './screens/Transactions';
 import { Siri } from './screens/Siri';
+import { Ask } from './screens/Ask';
 import { Planned } from './screens/Planned';
 import { Accounts } from './screens/Accounts';
 import { Cards } from './screens/Cards';
@@ -665,6 +666,8 @@ function Shell() {
                 onAddLot={(holding) => setLotTarget({ holding, lot: null })}
                 onEditLot={(holding, lot) => setLotTarget({ holding, lot })}
               />
+            ) : route === 'ask' ? (
+              <Ask onOpenSettings={() => setRoute('settings')} />
             ) : route === 'siri' ? (
               <Siri onOpenTransaction={openTransactionById} />
             ) : route === 'categories' ? (

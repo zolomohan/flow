@@ -843,6 +843,34 @@ export interface AiReadProgress {
   found: number;
 }
 
+/** A change Claude asked to make, waiting on the user. */
+export interface AiPendingChange {
+  /** The tool call's id: what the user's answer is keyed by. */
+  id: string;
+  tool: string;
+  title: string;
+  lines: string[];
+}
+
+export interface AiChatReply {
+  messages: unknown[];
+  /** When there are any, the conversation waits on the user's answer. */
+  pending: AiPendingChange[];
+}
+
+/** What a chat run is doing, as it does it. */
+export interface AiChatProgress {
+  run: string;
+  /** text: a piece of the answer · tool: a lookup starting (input set once
+   *  it is complete) · tool_done: a lookup finished · step: a new round trip */
+  kind: 'text' | 'tool' | 'tool_done' | 'step';
+  text?: string;
+  tool?: string;
+  input?: unknown;
+  error?: string;
+  rows?: number;
+}
+
 /** One row the user agreed to bring in: the statement's line, and the full
  *  posting it should become — whatever the transaction sheet wrote, splits,
  *  shares and all. */
