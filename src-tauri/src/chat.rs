@@ -33,6 +33,9 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::ai::{self, Credential, FALLBACK_BETA, MODEL};
+
+/// Lets thinking bound to an older system prompt be dropped, not refused.
+const BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
 use crate::db::{self, Db};
 use crate::capture;
 use crate::cashback;
@@ -1932,7 +1935,14 @@ pub async fn ask(
                 "max_tokens": 32000,
                 "stream": true,
                 "fallbacks": "default",
-                "thinking": { "type": "adaptive" },
+                // A saved chat's thinking is bound to the system prompt it was
+                // written under, and that prompt moves: the schema grows, the
+                // rules get revised. Thinking that no longer matches is
+                // dropped rather than failing the whole question.
+                "thinking": {
+                    "type": "adaptive",
+                    "block_binding": { "prefix_mismatch_behavior": "drop_block" },
+                },
                 "output_config": { "effort": "medium" },
                 // The conversation so far is cached as it grows, so each
                 // round trip only pays in full for what is new.
@@ -2173,22 +2183,33 @@ async fn stream_message(
             .json(body)
             .send()
     };
-    let mut resp = send(body, &[FALLBACK_BETA])
-        .await
-        .map_err(|e| format!("Couldn't reach Claude: {e}"))?;
-    if resp.status() == reqwest::StatusCode::BAD_REQUEST {
-        // Server-side fallbacks are a beta; without them, ask anyway.
-        let err = ai::api_error(resp).await;
-        if !err.to_lowercase().contains("fallback") {
-            return Err(err);
-        }
-        let mut plain = body.clone();
-        if let Some(obj) = plain.as_object_mut() {
-            obj.remove("fallbacks");
-        }
-        resp = send(&plain, &[])
+    // Both are betas. If one is turned away, ask again without it.
+    let mut body = body.clone();
+    let mut betas = vec![FALLBACK_BETA, BINDING_BETA];
+    let mut resp;
+    loop {
+        resp = send(&body, &betas)
             .await
             .map_err(|e| format!("Couldn't reach Claude: {e}"))?;
+        if resp.status() != reqwest::StatusCode::BAD_REQUEST {
+            break;
+        }
+        let err = ai::api_error(resp).await;
+        let lower = err.to_lowercase();
+        let obj = body.as_object_mut().ok_or("bad request body")?;
+        if lower.contains("fallback") && obj.contains_key("fallbacks") {
+            obj.remove("fallbacks");
+            betas.retain(|b| *b != FALLBACK_BETA);
+        } else if (lower.contains("block_binding") || lower.contains("thinking-binding"))
+            && betas.contains(&BINDING_BETA)
+        {
+            if let Some(t) = obj.get_mut("thinking").and_then(Value::as_object_mut) {
+                t.remove("block_binding");
+            }
+            betas.retain(|b| *b != BINDING_BETA);
+        } else {
+            return Err(err);
+        }
     }
     if !resp.status().is_success() {
         return Err(ai::api_error(resp).await);
