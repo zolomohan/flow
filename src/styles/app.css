@@ -82,6 +82,24 @@ input, textarea {
   cursor: text;
 }
 
+/* The chat is the exception to the ban: questions, answers, the queries
+   behind them and what a change card says are all things to copy out.
+   Buttons inside stay unselectable, so a drag can't pick up their labels. */
+.ask-q-bubble,
+.ask-a .chat-md,
+.ask-lookup-body,
+.ask-change,
+.ask-error,
+.apc-heading,
+.apc-fields,
+.apc-notes,
+.apc-rows table {
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
+}
+.ask-log button { -webkit-user-select: none; user-select: none; }
+
 /* Nothing drags out of the window as a picture, the way it would off a page. */
 img { -webkit-user-drag: none; }
 
