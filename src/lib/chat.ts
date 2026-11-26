@@ -51,6 +51,16 @@ const WRITE_TOOLS = new Set([
   'add_category',
   'label_transactions',
   'import_statement',
+  'debts',
+  'labels',
+  'folders',
+  'categories',
+  'accounts',
+  'plans',
+  'templates',
+  'investments',
+  'captures',
+  'mark_reviewed',
 ]);
 
 export const isWriteTool = (tool: string) => WRITE_TOOLS.has(tool);
@@ -535,6 +545,16 @@ function changeName(tool: string): string {
     case 'add_category': return 'Add a category';
     case 'label_transactions': return 'Label transactions';
     case 'import_statement': return 'Import a statement';
+    case 'debts': return 'Change a debt';
+    case 'labels': return 'Change labels';
+    case 'folders': return 'Change folders';
+    case 'categories': return 'Change categories';
+    case 'accounts': return 'Change an account';
+    case 'plans': return 'Change a planned payment';
+    case 'templates': return 'Change a template';
+    case 'investments': return 'Change an investment';
+    case 'captures': return 'File a Siri capture';
+    case 'mark_reviewed': return 'Mark reviewed';
     default: return tool;
   }
 }

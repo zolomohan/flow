@@ -38,6 +38,7 @@ use crate::ai::{self, Credential, FALLBACK_BETA, MODEL};
 const BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
 use crate::db::{self, Db};
 use crate::capture;
+use crate::chat_actions;
 use crate::cashback;
 use crate::models::{
     CategoryInput, ImportCommitRow, Paise, StatementRow, Transaction, TransactionInput, TransactionPatch,
@@ -420,13 +421,13 @@ fn is_write(name: &str) -> bool {
             | "add_category"
             | "label_transactions"
             | "import_statement"
-    )
+    ) || chat_actions::is_action(name)
 }
 
 fn write_tools() -> Vec<Value> {
     let note = " The user sees the change and approves or declines it before anything is written; \
                 you get back what was done, or that they declined.";
-    vec![
+    let mut tools = vec![
         json!({
             "name": "add_transaction",
             "description": format!("Add one transaction to the book.{note} Amount is positive integer paise; \
@@ -444,6 +445,10 @@ fn write_tools() -> Vec<Value> {
                     "merchant": { "type": "string", "description": "Who it was with." },
                     "note": { "type": "string" },
                     "occurred_at": { "type": "string", "description": "YYYY-MM-DD or YYYY-MM-DDTHH:MM." },
+                    "splits": { "type": "array", "description": "Split the bill across categories: parts that add up to the amount exactly. Given on an edit, replaces the split; [] removes it.", "items": { "type": "object", "properties": { "id": { "type": "string" }, "amount": { "type": "integer" }, "category_id": { "type": "string" }, "note": { "type": "string" } }, "required": ["amount", "category_id"] } },
+                    "shares": { "type": "array", "description": "Who else was in on it, each share a debt of its own (table debts, transaction_id = this transaction). A share for the whole amount makes the whole transaction a debt in that person's name. direction lent = they owe you; borrowed = you owe them. Given on an edit, replaces the shares: keep existing ones by passing their debt id as id; [] removes them all.", "items": { "type": "object", "properties": { "id": { "type": "string" }, "direction": { "type": "string", "enum": ["lent", "borrowed"] }, "counterparty": { "type": "string" }, "amount": { "type": "integer" }, "due_on": { "type": "string" }, "note": { "type": "string" } }, "required": ["direction", "counterparty", "amount"] } },
+                    "refund_of": { "type": "string", "description": "The id of the transaction this one gives back (a refund). Opposite kind to it." },
+                    "cashback": { "type": "integer", "description": "Cashback this card purchase earned, paise, when it isn't the card's usual rate." },
                     "label_ids": { "type": "array", "items": { "type": "string" } }
                 },
                 "required": ["kind", "amount", "account_id", "merchant", "occurred_at"],
@@ -452,8 +457,9 @@ fn write_tools() -> Vec<Value> {
         }),
         json!({
             "name": "edit_transaction",
-            "description": format!("Change one transaction. Only the fields given change; splits, labels and \
-                refund links are kept.{note}"),
+            "description": format!("Change one transaction. Only the fields given change; splits, shares, labels, \
+                refund link and cashback are kept unless given. To make a transaction a debt in someone's name, \
+                or split a bill with people, give it `shares`.{note}"),
             "eager_input_streaming": true,
             "input_schema": {
                 "type": "object",
@@ -466,7 +472,12 @@ fn write_tools() -> Vec<Value> {
                     "category_id": { "type": "string" },
                     "merchant": { "type": "string" },
                     "note": { "type": "string" },
-                    "occurred_at": { "type": "string" }
+                    "occurred_at": { "type": "string" },
+                    "splits": { "type": "array", "description": "Split the bill across categories: parts that add up to the amount exactly. Given on an edit, replaces the split; [] removes it.", "items": { "type": "object", "properties": { "id": { "type": "string" }, "amount": { "type": "integer" }, "category_id": { "type": "string" }, "note": { "type": "string" } }, "required": ["amount", "category_id"] } },
+                    "shares": { "type": "array", "description": "Who else was in on it, each share a debt of its own (table debts, transaction_id = this transaction). A share for the whole amount makes the whole transaction a debt in that person's name. direction lent = they owe you; borrowed = you owe them. Given on an edit, replaces the shares: keep existing ones by passing their debt id as id; [] removes them all.", "items": { "type": "object", "properties": { "id": { "type": "string" }, "direction": { "type": "string", "enum": ["lent", "borrowed"] }, "counterparty": { "type": "string" }, "amount": { "type": "integer" }, "due_on": { "type": "string" }, "note": { "type": "string" } }, "required": ["direction", "counterparty", "amount"] } },
+                    "refund_of": { "type": "string", "description": "The id of the transaction this one gives back (a refund). Opposite kind to it." },
+                    "cashback": { "type": "integer", "description": "Cashback this card purchase earned, paise, when it isn't the card's usual rate." },
+                    "label_ids": { "type": "array", "items": { "type": "string" }, "description": "Replaces the labels it wears." }
                 },
                 "required": ["id"],
                 "additionalProperties": false
@@ -576,7 +587,9 @@ fn write_tools() -> Vec<Value> {
                 "additionalProperties": false
             }
         }),
-    ]
+    ];
+    tools.extend(chat_actions::tools(note));
+    tools
 }
 
 fn want_str(input: &Value, key: &str) -> Result<String> {
@@ -650,12 +663,12 @@ pub(crate) fn inr(paise: Paise) -> String {
     }
 }
 
-fn name_of(conn: &Connection, table: &str, id: &str) -> String {
+pub(crate) fn name_of(conn: &Connection, table: &str, id: &str) -> String {
     conn.query_row(&format!("SELECT name FROM {table} WHERE id = ?1"), [id], |r| r.get::<_, String>(0))
         .unwrap_or_else(|_| format!("unknown ({id})"))
 }
 
-fn category_label(conn: &Connection, id: &str) -> String {
+pub(crate) fn category_label(conn: &Connection, id: &str) -> String {
     conn.query_row(
         "SELECT CASE WHEN p.name IS NULL THEN c.name ELSE p.name || ' › ' || c.name END
          FROM categories c LEFT JOIN categories p ON p.id = c.parent_id WHERE c.id = ?1",
@@ -666,7 +679,7 @@ fn category_label(conn: &Connection, id: &str) -> String {
 }
 
 /// One posting in a line: the day, who with, how much.
-fn posting_line(conn: &Connection, id: &str) -> String {
+pub(crate) fn posting_line(conn: &Connection, id: &str) -> String {
     conn.query_row(
         "SELECT substr(occurred_at, 1, 10), merchant, amount, kind FROM transactions WHERE id = ?1",
         [id],
@@ -808,6 +821,19 @@ fn describe_change(conn: &Connection, name: &str, input: &Value) -> Result<(Stri
             ))
         }
         "import_statement" => describe_import(conn, input),
+        other if chat_actions::is_action(other) => {
+            let (title, card) = chat_actions::describe(conn, other, input)?;
+            let mut lines: Vec<String> = card
+                .fields
+                .iter()
+                .map(|f| match &f.from {
+                    Some(from) => format!("{}: {from} → {}", f.name, f.to),
+                    None => format!("{}: {}", f.name, f.to),
+                })
+                .collect();
+            lines.extend(card.rows.iter().map(|r| format!("{} · {} · {}", r.date, r.merchant, inr(r.amount))));
+            Ok((title, lines))
+        }
         other => Err(format!("There is no change called {other}.")),
     }
 }
@@ -848,6 +874,47 @@ pub struct CardRow {
 }
 
 const CARD_ROWS: usize = 40;
+
+/// The parts of a transaction beyond its own fields: split, shares, refund,
+/// cashback and labels, as the card lists them.
+fn transaction_extras(conn: &Connection, input: &Value) -> Vec<CardField> {
+    let mut out = vec![];
+    if let Some(parts) = input["splits"].as_array() {
+        if parts.is_empty() {
+            out.push(field("Split", None, "Taken off"));
+        }
+        for p in parts {
+            let filed = p["category_id"].as_str().map(|c| category_label(conn, c)).unwrap_or_else(|| "No category".into());
+            out.push(field("Split", None, format!("{} · {filed}", inr(p["amount"].as_i64().unwrap_or(0)))));
+        }
+    }
+    if let Some(shares) = input["shares"].as_array() {
+        if shares.is_empty() {
+            out.push(field("Shared with", None, "Nobody: its debts go"));
+        }
+        for p in shares {
+            let who = p["counterparty"].as_str().unwrap_or("someone");
+            let amount = inr(p["amount"].as_i64().unwrap_or(0));
+            let says = if p["direction"].as_str() == Some("borrowed") {
+                format!("You owe {who} {amount}")
+            } else {
+                format!("{who} owes you {amount}")
+            };
+            out.push(field("Debt", None, says));
+        }
+    }
+    if let Some(r) = input["refund_of"].as_str().filter(|r| !r.is_empty()) {
+        out.push(field("Refund of", None, posting_line(conn, r)));
+    }
+    if let Some(c) = input["cashback"].as_i64() {
+        out.push(field("Cashback", None, inr(c)));
+    }
+    if let Some(labels) = input["label_ids"].as_array() {
+        let names: Vec<String> = labels.iter().filter_map(Value::as_str).map(|l| name_of(conn, "labels", l)).collect();
+        out.push(field("Labels", None, if names.is_empty() { "None".into() } else { names.join(", ") }));
+    }
+    out
+}
 
 fn field(name: &str, from: Option<String>, to: impl Into<String>) -> CardField {
     CardField { name: name.into(), from, to: to.into() }
@@ -891,7 +958,7 @@ fn card_row(conn: &Connection, id: &str) -> Option<CardRow> {
     })
 }
 
-fn card_rows(conn: &Connection, ids: &[String]) -> (Vec<CardRow>, usize) {
+pub(crate) fn card_rows(conn: &Connection, ids: &[String]) -> (Vec<CardRow>, usize) {
     let rows: Vec<CardRow> = ids.iter().take(CARD_ROWS).filter_map(|id| card_row(conn, id)).collect();
     (rows, ids.len().saturating_sub(CARD_ROWS))
 }
@@ -926,6 +993,7 @@ fn change_card(conn: &Connection, name: &str, input: &Value) -> Result<Card> {
             if let Some(n) = opt_str(input, "note") {
                 card.fields.push(field("Note", None, n));
             }
+            card.fields.extend(transaction_extras(conn, input));
         }
         "edit_transaction" => {
             card.action = "edit";
@@ -965,6 +1033,7 @@ fn change_card(conn: &Connection, name: &str, input: &Value) -> Result<Card> {
             if let Some(d) = opt_str(input, "occurred_at") {
                 card.fields.push(field("Date", w(&|t| t.occurred_at.chars().take(10).collect()), d.chars().take(10).collect::<String>()));
             }
+            card.fields.extend(transaction_extras(conn, input));
             card.rows.extend(card_row(conn, &id));
         }
         "update_transactions" => {
@@ -1049,6 +1118,7 @@ fn change_card(conn: &Connection, name: &str, input: &Value) -> Result<Card> {
                 })
                 .collect();
         }
+        other if chat_actions::is_action(other) => return Ok(chat_actions::describe(conn, other, input)?.1),
         other => return Err(format!("There is no change called {other}.")),
     }
     Ok(card)
@@ -1073,13 +1143,13 @@ fn apply_change(conn: &Connection, name: &str, input: &Value) -> Result<Value> {
                     merchant: opt_str(input, "merchant").unwrap_or_default(),
                     note: opt_str(input, "note"),
                     occurred_at: want_str(input, "occurred_at")?,
-                    splits: None,
-                    shares: None,
+                    splits: chat_actions::opt_parse(&input["splits"])?,
+                    shares: chat_actions::opt_parse(&input["shares"])?,
                     label_ids: input["label_ids"].as_array().map(|a| {
                         a.iter().filter_map(|v| v.as_str().map(String::from)).collect()
                     }),
-                    refund_of: None,
-                    cashback: None,
+                    refund_of: opt_str(input, "refund_of"),
+                    cashback: input["cashback"].as_i64(),
                     kind,
                 },
             )?;
@@ -1114,11 +1184,19 @@ fn apply_change(conn: &Connection, name: &str, input: &Value) -> Result<Value> {
                         None => was.note,
                     },
                     occurred_at: opt_str(input, "occurred_at").unwrap_or(was.occurred_at),
-                    splits: None,
-                    shares: None,
-                    label_ids: None,
-                    refund_of: was.refund_of,
-                    cashback: was.cashback_set,
+                    // Absent, these are kept as they are; given, they
+                    // replace what the transaction had.
+                    splits: chat_actions::opt_parse(&input["splits"])?,
+                    shares: chat_actions::opt_parse(&input["shares"])?,
+                    label_ids: chat_actions::opt_parse(&input["label_ids"])?,
+                    refund_of: match &input["refund_of"] {
+                        Value::Null => was.refund_of,
+                        v => v.as_str().map(str::trim).filter(|s| !s.is_empty()).map(String::from),
+                    },
+                    cashback: match &input["cashback"] {
+                        Value::Null => was.cashback_set,
+                        v => v.as_i64(),
+                    },
                     kind,
                 },
             )?;
@@ -1176,6 +1254,11 @@ fn apply_change(conn: &Connection, name: &str, input: &Value) -> Result<Value> {
             json!({ "done": title, "changed": n })
         }
         "import_statement" => apply_import(conn, input, title)?,
+        other if chat_actions::is_action(other) => {
+            let mut done = chat_actions::apply(conn, other, input)?;
+            done["done"] = json!(title);
+            done
+        }
         other => return Err(format!("There is no change called {other}.")),
     };
     // Whatever landed on a card changes what its cycle earns back.
@@ -1701,7 +1784,7 @@ fn system_prompt(schema: &str) -> String {
     format!(
         r#"You are the assistant inside flow, a personal finance app that keeps its book in a local SQLite database on the user's Mac. The user asks about their own money — spending, income, categories, accounts, cards, debts, investments, plans — and you answer from the book using your tools.
 
-You can also change the book, but only with the change tools (add_transaction, edit_transaction, update_transactions, delete_transactions, add_category, label_transactions) and only when the user asks for a change. Each change is shown to the user, who applies or declines it; nothing is written until they do. Before proposing one, look up the exact ids you need and check you have the right transactions — for a bulk change, query them first and say how many there are. Prefer one bulk change over many single ones. The bulk edit won't file transactions under a group that has sub-categories; pick one of its sub-categories. Never change anything the user didn't ask to change, and if what they want is ambiguous, ask first. Your SQL is always read-only; changes only ever go through those tools.
+You can also change the book, but only with the change tools (add_transaction, edit_transaction, update_transactions, delete_transactions, add_category, label_transactions, import_statement, and debts, labels, folders, categories, accounts, plans, templates, investments, captures and mark_reviewed for everything else the app does) and only when the user asks for a change. Between them they can do anything the app's own screens can: turn a transaction into a debt or share a bill (edit_transaction with `shares`), split a bill across categories, mark a refund, record repayments, make and fill labels and folders, rename or move categories, set card terms, set up and pay planned payments, and so on. A tool that saves a record by `id` replaces it whole, so read the row first and pass every field. Only exporting, importing or resetting the whole book is left to the app. Each change is shown to the user, who applies or declines it; nothing is written until they do. Before proposing one, look up the exact ids you need and check you have the right transactions — for a bulk change, query them first and say how many there are. Prefer one bulk change over many single ones. The bulk edit won't file transactions under a group that has sub-categories; pick one of its sub-categories. Never change anything the user didn't ask to change, and if what they want is ambiguous, ask first. Your SQL is always read-only; changes only ever go through those tools.
 
 ## How the book works
 
@@ -2467,11 +2550,64 @@ mod tests {
     }
 
     #[test]
+    fn the_rest_of_the_app_is_reachable() {
+        let (_d, path) = book();
+        let conn = db::open(&path).unwrap();
+        conn.execute_batch(
+            "INSERT INTO categories (id, kind, name, icon, color) VALUES ('food', 'expense', 'Food', 'utensils', '#F2724F');",
+        )
+        .unwrap();
+        let add = json!({ "kind": "expense", "amount": 120000, "account_id": "a", "category_id": "food",
+                          "merchant": "Dinner", "occurred_at": "2026-11-20" });
+        let tx = apply_change(&conn, "add_transaction", &add).unwrap()["id"].as_str().unwrap().to_string();
+
+        // The whole bill becomes Ravi's debt.
+        let owe = json!({ "id": tx, "shares": [{ "direction": "lent", "counterparty": "Ravi", "amount": 120000 }] });
+        let card = change_card(&conn, "edit_transaction", &owe).unwrap();
+        assert!(card.fields.iter().any(|f| f.to == "Ravi owes you ₹1,200"), "{:?}", card.fields);
+        apply_change(&conn, "edit_transaction", &owe).unwrap();
+        let debt: String = conn
+            .query_row("SELECT id FROM debts WHERE transaction_id = ?1 AND counterparty = 'Ravi'", [&tx], |r| r.get(0))
+            .unwrap();
+
+        // He pays some of it back.
+        let pay = json!({ "action": "payment", "debt_id": debt, "amount": 50000, "occurred_at": "2026-11-22" });
+        let (title, _) = describe_change(&conn, "debts", &pay).unwrap();
+        assert!(title.starts_with("Record ₹500 paid back on Ravi"), "{title}");
+        apply_change(&conn, "debts", &pay).unwrap();
+
+        // A label and a folder, made and used.
+        let label = apply_change(&conn, "labels", &json!({ "action": "save", "name": "Trip", "color": "#118AE4" })).unwrap();
+        let label = label["id"].as_str().unwrap().to_string();
+        apply_change(&conn, "label_transactions", &json!({ "ids": [tx], "label_id": label })).unwrap();
+        let folder = apply_change(&conn, "folders", &json!({ "action": "save", "name": "Goa", "color": "#118AE4", "icon": "plane" })).unwrap();
+        let folder = folder["id"].as_str().unwrap().to_string();
+        let put = apply_change(&conn, "folders", &json!({ "action": "add", "folder_id": folder, "ids": [tx] })).unwrap();
+        assert_eq!(put["added"], 1);
+
+        // A category renamed shows what it was.
+        let rename = json!({ "action": "save", "id": "food", "kind": "expense", "name": "Eating out", "icon": "utensils", "color": "#F2724F" });
+        let card = change_card(&conn, "categories", &rename).unwrap();
+        assert_eq!(card.action, "edit");
+        let name = card.fields.iter().find(|f| f.name == "Name").unwrap();
+        assert_eq!((name.from.as_deref(), name.to.as_str()), (Some("Food"), "Eating out"));
+        assert_eq!(card.fields.len(), 1, "{:?}", card.fields);
+        apply_change(&conn, "categories", &rename).unwrap();
+        assert_eq!(name_of(&conn, "categories", "food"), "Eating out");
+
+        // Deleting anything reads as a delete.
+        let card = change_card(&conn, "accounts", &json!({ "action": "delete", "id": "a" })).unwrap();
+        assert_eq!(card.action, "delete");
+        assert!(describe_change(&conn, "accounts", &json!({ "action": "launch" })).is_err());
+        assert!(apply_change(&conn, "mark_reviewed", &json!({ "ids": [tx] })).is_ok());
+    }
+
+    #[test]
     fn only_change_tools_count_as_writes() {
         let names: Vec<String> = tools().as_array().unwrap().iter()
             .map(|t| t["name"].as_str().unwrap().to_string()).collect();
         let writes: Vec<&String> = names.iter().filter(|n| is_write(n)).collect();
-        assert_eq!(writes.len(), 7);
+        assert_eq!(writes.len(), 17);
         assert!(!is_write("query_book") && !is_write("list_accounts") && !is_write("book_summary") && !is_write("read_statement"));
     }
 

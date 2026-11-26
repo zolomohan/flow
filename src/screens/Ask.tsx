@@ -616,7 +616,7 @@ function PendingCard({
   const [all, setAll] = useState(false);
   const card = change.card;
   const action = card ? ACTIONS[card.action] : { label: 'Change', icon: 'pencil' };
-  const destructive = change.tool === 'delete_transactions';
+  const destructive = change.tool === 'delete_transactions' || card?.action === 'delete';
   const decided = decision !== undefined;
   const rows = card ? (all ? card.rows : card.rows.slice(0, ROWS_FIRST)) : [];
   const hidden = card ? card.rows.length - rows.length + card.more : 0;
