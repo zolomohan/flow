@@ -37,7 +37,7 @@ use crate::db::{self, Db};
 use crate::capture;
 use crate::cashback;
 use crate::models::{
-    CategoryInput, ImportCommitRow, Paise, StatementRow, TransactionInput, TransactionPatch,
+    CategoryInput, ImportCommitRow, Paise, StatementRow, Transaction, TransactionInput, TransactionPatch,
 };
 use std::collections::HashMap;
 
@@ -809,6 +809,248 @@ fn describe_change(conn: &Connection, name: &str, input: &Value) -> Result<(Stri
     }
 }
 
+/// A change laid out for its confirm card: what kind of change it is, the
+/// fields it sets (with what they were, where there is one thing to say it
+/// of), and the transactions it touches, as rows a table can line up.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Card {
+    /// add | edit | change | delete | category | label | import
+    pub action: &'static str,
+    pub fields: Vec<CardField>,
+    pub rows: Vec<CardRow>,
+    /// Rows touched beyond the ones listed.
+    pub more: usize,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardField {
+    pub name: String,
+    pub from: Option<String>,
+    pub to: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardRow {
+    pub date: String,
+    pub merchant: String,
+    /// Paise, always positive; `kind` says which way it went.
+    pub amount: Paise,
+    pub kind: String,
+    pub account: String,
+    pub filed: String,
+}
+
+const CARD_ROWS: usize = 40;
+
+fn field(name: &str, from: Option<String>, to: impl Into<String>) -> CardField {
+    CardField { name: name.into(), from, to: to.into() }
+}
+
+fn card_row(conn: &Connection, id: &str) -> Option<CardRow> {
+    conn.query_row(
+        "SELECT substr(t.occurred_at, 1, 10), t.merchant, t.amount, t.kind, a.name, ta.name, t.category_id
+           FROM transactions t
+           JOIN accounts a ON a.id = t.account_id
+           LEFT JOIN accounts ta ON ta.id = t.to_account_id
+          WHERE t.id = ?1",
+        [id],
+        |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, Option<String>>(5)?,
+                r.get::<_, Option<String>>(6)?,
+            ))
+        },
+    )
+    .ok()
+    .map(|(date, merchant, amount, kind, account, to, category)| CardRow {
+        date,
+        merchant,
+        amount,
+        account: match (&kind[..], to) {
+            ("transfer", Some(to)) => format!("{account} → {to}"),
+            _ => account,
+        },
+        filed: if kind == "transfer" {
+            "Transfer".into()
+        } else {
+            category.map(|c| category_label(conn, &c)).unwrap_or_else(|| "No category".into())
+        },
+        kind,
+    })
+}
+
+fn card_rows(conn: &Connection, ids: &[String]) -> (Vec<CardRow>, usize) {
+    let rows: Vec<CardRow> = ids.iter().take(CARD_ROWS).filter_map(|id| card_row(conn, id)).collect();
+    (rows, ids.len().saturating_sub(CARD_ROWS))
+}
+
+fn change_card(conn: &Connection, name: &str, input: &Value) -> Result<Card> {
+    let mut card = Card::default();
+    match name {
+        "add_transaction" => {
+            card.action = "add";
+            let kind = want_str(input, "kind")?;
+            let account = want_str(input, "account_id")?;
+            card.rows.push(CardRow {
+                date: opt_str(input, "occurred_at").map(|d| d.chars().take(10).collect()).unwrap_or_default(),
+                merchant: opt_str(input, "merchant").unwrap_or_default(),
+                amount: want_amount(input)?.ok_or("`amount` is required.")?,
+                account: if kind == "transfer" {
+                    format!(
+                        "{} → {}",
+                        name_of(conn, "accounts", &account),
+                        opt_str(input, "to_account_id").map(|t| name_of(conn, "accounts", &t)).unwrap_or_else(|| "?".into())
+                    )
+                } else {
+                    name_of(conn, "accounts", &account)
+                },
+                filed: if kind == "transfer" {
+                    "Transfer".into()
+                } else {
+                    opt_str(input, "category_id").map(|c| category_label(conn, &c)).unwrap_or_else(|| "No category".into())
+                },
+                kind,
+            });
+            if let Some(n) = opt_str(input, "note") {
+                card.fields.push(field("Note", None, n));
+            }
+        }
+        "edit_transaction" => {
+            card.action = "edit";
+            let id = want_str(input, "id")?;
+            let was = db::get_transaction(conn, &id).ok();
+            let w = |f: &dyn Fn(&Transaction) -> String| was.as_ref().map(f);
+            if let Some(k) = opt_str(input, "kind") {
+                card.fields.push(field("Kind", w(&|t| t.kind.clone()), k));
+            }
+            if let Some(a) = want_amount(input)? {
+                card.fields.push(field("Amount", w(&|t| inr(t.amount)), inr(a)));
+            }
+            if let Some(a) = opt_str(input, "account_id") {
+                card.fields.push(field("Account", w(&|t| t.account_name.clone()), name_of(conn, "accounts", &a)));
+            }
+            if let Some(a) = opt_str(input, "to_account_id") {
+                card.fields.push(field(
+                    "To account",
+                    w(&|t| t.to_account_name.clone().unwrap_or_else(|| "None".into())),
+                    name_of(conn, "accounts", &a),
+                ));
+            }
+            if let Some(c) = opt_str(input, "category_id") {
+                card.fields.push(field(
+                    "Category",
+                    w(&|t| t.category_id.as_ref().map(|c| category_label(conn, c)).unwrap_or_else(|| "No category".into())),
+                    category_label(conn, &c),
+                ));
+            }
+            if let Some(m) = opt_str(input, "merchant") {
+                card.fields.push(field("Description", w(&|t| t.merchant.clone()), m));
+            }
+            if let Some(n) = input["note"].as_str() {
+                let to = if n.trim().is_empty() { "No note".to_string() } else { n.to_string() };
+                card.fields.push(field("Note", w(&|t| t.note.clone().unwrap_or_else(|| "No note".into())), to));
+            }
+            if let Some(d) = opt_str(input, "occurred_at") {
+                card.fields.push(field("Date", w(&|t| t.occurred_at.chars().take(10).collect()), d.chars().take(10).collect::<String>()));
+            }
+            card.rows.extend(card_row(conn, &id));
+        }
+        "update_transactions" => {
+            card.action = "change";
+            let ids = want_ids(input)?;
+            if input["clear_category"].as_bool() == Some(true) {
+                card.fields.push(field("Category", None, "No category"));
+            } else if let Some(c) = opt_str(input, "category_id") {
+                card.fields.push(field("Category", None, category_label(conn, &c)));
+            }
+            if let Some(a) = opt_str(input, "account_id") {
+                card.fields.push(field("Account", None, name_of(conn, "accounts", &a)));
+            }
+            if let Some(m) = opt_str(input, "merchant") {
+                card.fields.push(field("Description", None, m));
+            }
+            if input["clear_note"].as_bool() == Some(true) {
+                card.fields.push(field("Note", None, "No note"));
+            } else if let Some(n) = opt_str(input, "note") {
+                card.fields.push(field("Note", None, n));
+            }
+            (card.rows, card.more) = card_rows(conn, &ids);
+        }
+        "delete_transactions" => {
+            card.action = "delete";
+            (card.rows, card.more) = card_rows(conn, &want_ids(input)?);
+        }
+        "add_category" => {
+            card.action = "category";
+            card.fields.push(field("Name", None, want_str(input, "name")?));
+            let kind = want_str(input, "kind")?;
+            card.fields.push(field("For", None, if kind == "income" { "Income" } else { "Spending" }));
+            card.fields.push(field(
+                "Sits under",
+                None,
+                opt_str(input, "parent_id")
+                    .map(|p| name_of(conn, "categories", &p))
+                    .unwrap_or_else(|| "Nothing: a new group of its own".into()),
+            ));
+        }
+        "label_transactions" => {
+            card.action = "label";
+            let label = name_of(conn, "labels", &want_str(input, "label_id")?);
+            let on = input["on"].as_bool().unwrap_or(true);
+            card.fields.push(field("Label", None, if on { format!("Pin “{label}”") } else { format!("Take “{label}” off") }));
+            (card.rows, card.more) = card_rows(conn, &want_ids(input)?);
+        }
+        "import_statement" => {
+            card.action = "import";
+            let id = want_str(input, "statement_id")?;
+            let (_, lines) = describe_import(conn, input)?;
+            with_statement(&id, |s| {
+                card.fields.push(field("Into", None, s.account_name.clone()));
+                card.fields.push(field("From", None, s.file.clone()));
+                let rows = import_rows(s, input)?;
+                card.more = rows.len().saturating_sub(CARD_ROWS);
+                card.rows = rows
+                    .iter()
+                    .take(CARD_ROWS)
+                    .map(|r| CardRow {
+                        date: r.row.date.clone(),
+                        merchant: if r.input.merchant.is_empty() { r.row.narration.clone() } else { r.input.merchant.clone() },
+                        amount: r.row.amount,
+                        kind: r.input.kind.clone(),
+                        account: s.account_name.clone(),
+                        filed: match (&r.input.category_id, r.input.kind.as_str()) {
+                            (_, "transfer") => "Transfer".to_string(),
+                            (Some(c), _) => category_label(conn, c),
+                            (None, _) => "No category".into(),
+                        },
+                    })
+                    .collect();
+                Ok(())
+            })?;
+            // The summary lines, without the sample rows the table now shows.
+            card.notes = lines
+                .into_iter()
+                .filter(|l| {
+                    let head: Vec<char> = l.chars().take(5).collect();
+                    let dated = head.len() == 5 && head[4] == '-' && head[..4].iter().all(char::is_ascii_digit);
+                    !dated && !l.starts_with("and ")
+                })
+                .collect();
+        }
+        other => return Err(format!("There is no change called {other}.")),
+    }
+    Ok(card)
+}
+
 /// Makes one approved change on the app's own connection, and says what
 /// happened in words the history can show.
 fn apply_change(conn: &Connection, name: &str, input: &Value) -> Result<Value> {
@@ -951,6 +1193,8 @@ pub struct PendingChange {
     pub tool: String,
     pub title: String,
     pub lines: Vec<String>,
+    /// The same change laid out for the card; absent if it couldn't be read.
+    pub card: Option<Card>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1742,7 +1986,8 @@ pub async fn ask(
                             let (title, lines) = describe_change(&conn, &tool, &input).unwrap_or_else(|e| {
                                 ("A change that can't be shown".into(), vec![e])
                             });
-                            PendingChange { id, tool, title, lines }
+                            let card = change_card(&conn, &tool, &input).ok();
+                            PendingChange { id, tool, title, lines, card }
                         })
                         .collect())
                 })
@@ -2175,10 +2420,17 @@ mod tests {
         let (title, lines) = describe_change(&conn, "update_transactions", &bulk).unwrap();
         assert_eq!(title, "File under Food › Cafes · 2 transactions");
         assert_eq!(lines.len(), 2);
+        let card = change_card(&conn, "update_transactions", &bulk).unwrap();
+        assert_eq!((card.action, card.rows.len(), card.more), ("change", 2, 0));
+        assert_eq!(card.fields[0].to, "Food › Cafes");
         let done = apply_change(&conn, "update_transactions", &bulk).unwrap();
         assert_eq!(done["changed"], 2);
 
         let edit = json!({ "id": "t1", "amount": 26000, "note": "with tip" });
+        let card = change_card(&conn, "edit_transaction", &edit).unwrap();
+        assert_eq!(card.fields[0].name, "Amount");
+        assert!(card.fields[0].from.is_some());
+        assert_eq!(card.fields[0].to, "₹260");
         apply_change(&conn, "edit_transaction", &edit).unwrap();
         let t1 = db::get_transaction(&conn, "t1").unwrap();
         assert_eq!((t1.amount, t1.note.as_deref(), t1.category_id.as_deref()), (26000, Some("with tip"), Some("cafe")));
@@ -2280,6 +2532,10 @@ mod tests {
         assert!(lines.iter().any(|l| l == "1 row already in the book, left out"), "{lines:?}");
         assert!(lines.iter().any(|l| l == "1 row skipped"), "{lines:?}");
         assert!(!lines.iter().any(|l| l.contains("Triage")), "{lines:?}");
+        let card = change_card(&conn, "import_statement", &input).unwrap();
+        assert_eq!((card.action, card.rows.len()), ("import", 3));
+        assert!(card.notes.iter().any(|l| l == "1 row skipped"), "{:?}", card.notes);
+        assert!(!card.notes.iter().any(|l| l.starts_with("20")), "{:?}", card.notes);
 
         let done = apply_change(&conn, "import_statement", &input).unwrap();
         assert_eq!(done["inserted"], 3);

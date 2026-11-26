@@ -933,6 +933,18 @@ export interface AiPendingChange {
   tool: string;
   title: string;
   lines: string[];
+  /** The change laid out for its card. Missing on changes saved before
+   *  cards were drawn this way, which fall back to `lines`. */
+  card?: AiChangeCard | null;
+}
+
+export interface AiChangeCard {
+  action: 'add' | 'edit' | 'change' | 'delete' | 'category' | 'label' | 'import';
+  fields: { name: string; from: string | null; to: string }[];
+  rows: { date: string; merchant: string; amount: Paise; kind: TxKind; account: string; filed: string }[];
+  /** Rows touched beyond those listed. */
+  more: number;
+  notes: string[];
 }
 
 export interface AiChatReply {

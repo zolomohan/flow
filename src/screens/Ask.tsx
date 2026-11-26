@@ -12,7 +12,8 @@ import {
   type Part,
 } from '../lib/chat';
 import { spring } from '../lib/motion';
-import type { AiPendingChange, AiStatus } from '../lib/types';
+import type { AiChangeCard, AiPendingChange, AiStatus } from '../lib/types';
+import { money, shortDayLabel } from '../lib/format';
 
 /** What the statement reader can open. */
 const STATEMENT_EXTENSIONS = ['pdf', 'csv', 'tsv', 'txt', 'xls', 'xlsx', 'xlsm', 'ods', 'png', 'jpg', 'jpeg', 'webp', 'gif'];
@@ -44,6 +45,25 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [refused, setRefused] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
+  const [listOpen, setListOpen] = useState(false);
+  const listRoot = useRef<HTMLDivElement>(null);
+
+  // The chat list closes on a click elsewhere or Escape, like any menu.
+  useEffect(() => {
+    if (!listOpen) return;
+    void refreshChats();
+    const onDown = (e: MouseEvent) => {
+      if (listRoot.current?.contains(e.target as Node)) return;
+      setListOpen(false);
+    };
+    const onKey = (e: globalThis.KeyboardEvent) => e.key === 'Escape' && setListOpen(false);
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [listOpen]);
   const input = useRef<HTMLTextAreaElement>(null);
   const bottom = useRef<HTMLDivElement>(null);
 
@@ -166,62 +186,6 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
 
   return (
     <div className="ask-layout">
-    <aside className="ask-chats">
-      <Button icon="plus" tone="secondary" onClick={newChat} disabled={busy} block>
-        New chat
-      </Button>
-      <div className="ask-chats-list">
-        {chat.chats.length === 0 && <p className="ask-chats-none">Your chats will be kept here.</p>}
-        {chat.chats.map((c) => (
-          <div key={c.id} className={`ask-chat-item ${c.id === chat.chatId ? 'is-active' : ''}`}>
-            {renaming?.id === c.id ? (
-              <input
-                className="ask-chat-rename"
-                value={renaming.title}
-                maxLength={120}
-                autoFocus
-                onFocus={(e) => e.currentTarget.select()}
-                onChange={(e) => setRenaming({ id: c.id, title: e.target.value })}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void saveRename();
-                  else if (e.key === 'Escape') setRenaming(null);
-                }}
-                onBlur={() => void saveRename()}
-                aria-label="Chat name"
-              />
-            ) : (
-              <button
-                className="ask-chat-open"
-                onClick={() => void openChat(c.id)}
-                onDoubleClick={() => setRenaming({ id: c.id, title: c.title })}
-                disabled={busy}
-                title={c.title}
-              >
-                <span className="ask-chat-title">{c.title}</span>
-                <span className="ask-chat-when">{when(c.updatedAt)}</span>
-              </button>
-            )}
-            <button
-              className="ask-chat-delete is-rename"
-              onClick={() => setRenaming({ id: c.id, title: c.title })}
-              aria-label="Rename chat"
-              title="Rename chat"
-            >
-              <Icon name="pencil" size={14} />
-            </button>
-            <button
-              className="ask-chat-delete"
-              onClick={() => setDeleting(c.id)}
-              disabled={busy && c.id === chat.chatId}
-              aria-label="Delete chat"
-              title="Delete chat"
-            >
-              <Icon name="trash-2" size={14} />
-            </button>
-          </div>
-        ))}
-      </div>
-    </aside>
     <Confirm
       open={deleting !== null}
       title="Delete this chat?"
@@ -235,13 +199,101 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
       The conversation goes for good. Anything it changed in your book stays as it is.
     </Confirm>
     <div className="screen ask-screen">
-      <header className="screen-head">
-        <div>
-          <h1>Ask</h1>
-          <p>
-            Questions about your money, answered from your book by Claude. Drop a statement here
-            to import it. Claude asks you before every change.
-          </p>
+      <header className="screen-head ask-head">
+        <div className="ask-title" ref={listRoot}>
+          <button
+            className="ask-title-button"
+            onClick={() => setListOpen((o) => !o)}
+            aria-expanded={listOpen}
+            title="Your chats"
+          >
+            <h1>{chat.chatId ? chat.title || 'Untitled chat' : 'New chat'}</h1>
+            <Icon name="chevron-down" size={18} />
+          </button>
+          <AnimatePresence>
+            {listOpen && (
+              <motion.div
+                className="ask-chats"
+                initial={{ opacity: 0, y: -6, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -4, scale: 0.98 }}
+                transition={{ duration: 0.14 }}
+              >
+                <div className="ask-chats-label">Your chats</div>
+                <div className="ask-chats-list">
+                  {chat.chats.length === 0 && <p className="ask-chats-none">Your chats will be kept here.</p>}
+                  {chat.chats.map((c) => (
+                    <div key={c.id} className={`ask-chat-item ${c.id === chat.chatId ? 'is-active' : ''}`}>
+                      {renaming?.id === c.id ? (
+                        <input
+                          className="ask-chat-rename"
+                          value={renaming.title}
+                          maxLength={120}
+                          autoFocus
+                          onFocus={(e) => e.currentTarget.select()}
+                          onChange={(e) => setRenaming({ id: c.id, title: e.target.value })}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') void saveRename();
+                            else if (e.key === 'Escape') { e.stopPropagation(); setRenaming(null); }
+                          }}
+                          onBlur={() => void saveRename()}
+                          aria-label="Chat name"
+                        />
+                      ) : (
+                        <button
+                          className="ask-chat-open"
+                          onClick={() => {
+                            setListOpen(false);
+                            void openChat(c.id);
+                          }}
+                          disabled={busy}
+                          title={c.title}
+                        >
+                          <span className="ask-chat-title">{c.title}</span>
+                          <span className="ask-chat-when">{when(c.updatedAt)}</span>
+                        </button>
+                      )}
+                      <button
+                        className="ask-chat-delete is-rename"
+                        onClick={() => setRenaming({ id: c.id, title: c.title })}
+                        aria-label="Rename chat"
+                        title="Rename chat"
+                      >
+                        <Icon name="pencil" size={14} />
+                      </button>
+                      <button
+                        className="ask-chat-delete"
+                        onClick={() => setDeleting(c.id)}
+                        disabled={busy && c.id === chat.chatId}
+                        aria-label="Delete chat"
+                        title="Delete chat"
+                      >
+                        <Icon name="trash-2" size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+        <div className="head-actions">
+          {chat.chatId && (
+            <Button
+              tone="ghost"
+              icon="pencil"
+              onClick={() => {
+                setListOpen(true);
+                setRenaming({ id: chat.chatId!, title: chat.title });
+              }}
+              disabled={busy}
+            >
+              Rename
+            </Button>
+          )}
+          <Button icon="plus" onClick={() => { setListOpen(false); newChat(); }} disabled={busy && !chat.chatId}>
+            New chat
+          </Button>
         </div>
       </header>
 
@@ -315,10 +367,12 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
               transition={spring}
             >
               <div className="ask-pending-head">
-                <Icon name="pencil" size={15} />
-                {chat.pending.length === 1
-                  ? 'Claude wants to make this change'
-                  : `Claude wants to make ${chat.pending.length} changes`}
+                <span>
+                  {chat.pending.length === 1
+                    ? 'Claude wants to make this change'
+                    : `Claude wants to make ${chat.pending.length} changes`}
+                  <small>Nothing is written until you apply it.</small>
+                </span>
                 {chat.pending.length > 1 && (
                   <span className="ask-pending-all">
                     <Button tone="ghost" onClick={() => decideAll(false)}>Decline all</Button>
@@ -326,8 +380,14 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
                   </span>
                 )}
               </div>
-              {chat.pending.map((p) => (
-                <PendingCard key={p.id} change={p} decision={chat.decisions[p.id]} />
+              {chat.pending.map((p, i) => (
+                <PendingCard
+                  key={p.id}
+                  change={p}
+                  decision={chat.decisions[p.id]}
+                  index={i}
+                  count={chat.pending.length}
+                />
               ))}
             </motion.div>
           )}
@@ -532,30 +592,138 @@ function LookupLine({ part }: { part: Part & { kind: 'lookup' } }) {
   );
 }
 
-function PendingCard({ change, decision }: { change: AiPendingChange; decision?: boolean }) {
+const ACTIONS: Record<AiChangeCard['action'], { label: string; icon: string }> = {
+  add: { label: 'New transaction', icon: 'plus' },
+  edit: { label: 'Edit', icon: 'pencil' },
+  change: { label: 'Change in bulk', icon: 'sliders-horizontal' },
+  delete: { label: 'Delete', icon: 'trash-2' },
+  category: { label: 'New category', icon: 'tags' },
+  label: { label: 'Labels', icon: 'tag' },
+  import: { label: 'Import', icon: 'file-up' },
+};
+
+/** How many rows a card shows before it offers the rest. */
+const ROWS_FIRST = 5;
+
+/**
+ * One change Claude wants to make, on a card of its own: what kind of change
+ * it is, what it sets (and what that was), and the transactions it touches,
+ * lined up like the ledger. Its own Apply and Decline sit at the bottom.
+ */
+function PendingCard({
+  change, decision, index, count,
+}: { change: AiPendingChange; decision?: boolean; index: number; count: number }) {
+  const [all, setAll] = useState(false);
+  const card = change.card;
+  const action = card ? ACTIONS[card.action] : { label: 'Change', icon: 'pencil' };
   const destructive = change.tool === 'delete_transactions';
+  const decided = decision !== undefined;
+  const rows = card ? (all ? card.rows : card.rows.slice(0, ROWS_FIRST)) : [];
+  const hidden = card ? card.rows.length - rows.length + card.more : 0;
+  const lines = change.lines.filter(Boolean);
+
   return (
-    <div className={`ask-pending-card ${decision !== undefined ? 'is-decided' : ''}`}>
-      <div className="ask-pending-text">
-        <strong>{change.title}</strong>
-        {change.lines.filter(Boolean).length > 0 && (
-          <ul>
-            {change.lines.filter(Boolean).map((l, i) => <li key={i}>{l}</li>)}
+    <div className={`ask-pending-card is-${card?.action ?? 'edit'} ${decided ? 'is-decided' : ''}`}>
+      <div className="apc-head">
+        <span className="apc-badge">
+          <Icon name={action.icon} size={15} />
+        </span>
+        <div className="apc-heading">
+          <span className="apc-kind">
+            {action.label}
+            {count > 1 && <span className="apc-step"> · {index + 1} of {count}</span>}
+          </span>
+          <strong>{change.title}</strong>
+        </div>
+        {decided && (
+          <span className={`apc-said ${decision ? 'is-yes' : 'is-no'}`}>
+            <Icon name={decision ? 'check' : 'x'} size={13} strokeWidth={2.6} />
+            {decision ? (destructive ? 'Will delete' : 'Will apply') : 'Will decline'}
+          </span>
+        )}
+      </div>
+
+      {card ? (
+        <>
+          {card.fields.length > 0 && (
+            <dl className="apc-fields">
+              {card.fields.map((f, i) => (
+                <div key={i} className="apc-field">
+                  <dt>{f.name}</dt>
+                  <dd>
+                    {f.from !== null && f.from !== f.to && (
+                      <>
+                        <s>{f.from}</s>
+                        <Icon name="arrow-right" size={13} />
+                      </>
+                    )}
+                    <span>{f.to}</span>
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          )}
+          {card.notes.length > 0 && (
+            <ul className="apc-notes">
+              {card.notes.map((n, i) => <li key={i}>{n}</li>)}
+            </ul>
+          )}
+          {rows.length > 0 && (
+            <div className="apc-rows">
+              {card.rows.length + card.more > 1 && (
+                <div className="apc-rows-head">
+                  {destructive ? 'Goes' : card.action === 'add' ? 'Adds' : 'Touches'}{' '}
+                  {(card.rows.length + card.more).toLocaleString('en-IN')} transactions
+                </div>
+              )}
+              <table>
+                <tbody>
+                  {rows.map((r, i) => (
+                    <tr key={i}>
+                      <td className="apc-date">{r.date ? shortDayLabel(r.date) : ''}</td>
+                      <td className="apc-what">
+                        <span>{r.merchant || 'No description'}</span>
+                        <small>{r.filed} · {r.account}</small>
+                      </td>
+                      <td className={`apc-amount is-${r.kind}`}>
+                        {money(r.kind === 'expense' ? -r.amount : r.amount, { sign: r.kind === 'income' })}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {hidden > 0 && card.rows.length > rows.length && (
+                <button className="apc-more" onClick={() => setAll(true)}>
+                  Show {card.rows.length - rows.length} more
+                  {card.more > 0 && ` (${card.more.toLocaleString('en-IN')} beyond those aren't listed)`}
+                </button>
+              )}
+              {hidden > 0 && card.rows.length === rows.length && (
+                <p className="apc-more is-static">and {card.more.toLocaleString('en-IN')} more</p>
+              )}
+            </div>
+          )}
+        </>
+      ) : (
+        lines.length > 0 && (
+          <ul className="apc-notes">
+            {lines.map((l, i) => <li key={i}>{l}</li>)}
           </ul>
-        )}
-      </div>
-      <div className="ask-pending-actions">
-        {decision === undefined ? (
-          <>
-            <Button tone="ghost" onClick={() => decide(change.id, false)}>Decline</Button>
-            <Button tone={destructive ? 'danger' : 'primary'} onClick={() => decide(change.id, true)}>
-              {destructive ? 'Delete' : 'Apply'}
-            </Button>
-          </>
-        ) : (
-          <span className="ask-pending-said">{decision ? 'Will apply' : 'Will decline'}</span>
-        )}
-      </div>
+        )
+      )}
+
+      {!decided && (
+        <div className="apc-actions">
+          <Button tone="ghost" onClick={() => decide(change.id, false)}>Decline</Button>
+          <Button
+            tone={destructive ? 'danger' : 'primary'}
+            icon={destructive ? 'trash-2' : 'check'}
+            onClick={() => decide(change.id, true)}
+          >
+            {destructive ? 'Delete' : 'Apply'}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
