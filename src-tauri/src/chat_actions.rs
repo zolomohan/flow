@@ -476,7 +476,8 @@ fn a_transaction(conn: &Connection, t: &Value) -> Option<CardRow> {
             t["category_id"].as_str().map(|c| category_label(conn, c)).unwrap_or_else(|| "No category".into())
         },
         kind,
-    })
+..Default::default()
+})
 }
 
 /// What the change is, for its card and for the history once it's done.

@@ -941,7 +941,13 @@ export interface AiPendingChange {
 export interface AiChangeCard {
   action: 'add' | 'edit' | 'change' | 'delete' | 'category' | 'label' | 'import';
   fields: { name: string; from: string | null; to: string }[];
-  rows: { date: string; merchant: string; amount: Paise; kind: TxKind; account: string; filed: string }[];
+  rows: {
+    date: string; merchant: string; amount: Paise; kind: TxKind; account: string; filed: string;
+    /** The description it had, when the change gives it a new one. */
+    was?: string;
+    /** The note the change gives it. */
+    note?: string;
+  }[];
   /** Rows touched beyond those listed. */
   more: number;
   notes: string[];

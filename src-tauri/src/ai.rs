@@ -482,7 +482,7 @@ fn pdf_is_encrypted(bytes: &[u8]) -> bool {
 }
 
 /// Every sheet of a workbook as CSV, one after another.
-fn spreadsheet_csv(path: &str) -> Result<String> {
+pub(crate) fn spreadsheet_csv(path: &str) -> Result<String> {
     let mut book = open_workbook_auto(path)
         .map_err(|e| format!("That file could not be read as a spreadsheet: {e}"))?;
     let mut out = String::new();

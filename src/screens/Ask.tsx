@@ -13,8 +13,12 @@ import {
 import { spring } from '../lib/motion';
 import type { AiStatus } from '../lib/types';
 
-/** What the statement reader can open. */
-const STATEMENT_EXTENSIONS = ['pdf', 'csv', 'tsv', 'txt', 'xls', 'xlsx', 'xlsm', 'ods', 'png', 'jpg', 'jpeg', 'webp', 'gif'];
+/** What Claude can read: statements, and order histories or other exports
+ *  that tell it more about what's already in the book. */
+const STATEMENT_EXTENSIONS = [
+  'pdf', 'csv', 'tsv', 'txt', 'xls', 'xlsx', 'xlsm', 'ods', 'png', 'jpg', 'jpeg', 'webp', 'gif',
+  'json', 'jsonl', 'ndjson', 'html', 'htm', 'xml', 'md',
+];
 const isStatement = (path: string) =>
   STATEMENT_EXTENSIONS.includes(path.split('.').pop()?.toLowerCase() ?? '');
 const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
@@ -86,7 +90,7 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
         if (ok.length) attach(ok);
         setRefused(
           not.length
-            ? `${not.map(fileName).join(', ')} ${not.length === 1 ? "isn't a statement" : "aren't statements"} Claude can read.`
+            ? `${not.map(fileName).join(', ')} ${not.length === 1 ? "isn't a file" : "aren't files"} Claude can read.`
             : null,
         );
         input.current?.focus({ preventScroll: true });
@@ -99,10 +103,10 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
 
   const browse = async () => {
     const picked = await pickFiles({
-      title: 'Which statements should Claude read?',
+      title: 'Which files should Claude read?',
       multiple: true,
       directory: false,
-      filters: [{ name: 'Statements', extensions: STATEMENT_EXTENSIONS }],
+      filters: [{ name: 'Statements and exports', extensions: STATEMENT_EXTENSIONS }],
     });
     if (!picked) return;
     attach(Array.isArray(picked) ? picked : [picked]);
@@ -307,8 +311,8 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
           >
             <div>
               <Icon name="file-text" size={26} />
-              <strong>Drop statements to attach them</strong>
-              <span>PDF, CSV, Excel or a picture of one</span>
+              <strong>Drop files to attach them</strong>
+              <span>Statements (PDF, CSV, Excel, a picture) or order exports (JSON, CSV)</span>
             </div>
           </motion.div>
         )}
@@ -333,7 +337,7 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
             <strong>Ask anything about your book</strong>
             <p>
               Spending, income, cards, debts, investments: Claude looks it up and shows its working.
-              Drop a statement anywhere on this screen to have it imported.
+              Drop a statement here to import it, or an order export (Swiggy, Amazon) to fill in descriptions and notes.
             </p>
             <div className="ask-starters">
               {STARTERS.map((s) => (
@@ -432,8 +436,8 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
           className="ask-clip"
           onClick={browse}
           disabled={busy || waiting}
-          aria-label="Attach a statement"
-          title="Attach a statement"
+          aria-label="Attach a file"
+          title="Attach a statement or export"
         >
           <Icon name="paperclip" size={17} />
         </button>

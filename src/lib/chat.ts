@@ -51,6 +51,7 @@ const WRITE_TOOLS = new Set([
   'add_category',
   'label_transactions',
   'import_statement',
+  'describe_transactions',
   'debts',
   'labels',
   'folders',

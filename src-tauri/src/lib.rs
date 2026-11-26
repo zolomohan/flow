@@ -2,6 +2,7 @@ mod ai;
 mod capture;
 mod chat;
 mod chat_actions;
+mod chat_files;
 mod cards;
 mod cashback;
 mod db;

@@ -48,8 +48,8 @@ function LookupLine({ part }: { part: Part & { kind: 'lookup' } }) {
   const month = (part.input as { month?: string } | undefined)?.month;
   const path = (part.input as { path?: string } | undefined)?.path;
   const label =
-    part.tool === 'read_statement'
-      ? `Read ${path ? fileName(path) : 'the statement'}`
+    part.tool === 'read_statement' || part.tool === 'read_file'
+      ? `Read ${path ? fileName(path) : part.tool === 'read_file' ? 'the file' : 'the statement'}`
       : part.tool === 'query_book'
       ? 'Looked in the book'
       : part.tool === 'list_accounts'
@@ -183,6 +183,8 @@ export function PendingCard({
                       <td className="apc-date">{r.date ? shortDayLabel(r.date) : ''}</td>
                       <td className="apc-what">
                         <span>{r.merchant || 'No description'}</span>
+                        {r.was !== undefined && <s className="apc-was">{r.was || 'No description'}</s>}
+                        {r.note !== undefined && <em className="apc-row-note">{r.note}</em>}
                         <small>{r.filed} · {r.account}</small>
                       </td>
                       <td className={`apc-amount is-${r.kind}`}>

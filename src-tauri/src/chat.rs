@@ -39,6 +39,7 @@ const BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
 use crate::db::{self, Db};
 use crate::capture;
 use crate::chat_actions;
+use crate::chat_files;
 use crate::cashback;
 use crate::models::{
     CategoryInput, ImportCommitRow, Paise, StatementRow, Transaction, TransactionInput, TransactionPatch,
@@ -350,6 +351,8 @@ fn read_tools() -> Vec<Value> {
     ]) else {
         unreachable!()
     };
+    let mut list = list;
+    list.push(chat_files::read_tool());
     list
 }
 
@@ -421,6 +424,7 @@ fn is_write(name: &str) -> bool {
             | "add_category"
             | "label_transactions"
             | "import_statement"
+            | "describe_transactions"
     ) || chat_actions::is_action(name)
 }
 
@@ -588,6 +592,7 @@ fn write_tools() -> Vec<Value> {
             }
         }),
     ];
+    tools.push(chat_files::write_tool(note));
     tools.extend(chat_actions::tools(note));
     tools
 }
@@ -822,6 +827,18 @@ fn describe_change(conn: &Connection, name: &str, input: &Value) -> Result<(Stri
             ))
         }
         "import_statement" => describe_import(conn, input),
+        "describe_transactions" => {
+            let (rows, _) = chat_files::card_rows(conn, input)?;
+            let lines = rows
+                .iter()
+                .take(CARD_ROWS)
+                .map(|r| match &r.note {
+                    Some(n) => format!("{} · {} · {} · {n}", r.date, r.merchant, inr(r.amount)),
+                    None => format!("{} · {} · {}", r.date, r.merchant, inr(r.amount)),
+                })
+                .collect();
+            Ok((chat_files::title(input)?, lines))
+        }
         other if chat_actions::is_action(other) => {
             let (title, card) = chat_actions::describe(conn, other, input)?;
             let mut lines: Vec<String> = card
@@ -862,7 +879,7 @@ pub struct CardField {
     pub to: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CardRow {
     pub date: String,
@@ -872,6 +889,12 @@ pub struct CardRow {
     pub kind: String,
     pub account: String,
     pub filed: String,
+    /// The description it had, when the change gives it a new one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub was: Option<String>,
+    /// The note the change gives it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 const CARD_ROWS: usize = 40;
@@ -921,7 +944,7 @@ fn field(name: &str, from: Option<String>, to: impl Into<String>) -> CardField {
     CardField { name: name.into(), from, to: to.into() }
 }
 
-fn card_row(conn: &Connection, id: &str) -> Option<CardRow> {
+pub(crate) fn card_row(conn: &Connection, id: &str) -> Option<CardRow> {
     conn.query_row(
         "SELECT substr(t.occurred_at, 1, 10), t.merchant, t.amount, t.kind, a.name, ta.name, t.category_id
            FROM transactions t
@@ -956,7 +979,8 @@ fn card_row(conn: &Connection, id: &str) -> Option<CardRow> {
             category.map(|c| category_label(conn, &c)).unwrap_or_else(|| "No category".into())
         },
         kind,
-    })
+..Default::default()
+})
 }
 
 pub(crate) fn card_rows(conn: &Connection, ids: &[String]) -> (Vec<CardRow>, usize) {
@@ -991,7 +1015,8 @@ fn change_card(conn: &Connection, name: &str, input: &Value) -> Result<Card> {
                     opt_str(input, "category_id").map(|c| category_label(conn, &c)).unwrap_or_else(|| "No category".into())
                 },
                 kind,
-            });
+..Default::default()
+});
             if let Some(n) = opt_str(input, "note") {
                 card.fields.push(field("Note", None, n));
             }
@@ -1106,7 +1131,8 @@ fn change_card(conn: &Connection, name: &str, input: &Value) -> Result<Card> {
                             (Some(c), _) => category_label(conn, c),
                             (None, _) => "No category".into(),
                         },
-                    })
+..Default::default()
+})
                     .collect();
                 Ok(())
             })?;
@@ -1119,6 +1145,12 @@ fn change_card(conn: &Connection, name: &str, input: &Value) -> Result<Card> {
                     !dated && !l.starts_with("and ")
                 })
                 .collect();
+        }
+        "describe_transactions" => {
+            card.action = "edit";
+            let (rows, notes) = chat_files::card_rows(conn, input)?;
+            card.rows = rows;
+            card.notes = notes;
         }
         other if chat_actions::is_action(other) => return Ok(chat_actions::describe(conn, other, input)?.1),
         other => return Err(format!("There is no change called {other}.")),
@@ -1257,6 +1289,11 @@ fn apply_change(conn: &Connection, name: &str, input: &Value) -> Result<Value> {
             json!({ "done": title, "changed": n })
         }
         "import_statement" => apply_import(conn, input, title)?,
+        "describe_transactions" => {
+            let mut done = chat_files::apply(conn, input)?;
+            done["done"] = json!(title);
+            done
+        }
         other if chat_actions::is_action(other) => {
             let mut done = chat_actions::apply(conn, other, input)?;
             done["done"] = json!(title);
@@ -1827,6 +1864,12 @@ The user can pick transactions in the ledger and bring them here; they arrive in
 
 The user can drop bank or card statements onto the chat; they arrive in their message after a line reading "Attached statement files:", one path per line. To import one: work out which account it belongs to (from the file name, the bank, or by asking — list_accounts has them), read it with read_statement (leave the dates out unless the user gave a range), then tell the user briefly what you found: how many rows, how many are already in the book, and any you're unsure how to file. Then propose import_statement, refiling any rows the user corrected or that you can file better with the categories in the book. If the user hasn't said whether the account's balance in the app already includes these transactions and it isn't obvious, ask before importing: it decides already_in_balance.
 
+## Order histories and other files
+
+The same "Attached statement files:" list can hold files that aren't statements: order histories and other exports (Swiggy or Zomato orders, Amazon orders, Uber rides; JSON, JSON Lines, CSV, text, HTML or spreadsheets). Read those with read_file, not read_statement; they add detail to transactions already in the book rather than new ones. For a JSON file, read its outline first, then just the fields you need (order id, time, total paid, merchant or restaurant, item names), a page at a time.
+
+To use one: find the book's transactions it could describe (for Swiggy, merchants LIKE '%swiggy%' on the cards and UPI accounts it was paid from), and match each order to one transaction by the amount actually paid (to the paisa, after discounts, fees and tips) and the date (the charge can post a day or two after the order). Only match when one transaction fits; leave out orders that fit none or several, and don't reuse a transaction for two orders. Tell the user briefly how many matched, how many didn't and why, then propose describe_transactions with the matches: keep the description short (e.g. "Swiggy · Meghana Foods") and put what was bought in the note (e.g. "Chicken biryani, Raita"), keeping anything already in a note that isn't from the order. Ask first if the user hasn't said how they want descriptions and notes written and the book's existing ones suggest a different style. Large files go in batches of up to 300 per change.
+
 ## How to answer
 
 - Look before you answer: never guess a figure. Use as many queries as you need, and check a surprising number before reporting it.
@@ -1904,6 +1947,13 @@ async fn answer_calls(
             Ok(json!({ "declined": DECLINED }))
         } else if name == "read_statement" {
             read_statement(app, run, book, &input, attached).await
+        } else if name == "read_file" {
+            let input = input.clone();
+            let attached = attached.clone();
+            tauri::async_runtime::spawn_blocking(move || chat_files::read_file(&input, &attached))
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|r| r)
         } else {
             let book = book.to_path_buf();
             let app = app.clone();
@@ -2553,6 +2603,36 @@ mod tests {
     }
 
     #[test]
+    fn orders_describe_transactions_each_their_own() {
+        let (_d, path) = book();
+        let conn = db::open(&path).unwrap();
+        let mut ids = vec![];
+        for (amount, note) in [(41250, None), (18900, Some("office"))] {
+            let mut add = json!({ "kind": "expense", "amount": amount, "account_id": "a",
+                                  "merchant": "SWIGGY", "occurred_at": "2026-11-03" });
+            if let Some(n) = note { add["note"] = json!(n); }
+            ids.push(apply_change(&conn, "add_transaction", &add).unwrap()["id"].as_str().unwrap().to_string());
+        }
+        let change = json!({ "source": "Swiggy orders", "items": [
+            { "id": ids[0], "merchant": "Swiggy · Meghana Foods", "note": "Biryani, Raita" },
+            { "id": ids[1], "note": "office · Latte" },
+        ] });
+        let card = change_card(&conn, "describe_transactions", &change).unwrap();
+        assert_eq!(card.rows.len(), 2);
+        assert_eq!(card.rows[0].merchant, "Swiggy · Meghana Foods");
+        assert_eq!(card.rows[0].was.as_deref(), Some("SWIGGY"));
+        assert!(card.rows[1].was.is_none());
+        assert_eq!(card.rows[1].note.as_deref(), Some("office · Latte"));
+        let done = apply_change(&conn, "describe_transactions", &change).unwrap();
+        assert_eq!(done["changed"], 2);
+        assert_eq!(done["done"], "Describe 2 transactions from Swiggy orders");
+        let a = db::get_transaction(&conn, &ids[0]).unwrap();
+        assert_eq!((a.merchant.as_str(), a.note.as_deref()), ("Swiggy · Meghana Foods", Some("Biryani, Raita")));
+        let b = db::get_transaction(&conn, &ids[1]).unwrap();
+        assert_eq!((b.merchant.as_str(), b.note.as_deref()), ("SWIGGY", Some("office · Latte")));
+    }
+
+    #[test]
     fn the_rest_of_the_app_is_reachable() {
         let (_d, path) = book();
         let conn = db::open(&path).unwrap();
@@ -2611,8 +2691,8 @@ mod tests {
         let names: Vec<String> = tools().as_array().unwrap().iter()
             .map(|t| t["name"].as_str().unwrap().to_string()).collect();
         let writes: Vec<&String> = names.iter().filter(|n| is_write(n)).collect();
-        assert_eq!(writes.len(), 17);
-        assert!(!is_write("query_book") && !is_write("list_accounts") && !is_write("book_summary") && !is_write("read_statement"));
+        assert_eq!(writes.len(), 18);
+        assert!(!is_write("query_book") && !is_write("list_accounts") && !is_write("book_summary") && !is_write("read_statement") && !is_write("read_file"));
     }
 
     #[test]

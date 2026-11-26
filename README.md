@@ -201,6 +201,13 @@ works out the account, suggests a description and a category from your own
 list for each, and says what's new and what's already in the book. Nothing
 is written until you apply the import card it shows.
 
+Order histories and other exports (Swiggy or Amazon orders as JSON, JSON
+Lines, CSV, HTML or a spreadsheet) can be dropped on **Ask** too. Claude
+reads them with `read_file` (an outline first, then only the fields it
+needs), matches each order to one transaction already in the book by the
+amount paid and the date, and proposes the descriptions and notes on a
+single `describe_transactions` card for you to apply.
+
 Accepted rows go through the same `preview_import` / `commit_import` as the
 spreadsheet importer, so duplicates are set aside, a counterparty whose
 filing you confirmed before keeps that filing, and accepting a row teaches its
