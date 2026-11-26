@@ -400,7 +400,7 @@ export function Taxes({ onOpenTransaction }: { onOpenTransaction: (tx: Transacti
 
             <SectionHead
               title="What came in"
-              hint={`${heads.length} ${heads.length === 1 ? 'head' : 'heads'} · click one for the working`}
+              hint={`${heads.length} ${heads.length === 1 ? 'head' : 'heads'} · open one for the working`}
             />
             <Card padded={false}>
               <motion.div variants={listVariants} initial="initial" animate="animate">

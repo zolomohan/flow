@@ -425,8 +425,38 @@
     gap: 8px 10px;
     padding: 10px 12px;
   }
-  .bulk-fields > * { flex: 1 1 132px; max-width: none; }
+  /* Two rows, not four: the count, Quick ask and the bar's own buttons on
+     the first, the changes on a strip under them that scrolls sideways.
+     Stacked two to a row the five changes took a third of the screen. The
+     menus they open are portalled to the body, so the strip clipping its
+     overflow cannot clip them. */
+  .bulk-fields {
+    order: 3;
+    flex: 1 1 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    margin-inline: -12px;
+    padding-inline: 12px;
+    scrollbar-width: none;
+  }
+  .bulk-fields::-webkit-scrollbar { display: none; }
+  .bulk-fields > * { flex: 0 0 auto; width: 156px; max-width: none; }
+  .bulk-fields .select-trigger { white-space: nowrap; }
+  /* No keyboard to press `/` on; without the key the bar's own buttons
+     fit on the first row beside it. */
+  .bulk-quick-ask kbd { display: none; }
+  .bulk-bar { column-gap: 8px; }
+  .bulk-actions { gap: 2px; }
   .bulk-actions { border-left: 0; padding-left: 0; }
+
+  /* Quick ask sits where the bar does and covers it whole, rather than
+     floating partway up with the bar's last row showing underneath. */
+  .quick-chat {
+    bottom: calc(var(--tabs-h) + 10px);
+    left: 10px;
+    right: 10px;
+    max-height: calc(100dvh - var(--tabs-h) - var(--bar-h) - var(--safe-t) - 24px);
+  }
 
   /* ------------------------------------------------------------- the ledger */
 
@@ -472,9 +502,23 @@
   .filter-group { padding: 12px 14px; }
   .filter-clear { padding: 10px 14px; }
 
-  .totals-strip { gap: 8px; }
-  .total { padding: 11px 13px; }
-  .total strong { font-size: 16px; }
+  /* In, out and net on one line, however many there are. One card a row
+     put the first posting halfway down the screen. */
+  .totals-strip {
+    grid-template-columns: none;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+  .total { padding: 9px 10px; min-width: 0; }
+  .total span { font-size: 10px; }
+  .total strong {
+    display: block;
+    font-size: 15px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
   .ledger-more { padding-top: 2px; }
 
@@ -521,10 +565,22 @@
 
   /* ---------------------------------------------------------- investments */
 
-  .holding-card { padding: 14px 15px 13px; }
+  /* `1fr` alone is `minmax(auto, 1fr)`: a deposit's four figures and its
+     one-line footnote set a floor wider than the glass, and the card ran
+     20px off the right edge. */
+  .holding-cards { grid-template-columns: minmax(0, 1fr); }
+  .holding-card { min-width: 0; padding: 14px 15px 13px; }
+  .hc-foot { white-space: normal; }
   .hc-worth strong { font-size: 21px; }
   .hc-figures { grid-template-columns: repeat(auto-fit, minmax(68px, 1fr)); gap: 9px 12px; }
   .price-head-tools { gap: 6px; }
+  /* The range switch under the chart's title, not beside it: beside it the
+     title and its hint broke over three lines. */
+  .card-head:has(.price-head-tools) { flex-wrap: wrap; }
+  .card-head:has(.price-head-tools) > :first-child { flex: 1 1 100%; }
+  .price-head-tools { flex: 1 1 100%; }
+  .price-head-tools .segmented { width: 100%; }
+  .price-head-tools .segmented > * { flex: 1; }
   .scheme-hits { max-height: 200px; }
 
   /* ------------------------------------------------------------- settings */
@@ -543,6 +599,11 @@
   .theme-card { padding: 10px; }
 
   .cat-row { gap: 9px; padding: 7px 6px; }
+  /* The kind switch and the two buttons beside the title squeezed it to a
+     column a word wide; under it, they have the card's width. */
+  .card-head:has(.cat-head-actions) { flex-wrap: wrap; }
+  .card-head:has(.cat-head-actions) > :first-child { flex: 1 1 100%; }
+  .cat-head-actions { flex: 1 1 100%; gap: 8px; }
   .cat-row-glyph { width: 32px; height: 32px; }
   .cat-subrows { margin-left: 16px; padding-left: 10px; }
   .ro-sublist { margin-left: 20px; }
@@ -580,6 +641,9 @@
   /* ---------------------------------------------------------------- taxes */
 
   .tax-head-row { gap: 10px; padding: 12px 14px; }
+  /* The figure's own note wraps under it rather than taking the name's
+     room: the name had broken over four lines. */
+  .tax-head-figures { max-width: 124px; }
   .tax-head-glyph { width: 30px; height: 30px; }
   .tax-head > .meter { margin-inline: 14px; }
   .tax-head-body { padding: 2px 14px 16px; }
@@ -594,6 +658,10 @@
   }
   .tax-line > .meter { grid-column: 1 / -1; }
   .tax-head-months { font-size: 8.5px; }
+  /* The button under the words rather than beside them, where it left the
+     sentence a column a few words wide. */
+  .tax-alert-head { grid-template-columns: auto minmax(0, 1fr); align-items: start; }
+  .tax-alert-head > .btn { grid-column: 2; justify-self: start; }
 
   /* ----------------------------------------------------------------- siri */
 
@@ -733,7 +801,6 @@
 
   /* One tile a row rather than two half-legible ones. */
   .wallet-grid { grid-template-columns: minmax(0, 1fr); }
-  .totals-strip { grid-template-columns: minmax(0, 1fr); }
   .more-grid,
   .more-foot { grid-template-columns: minmax(0, 1fr); }
 

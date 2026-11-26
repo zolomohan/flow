@@ -69,7 +69,7 @@ function PreferencesPanel() {
   return (
     <>
     <Card>
-      <CardHead title="Theme" hint="Light, dark, or whatever your Mac is set to" />
+      <CardHead title="Theme" hint="Light, dark, or whatever this device is set to" />
       <div className="theme-row">
         {THEMES.map((option) => (
           <button
@@ -441,7 +441,7 @@ function DataPanel() {
     <NameCard />
 
     <Card>
-      <CardHead title="Your data" hint="Everything stays on this Mac" />
+      <CardHead title="Your data" hint="Everything stays on this device" />
       <div className="data-actions">
         <div className="data-row">
           <div>

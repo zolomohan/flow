@@ -2,10 +2,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion, Reorder, useDragControls } from 'motion/react';
 import { CATEGORY_ICON_GROUPS, Icon } from '../components/Icon';
 import {
-  Button, Card, CardHead, Empty, Field, IconButton, Segmented, Select, Sheet, TextInput,
+  Button, Card, CardHead, Empty, Field, IconButton, MoreMenu, Segmented, Select, Sheet, TextInput,
   type SegmentOption, type SelectOption,
 } from '../components/ui';
 import { useStore } from '../lib/store';
+import { usePhone } from '../lib/media';
 import { itemVariants, listVariants, spring } from '../lib/motion';
 import type { Category, CategoryKind } from '../lib/types';
 
@@ -187,6 +188,9 @@ function CategoryRow({
   onOpenCategory: (categoryId: string) => void;
 }) {
   const go = (mode: Mode) => () => onOpen({ category, kind: category.kind, mode });
+  // Four glyphs a row left a phone a word of each name. There the four go
+  // behind one, and the name gets the row back.
+  const phone = usePhone();
   // Nothing is filed on a group, so saying "0 transactions" of one says
   // nothing: what it is worth knowing is how much sits under it.
   const meta = subCount
@@ -215,6 +219,23 @@ function CategoryRow({
           <Icon name="chevron-right" size={15} />
         </span>
       </button>
+      {phone ? (
+        <div className="cat-row-actions">
+          <MoreMenu
+            label={`Change ${category.name}`}
+            items={[
+              ...(onAddSub
+                ? [{ icon: 'plus', label: 'Add a sub-category', onClick: onAddSub }]
+                : []),
+              { icon: 'pencil', label: 'Edit', onClick: go('form') },
+              ...(count + subTotal > 0
+                ? [{ icon: 'arrow-left-right', label: 'Move transactions out', onClick: go('move') }]
+                : []),
+              { icon: 'trash-2', label: 'Delete', onClick: go('delete') },
+            ]}
+          />
+        </div>
+      ) : (
       <div className="cat-row-actions">
         {onAddSub && (
           <IconButton
@@ -240,6 +261,7 @@ function CategoryRow({
           onClick={go('delete')}
         />
       </div>
+      )}
     </div>
   );
 }

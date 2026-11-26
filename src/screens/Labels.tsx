@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { Icon } from '../components/Icon';
 import {
-  Button, Card, CardHead, Confirm, Empty, Field, Sheet, Switch, TextInput,
+  Button, Card, CardHead, Confirm, Empty, Field, MoreMenu, Sheet, Switch, TextInput,
 } from '../components/ui';
 import { useStore } from '../lib/store';
+import { usePhone } from '../lib/media';
 import { itemVariants, listVariants } from '../lib/motion';
 import type { Label } from '../lib/types';
 
@@ -32,6 +33,7 @@ export function Labels({
   onOpenLabel?: (labelId: string) => void;
 }) {
   const { labels, deleteLabel } = useStore();
+  const phone = usePhone();
   // The label being worked on outlives the sheet's dismissal, so the form
   // keeps its content through the closing animation. `null` is a new one.
   const [editing, setEditing] = useState<Label | null>(null);
@@ -103,6 +105,17 @@ export function Labels({
                   </em>
                 </button>
                 <div className="label-actions">
+                  {/* Two worded buttons took half of each row on a phone. */}
+                  {phone ? (
+                    <MoreMenu
+                      label={`Change ${label.name}`}
+                      items={[
+                        { icon: 'pencil', label: 'Edit', onClick: () => open(label) },
+                        { icon: 'trash-2', label: 'Delete', onClick: () => setConfirming(label.id) },
+                      ]}
+                    />
+                  ) : (
+                  <>
                   <Button size="sm" tone="ghost" icon="pencil" onClick={() => open(label)}>
                     Edit
                   </Button>
@@ -114,6 +127,8 @@ export function Labels({
                   >
                     Delete
                   </Button>
+                  </>
+                  )}
                 </div>
               </motion.div>
             ))}
