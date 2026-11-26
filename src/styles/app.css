@@ -9274,3 +9274,29 @@ kbd {
 @media (max-width: 760px) {
   .quick-chat { left: 12px; right: 12px; width: auto; margin-left: 0; bottom: 150px; }
 }
+
+/* The ledger bar's way into a quick chat: first, and plainly a button. */
+.bulk-quick-ask {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 10px 0 12px;
+  border-radius: var(--r-md);
+  background: var(--violet-soft);
+  color: var(--violet);
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.bulk-quick-ask:hover:not(:disabled) { background: color-mix(in srgb, var(--violet) 18%, var(--surface)); }
+.bulk-quick-ask:disabled { opacity: 0.5; cursor: default; }
+.bulk-quick-ask kbd {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--violet);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 700;
+}

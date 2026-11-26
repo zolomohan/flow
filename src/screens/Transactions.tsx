@@ -88,8 +88,6 @@ const PAGE = 300;
 const STAGGER_UP_TO = 120;
 /** The Ask Claude menu's first choice, as against a saved chat's id. */
 const NEW_CHAT = '__new__';
-/** …and the one that asks right here, in a chat nothing keeps. */
-const QUICK_CHAT = '__quick__';
 const PLAIN_LIST = { initial: {}, animate: { transition: { staggerChildren: 0 } } };
 
 export function Transactions({
@@ -473,8 +471,23 @@ export function Transactions({
     if (someonePicked && onAskAbout) void refreshChats();
   }, [someonePicked, onAskAbout]);
   const [quick, setQuick] = useState<{ ids: string[]; known: Transaction[] } | null>(null);
+  const openQuick = () => {
+    if (chosen.length) setQuick({ ids: chosen.map((r) => r.id), known: chosen });
+  };
+  // "/" asks about what is picked, right here.
+  useEffect(() => {
+    if (!onAskAbout || pickMany || !someonePicked || quick) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+      const at = document.activeElement;
+      if (at instanceof HTMLInputElement || at instanceof HTMLTextAreaElement || (at instanceof HTMLElement && at.isContentEditable)) return;
+      e.preventDefault();
+      openQuick();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  });
   const askOptions: SelectOption[] = [
-    { value: QUICK_CHAT, label: 'Quick ask, right here', icon: 'sparkles', hint: 'not saved' },
     { value: NEW_CHAT, label: 'New chat', icon: 'plus' },
     ...chats.map((c) => ({ value: c.id, label: c.title, icon: 'messages-square', group: 'Add to a chat' })),
   ];
@@ -1181,6 +1194,18 @@ export function Transactions({
               </div>
             ) : (
               <>
+            {onAskAbout && (
+              <button
+                className="bulk-quick-ask"
+                onClick={openQuick}
+                disabled={working}
+                title="Ask Claude about these, right here  /"
+              >
+                <Icon name="sparkles" size={14} />
+                Quick ask
+                <kbd>/</kbd>
+              </button>
+            )}
             <div className="bulk-fields">
               {onAskAbout && (
                 <Select
@@ -1188,10 +1213,9 @@ export function Transactions({
                   value={null}
                   onChange={(id) => {
                     if (!id) return;
-                    if (id === QUICK_CHAT) setQuick({ ids: chosen.map((r) => r.id), known: chosen });
-                    else void askAbout(id === NEW_CHAT ? null : id);
+                    void askAbout(id === NEW_CHAT ? null : id);
                   }}
-                  placeholder="Ask Claude"
+                  placeholder="Open in Ask"
                   searchable={chats.length > 6}
                   searchPlaceholder="Find a chat"
                   disabled={working}
