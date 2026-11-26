@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from '../components/Icon';
 import { TransactionRow } from '../components/TransactionRow';
 import { bringTransactions, refreshChats, useChat } from '../lib/chat';
+import { QuickChat } from '../components/QuickChat';
 import {
   Button, Card, Chip, Confirm, Empty, IconButton, Segmented, Select, TextInput,
   type SegmentOption, type SelectOption,
@@ -87,6 +88,8 @@ const PAGE = 300;
 const STAGGER_UP_TO = 120;
 /** The Ask Claude menu's first choice, as against a saved chat's id. */
 const NEW_CHAT = '__new__';
+/** …and the one that asks right here, in a chat nothing keeps. */
+const QUICK_CHAT = '__quick__';
 const PLAIN_LIST = { initial: {}, animate: { transition: { staggerChildren: 0 } } };
 
 export function Transactions({
@@ -469,7 +472,9 @@ export function Transactions({
   useEffect(() => {
     if (someonePicked && onAskAbout) void refreshChats();
   }, [someonePicked, onAskAbout]);
+  const [quick, setQuick] = useState<{ ids: string[]; known: Transaction[] } | null>(null);
   const askOptions: SelectOption[] = [
+    { value: QUICK_CHAT, label: 'Quick ask, right here', icon: 'sparkles', hint: 'not saved' },
     { value: NEW_CHAT, label: 'New chat', icon: 'plus' },
     ...chats.map((c) => ({ value: c.id, label: c.title, icon: 'messages-square', group: 'Add to a chat' })),
   ];
@@ -1181,7 +1186,11 @@ export function Transactions({
                 <Select
                   options={askOptions}
                   value={null}
-                  onChange={(id) => id && void askAbout(id === NEW_CHAT ? null : id)}
+                  onChange={(id) => {
+                    if (!id) return;
+                    if (id === QUICK_CHAT) setQuick({ ids: chosen.map((r) => r.id), known: chosen });
+                    else void askAbout(id === NEW_CHAT ? null : id);
+                  }}
                   placeholder="Ask Claude"
                   searchable={chats.length > 6}
                   searchPlaceholder="Find a chat"
@@ -1299,6 +1308,20 @@ export function Transactions({
               </>
             )}
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {quick && (
+          <QuickChat
+            ids={quick.ids}
+            known={quick.known}
+            onClose={() => setQuick(null)}
+            onDone={(what) => {
+              setQuick(null);
+              toast(what || 'Done');
+            }}
+          />
         )}
       </AnimatePresence>
 
