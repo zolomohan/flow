@@ -8564,7 +8564,9 @@ kbd {
   align-items: center;
   text-align: center;
   gap: 6px;
-  margin: 6vh auto 0;
+  /* In the middle of the room the log has, above the composer. */
+  margin: auto;
+  padding-bottom: 4vh;
   max-width: 560px;
 }
 .ask-empty strong { font-size: 18px; font-weight: 600; letter-spacing: var(--tight); }

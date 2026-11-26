@@ -289,9 +289,11 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
               Rename
             </Button>
           )}
-          <Button icon="plus" onClick={() => { setListOpen(false); newChat(); }} disabled={busy && !chat.chatId}>
-            New chat
-          </Button>
+          {chat.chatId && (
+            <Button icon="plus" onClick={() => { setListOpen(false); newChat(); }}>
+              New chat
+            </Button>
+          )}
         </div>
       </header>
 
