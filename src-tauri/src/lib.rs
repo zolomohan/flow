@@ -1,3 +1,4 @@
+mod ai;
 mod capture;
 mod cards;
 mod db;
@@ -275,6 +276,61 @@ fn commit_statement_import(
     rows: Vec<ImportCommitRow>,
 ) -> R<ImportResult> {
     with_db(&db, |c| db::commit_import(c, &account_id, rows))
+}
+
+/// Where Claude's credential would come from, and what else is set up.
+/// Asking `ant` for a token blocks on a subprocess, so it runs off the main
+/// thread.
+#[tauri::command]
+async fn ai_status() -> R<ai::AiStatus> {
+    tauri::async_runtime::spawn_blocking(ai::status)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ai_save_key(key: String) -> R<()> {
+    ai::save_key(&key)
+}
+
+#[tauri::command]
+fn ai_forget_key() -> R<()> {
+    ai::forget_key()
+}
+
+/// Checks the credential against the API; answers with the model's name.
+#[tauri::command]
+async fn ai_test() -> R<String> {
+    ai::test().await
+}
+
+/// Reads statements with Claude into rows the importer can preview. The
+/// book is only read, for the categories and accounts to choose between,
+/// and the lock is let go before the first byte is sent.
+#[tauri::command]
+async fn ai_read_statements(
+    app: tauri::AppHandle,
+    db: State<'_, Db>,
+    run: String,
+    paths: Vec<String>,
+    account_id: String,
+    from: String,
+    to: String,
+) -> R<Vec<ai::AiRow>> {
+    let (account, categories, accounts) = {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        let accounts = db::list_accounts(&conn)?;
+        let categories = db::list_categories(&conn)?;
+        let account = accounts
+            .iter()
+            .find(|a| a.id == account_id)
+            .cloned()
+            .ok_or("That account no longer exists.")?;
+        let accounts: Vec<Account> =
+            accounts.into_iter().filter(|a| !a.archived && !a.system).collect();
+        (account, categories, accounts)
+    };
+    ai::read_statements(app, run, paths, account, from, to, categories, accounts).await
 }
 
 #[tauri::command]
@@ -776,6 +832,11 @@ pub fn run() {
             parse_statement,
             preview_statement_import,
             commit_statement_import,
+            ai_status,
+            ai_save_key,
+            ai_forget_key,
+            ai_test,
+            ai_read_statements,
             list_labels,
             label_transactions,
             save_label,

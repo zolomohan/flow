@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import type {
   Account,
+  AiRow,
+  AiStatus,
   AccountInput,
   Capture,
   CaptureSync,
@@ -131,6 +133,14 @@ export const api = {
   /** Holds parsed rows against one account: matched, or new with a guess. */
   previewStatementImport: (accountId: string, rows: StatementRow[]) =>
     call<ImportPreviewRow[]>('preview_statement_import', { accountId, rows }),
+  aiStatus: () => call<AiStatus>('ai_status'),
+  aiSaveKey: (key: string) => call<void>('ai_save_key', { key }),
+  aiForgetKey: () => call<void>('ai_forget_key'),
+  aiTest: () => call<string>('ai_test'),
+  /** Reads statements with Claude. Progress arrives as `ai-read-progress`
+   *  events carrying `run`. */
+  aiReadStatements: (run: string, paths: string[], accountId: string, from: string, to: string) =>
+    call<AiRow[]>('ai_read_statements', { run, paths, accountId, from, to }),
   /** Posts the agreed rows, wearing the Triage label where asked. A row
    *  marked as not affecting the balance is absorbed by the openings it
    *  touches, so recording it moves nothing. */

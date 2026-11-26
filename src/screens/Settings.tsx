@@ -7,20 +7,23 @@ import {
 } from '../components/ui';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { api } from '../lib/api';
+import type { AiStatus } from '../lib/types';
 import {
   HIDE_AMOUNTS, OWNER_FALLBACK, OWNER_NAME, REQUIRE_NOTE, THEMES, useStore,
 } from '../lib/store';
 import { spring } from '../lib/motion';
 
-type Tab = 'preferences' | 'data';
+type Tab = 'preferences' | 'claude' | 'data';
 
 const TABS: SegmentOption<Tab>[] = [
   { value: 'preferences', label: 'Preferences', icon: 'settings' },
+  { value: 'claude', label: 'Claude', icon: 'sparkles' },
   { value: 'data', label: 'Your data', icon: 'download' },
 ];
 
 const BLURBS: Record<Tab, string> = {
   preferences: 'How flow looks and behaves.',
+  claude: 'How flow reaches Claude to read your statements.',
   data: 'Your name, and a copy of your book to keep, restore or clear.',
 };
 
@@ -51,6 +54,7 @@ export function Settings() {
           transition={{ duration: 0.16 }}
         >
           {tab === 'preferences' && <PreferencesPanel />}
+          {tab === 'claude' && <ClaudePanel />}
           {tab === 'data' && <DataPanel />}
         </motion.div>
       </AnimatePresence>
@@ -175,6 +179,214 @@ function NameCard() {
         </div>
       </div>
     </Card>
+  );
+}
+
+/**
+ * The connection to Claude. Anthropic has no "Sign in with Claude" for an
+ * app like this one, so there are two ways in: borrow the sign-in of
+ * Anthropic's own CLI, which keeps no secret in flow at all, or paste an API
+ * key, which goes into the macOS Keychain. The sign-in wins when both are
+ * there.
+ */
+function ClaudePanel() {
+  const { toast } = useStore();
+  const [status, setStatus] = useState<AiStatus | null>(null);
+  const [key, setKey] = useState('');
+  const [busy, setBusy] = useState<'check' | 'save' | 'forget' | 'test' | null>(null);
+  const [tested, setTested] = useState<string | null>(null);
+
+  const refresh = async () => {
+    setBusy('check');
+    setTested(null);
+    try {
+      setStatus(await api.aiStatus());
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  const saveKey = async () => {
+    setBusy('save');
+    try {
+      await api.aiSaveKey(key);
+      setKey('');
+      toast('Key saved to the Keychain');
+      setStatus(await api.aiStatus());
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const forgetKey = async () => {
+    setBusy('forget');
+    try {
+      await api.aiForgetKey();
+      toast('Key removed from the Keychain');
+      setStatus(await api.aiStatus());
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const test = async () => {
+    setBusy('test');
+    setTested(null);
+    try {
+      const model = await api.aiTest();
+      setTested(`Connected · ${model}`);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const using =
+    status?.source === 'ant'
+      ? 'your Anthropic sign-in'
+      : status?.source === 'keychain'
+        ? 'the API key in your Keychain'
+        : status?.source === 'env'
+          ? 'ANTHROPIC_API_KEY from the environment'
+          : null;
+
+  return (
+    <>
+    <Card>
+      <CardHead
+        title="Connection"
+        hint={
+          status === null
+            ? 'Checking…'
+            : using
+              ? `Using ${using}`
+              : 'Not connected'
+        }
+      />
+      <div className="data-actions">
+        <div className="data-row">
+          <div>
+            <strong>
+              <span className={`ai-dot ${using ? 'is-on' : ''}`} />
+              {using ? 'Ready to read statements' : 'Claude isn\'t connected'}
+            </strong>
+            <p>
+              {tested ??
+                (status
+                  ? `Statements are read by ${status.model}. Usage is billed to the Anthropic Console account you connect, not to a claude.ai plan.`
+                  : 'Looking for a sign-in or a key…')}
+            </p>
+          </div>
+          <div className="ai-settings-actions">
+            <Button icon="refresh-cw" tone="ghost" onClick={refresh} disabled={busy !== null}>
+              {busy === 'check' ? 'Checking…' : 'Check again'}
+            </Button>
+            <Button icon="shield-check" onClick={test} disabled={busy !== null || !using}>
+              {busy === 'test' ? 'Testing…' : 'Test'}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </Card>
+
+    <Card>
+      <CardHead title="Sign in with Anthropic" hint="Recommended · no key stored in flow" />
+      <div className="data-actions">
+        <div className="data-row">
+          <div>
+            <strong>
+              {status?.antSignedIn
+                ? 'Signed in'
+                : status?.antPath
+                  ? 'The Anthropic CLI is installed, but not signed in'
+                  : 'The Anthropic CLI isn\'t installed'}
+            </strong>
+            <p>
+              {status?.antSignedIn
+                ? `flow asks ant for a short-lived token each time it reads. The sign-in runs out after some weeks; run ant auth login again when it does.`
+                : status?.antProblem ??
+                  'flow can use the sign-in of Anthropic\'s own command-line tool, so you approve access in your browser instead of pasting a key.'}
+            </p>
+            {!status?.antSignedIn && (
+              <ol className="ai-howto">
+                {!status?.antPath && (
+                  <li>
+                    In Terminal: <code>brew install anthropics/tap/ant</code>
+                  </li>
+                )}
+                <li>
+                  Then: <code>ant auth login</code>, and approve in the browser tab that
+                  opens
+                </li>
+                <li>Come back here and choose Check again</li>
+              </ol>
+            )}
+          </div>
+        </div>
+      </div>
+    </Card>
+
+    <Card>
+      <CardHead title="Or use an API key" hint="Kept in the macOS Keychain" />
+      <div className="data-actions">
+        {status?.hasKey ? (
+          <div className="data-row">
+            <div>
+              <strong>A key is saved</strong>
+              <p>
+                {status.antSignedIn
+                  ? 'Your sign-in is used first; the key is the fallback when it runs out.'
+                  : 'flow reads statements with this key.'}
+              </p>
+            </div>
+            <Button tone="danger" icon="trash-2" onClick={forgetKey} disabled={busy !== null}>
+              {busy === 'forget' ? 'Removing…' : 'Remove key'}
+            </Button>
+          </div>
+        ) : (
+          <div className="data-row ai-key-row">
+            <div>
+              <strong>Paste a key</strong>
+              <p>
+                Create one at platform.claude.com under API keys. It never leaves this
+                Mac except to talk to Anthropic.
+              </p>
+            </div>
+            <form
+              className="ai-key-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (key.trim()) void saveKey();
+              }}
+            >
+              <TextInput
+                type="password"
+                value={key}
+                placeholder="sk-ant-…"
+                autoComplete="off"
+                spellCheck={false}
+                onChange={(e) => setKey(e.target.value)}
+              />
+              <Button tone="primary" icon="key-round" type="submit" disabled={busy !== null || !key.trim()}>
+                {busy === 'save' ? 'Saving…' : 'Save'}
+              </Button>
+            </form>
+          </div>
+        )}
+      </div>
+    </Card>
+    </>
   );
 }
 

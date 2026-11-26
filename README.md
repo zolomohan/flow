@@ -176,6 +176,43 @@ writes what it finds as *unconfirmed* rules — suggestions, still triaged,
 until confirmed in the app. Its key derivation mirrors
 `src-tauri/src/import.rs::match_key` and must be kept in step.
 
+## Importing with Claude
+
+**Transactions → Import with Claude** is a guided version of the statement
+import for files the spreadsheet reader can't parse: PDFs, CSVs, other banks'
+spreadsheets, even screenshots. Four steps, no chat:
+
+1. **Range** — the account the statements belong to and the dates wanted.
+2. **Statements** — one or more files.
+3. **Reading** — Claude (`claude-opus-5-5`, from Rust in `ai.rs`) lists every
+   transaction in the range and suggests a description, a category from your
+   own list and a note for each. Progress streams in as it writes.
+4. **Review** — a table to edit descriptions, categories and notes inline,
+   open any row in the full transaction editor, and accept or skip rows.
+
+Accepted rows go through the same `preview_import` / `commit_import` as the
+spreadsheet importer, so duplicates are set aside, a counterparty whose
+filing you confirmed before keeps that filing, and accepting a row teaches its
+rule. Rows Claude was unsure of and you left untouched arrive labelled
+**Triage**.
+
+**Connecting Claude** (Settings → Claude). Anthropic has no "Sign in with
+Claude" for a local app — its third-party OAuth needs a server and an identity
+provider, and claude.ai subscriptions can't be used by other apps — so there
+are two ways in, tried in this order:
+
+- **The Anthropic CLI's sign-in.** `brew install anthropics/tap/ant`, then
+  `ant auth login` and approve in the browser. flow asks `ant` for a
+  short-lived token on every read and stores nothing. The sign-in runs out
+  after some weeks; log in again when it does.
+- **An API key** from platform.claude.com, pasted once and kept in the macOS
+  Keychain.
+
+`ANTHROPIC_API_KEY` in the environment is honoured too, for `tauri dev`.
+Either way, usage is billed to the Anthropic Console account, not a claude.ai
+plan. Statements are sent to Anthropic to be read; password-protected PDFs need
+the password taken off first.
+
 ## Keyboard
 
 | | |
@@ -193,6 +230,7 @@ src-tauri/src/
   models.rs    serde structs shared with the frontend (camelCase over the wire)
   db.rs        schema, migrations, every query
   import.rs    bank statement parsing, and the narration → match-key derivation
+  ai.rs        reading statements with Claude, and finding its credential
   demo.rs      the sample book generator
   lib.rs       Tauri commands, one shared connection behind a Mutex
 

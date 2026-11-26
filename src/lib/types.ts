@@ -804,6 +804,45 @@ export interface ImportPreviewRow {
   matchKey: string | null;
 }
 
+/** Where Flow gets its Claude credential from, and what else is set up. */
+export interface AiStatus {
+  /** The CLI's sign-in, a key in the Keychain, or a key in the environment —
+   *  or null, when Claude can't be reached. */
+  source: 'ant' | 'keychain' | 'env' | null;
+  /** Where Anthropic's `ant` CLI was found, when it was. */
+  antPath: string | null;
+  antSignedIn: boolean;
+  /** Why the CLI didn't hand over a token, when it is installed. */
+  antProblem: string | null;
+  hasKey: boolean;
+  hasEnvKey: boolean;
+  model: string;
+}
+
+/** One transaction Claude read off a statement, with its guess at filing. */
+export interface AiRow {
+  row: StatementRow;
+  kind: TxKind;
+  categoryId: string | null;
+  transferAccountId: string | null;
+  /** A clean merchant or counterparty name. */
+  description: string;
+  note: string;
+  confidence: 'high' | 'medium' | 'low';
+  /** The file it came from. */
+  file: string;
+}
+
+/** How far a read has got, sent while Claude is working. */
+export interface AiReadProgress {
+  run: string;
+  file: string;
+  fileIndex: number;
+  fileCount: number;
+  phase: 'sending' | 'reading' | 'done';
+  found: number;
+}
+
 /** One row the user agreed to bring in: the statement's line, and the full
  *  posting it should become — whatever the transaction sheet wrote, splits,
  *  shares and all. */

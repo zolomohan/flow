@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from '../components/Icon';
 import { TransactionRow } from '../components/TransactionRow';
+import { AiImportSheet } from '../components/AiImportSheet';
 import {
   Button, Card, Chip, Confirm, Empty, IconButton, Segmented, Select, TextInput,
   type SegmentOption, type SelectOption,
@@ -133,6 +134,7 @@ export function Transactions({
   const [labelIds, setLabelIds] = useState<string[]>([]);
   const [catQuery, setCatQuery] = useState('');
   const [showFilters, setShowFilters] = useState(false);
+  const [aiImportOpen, setAiImportOpen] = useState(false);
   const [rows, setRows] = useState<Transaction[]>([]);
   const [summary, setSummary] = useState<TransactionSummary | null>(null);
   const [shown, setShown] = useState(PAGE);
@@ -596,6 +598,9 @@ export function Transactions({
           {months > 0 && <MonthNav month={month} onChange={setMonth} span={months} />}
           {!picking && (
             <>
+              <Button icon="sparkles" onClick={() => setAiImportOpen(true)}>
+                Import with Claude
+              </Button>
               <Button tone="primary" icon="plus" onClick={onAddTransaction}>
                 Add transaction
               </Button>
@@ -1184,6 +1189,8 @@ export function Transactions({
           ? 'This cannot be undone.'
           : 'They go together, and this cannot be undone.'}
       </Confirm>
+
+      <AiImportSheet open={aiImportOpen} onClose={() => setAiImportOpen(false)} />
     </div>
   );
 }
