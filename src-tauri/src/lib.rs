@@ -1,5 +1,6 @@
 mod ai;
 mod capture;
+mod chat;
 mod cards;
 mod db;
 mod demo;
@@ -331,6 +332,31 @@ async fn ai_read_statements(
         (account, categories, accounts)
     };
     ai::read_statements(app, run, paths, account, from, to, categories, accounts).await
+}
+
+/// Answers a question about the book with Claude. `messages` is the whole
+/// conversation in the API's own shape, ending with the new question; the
+/// answer comes back as that conversation with Claude's turns added, and
+/// streams in meanwhile as `ai-chat-progress` events tagged with `run`.
+/// Claude reads through a read-only connection of its own. A change it asks
+/// for ends the call with the change pending; calling again with the user's
+/// `decisions` (tool call id → applied) makes the applied ones through the
+/// app's own save functions and carries on.
+#[tauri::command]
+async fn ai_chat(
+    app: tauri::AppHandle,
+    book: State<'_, chat::BookPath>,
+    run: String,
+    messages: Vec<serde_json::Value>,
+    decisions: Option<std::collections::HashMap<String, bool>>,
+) -> R<chat::ChatReply> {
+    chat::ask(app, run, book.0.clone(), messages, decisions.unwrap_or_default()).await
+}
+
+/// Asks a chat run to stop where it is.
+#[tauri::command]
+fn ai_chat_stop(run: String) {
+    chat::stop(&run);
 }
 
 #[tauri::command]
@@ -782,7 +808,8 @@ pub fn run() {
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
-            let conn = db::open(&dir.join("midas.sqlite3")).map_err(std::io::Error::other)?;
+            let book = dir.join("midas.sqlite3");
+            let conn = db::open(&book).map_err(std::io::Error::other)?;
 
             // A brand-new book gets sample data once, so the first launch has
             // something to show. Wiping from Settings sets the flag and sticks.
@@ -798,6 +825,7 @@ pub fn run() {
             let _ = capture::write_book(&conn);
 
             app.manage(Db(Mutex::new(conn)));
+            app.manage(chat::BookPath(book));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -837,6 +865,8 @@ pub fn run() {
             ai_forget_key,
             ai_test,
             ai_read_statements,
+            ai_chat,
+            ai_chat_stop,
             list_labels,
             label_transactions,
             save_label,

@@ -8,7 +8,8 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { api } from './api';
+import { listen } from '@tauri-apps/api/event';
+import { api, isDesktop } from './api';
 import { monthKey, setAmountsHidden } from './format';
 import { isDeposit } from './types';
 import type {
@@ -345,6 +346,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       cancelled = true;
     };
   }, [month, span, refresh, revision]);
+
+  // Changes applied from the Ask screen are written in Rust, outside
+  // `mutate`; it says so, and every screen reading the book reads it again.
+  useEffect(() => {
+    if (!isDesktop) return;
+    const off = listen('book-changed', () => setRevision((r) => r + 1));
+    return () => {
+      void off.then((f) => f());
+    };
+  }, []);
 
   /** Runs a write, surfaces failures as a toast, and refreshes derived state. */
   const mutate = useCallback(

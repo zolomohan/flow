@@ -23,7 +23,7 @@ const TABS: SegmentOption<Tab>[] = [
 
 const BLURBS: Record<Tab, string> = {
   preferences: 'How flow looks and behaves.',
-  claude: 'How flow reaches Claude to read your statements.',
+  claude: 'How flow reaches Claude to read your statements and answer questions on Ask.',
   data: 'Your name, and a copy of your book to keep, restore or clear.',
 };
 
@@ -279,12 +279,12 @@ function ClaudePanel() {
           <div>
             <strong>
               <span className={`ai-dot ${using ? 'is-on' : ''}`} />
-              {using ? 'Ready to read statements' : 'Claude isn\'t connected'}
+              {using ? 'Ready for statements and Ask' : 'Claude isn\'t connected'}
             </strong>
             <p>
               {tested ??
                 (status
-                  ? `Statements are read by ${status.model}. Usage is billed to the Anthropic Console account you connect, not to a claude.ai plan.`
+                  ? `Statements and questions on Ask go to ${status.model}. Usage is billed to the Anthropic Console account you connect, not to a claude.ai plan.`
                   : 'Looking for a sign-in or a key…')}
             </p>
           </div>
