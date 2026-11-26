@@ -22,6 +22,10 @@ sandbox.
 
 ## The fork this plan assumes
 
+> **Settled (Nov 2026): companion, with writes both ways.** See
+> [`docs/companion.md`](docs/companion.md) for how the phone and the Mac share
+> the book. The analysis below is kept for the reasoning.
+
 Everything below depends on one question, and it is worth answering before
 Phase 2 rather than discovering the answer in Phase 5.
 
