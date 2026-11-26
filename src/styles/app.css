@@ -2405,6 +2405,9 @@ kbd {
   flex-wrap: wrap;
 }
 .detail-hero-main { min-width: 0; }
+/* The overview's hero is drawn on navy and sets its figure in white; a
+   detail page's sits on the plain card, where white was invisible. */
+.detail-hero-main .hero-amount { color: var(--ink); }
 .detail-label {
   display: block;
   font-size: 11px;
@@ -4807,8 +4810,14 @@ kbd {
 
 @media (max-width: 900px) {
   :root { --sidebar-w: 68px; }
-  .brand-text, .side-search span, .side-kbd, .nav-item span:last-child, .side-add span { display: none; }
+  /* The rail keeps every glyph and drops every word. The words are their
+     own spans so this can name them; hiding the last span of a nav item
+     took the icon with it once the label stopped being one. */
+  .brand-text, .side-label, .side-kbd { display: none; }
   .side-search, .side-add, .nav-content { justify-content: center; }
+  .side-search, .side-add { padding-inline: 0; }
+  .nav-count { position: absolute; top: -7px; right: -9px; margin: 0; }
+  .side-foot { flex-direction: column; }
   .tx-meta { grid-template-columns: 1fr; }
 }
 

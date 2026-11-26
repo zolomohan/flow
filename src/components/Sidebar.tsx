@@ -125,7 +125,7 @@ export function Sidebar({
 
       <button className="side-search" onClick={onSearch}>
         <Icon name="search" size={15} />
-        Search
+        <span className="side-label">Search</span>
         <span className="side-kbd">
           <kbd>⌘</kbd>
           <kbd>K</kbd>
@@ -140,6 +140,7 @@ export function Sidebar({
               key={item.id}
               className={`nav-item ${active ? 'is-active' : ''}`}
               onClick={() => onNavigate(item.id)}
+              title={item.label}
             >
               {active && (
                 <motion.span layoutId="nav-pill" className="nav-pill" transition={spring} />
@@ -149,7 +150,7 @@ export function Sidebar({
                     glyph: it is what the thing looks like everywhere else on
                     the machine, and the colour earns its place by saying so. */}
                 {item.id === 'siri' ? <SiriMark size={17} /> : <Icon name={item.icon} size={17} />}
-                {item.label}
+                <span className="side-label">{item.label}</span>
                 {/* Only Siri counts: it is the one line that is work
                     waiting rather than a place to go and look. */}
                 {item.id === 'siri' && captures.length > 0 && (
@@ -168,7 +169,7 @@ export function Sidebar({
         onClick={onAdd}
       >
         <Icon name="plus" size={17} strokeWidth={2.4} />
-        Add transaction
+        <span className="side-label">Add transaction</span>
         <span className="side-kbd side-kbd-dark">
           <kbd>N</kbd>
         </span>
@@ -184,7 +185,7 @@ export function Sidebar({
           )}
           <span className="nav-content">
             <Icon name="settings" size={17} />
-            Settings
+            <span className="side-label">Settings</span>
           </span>
         </button>
         <button

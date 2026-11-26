@@ -285,7 +285,9 @@
 
   /* The ones whose width is set by the column they sit in rather than by the
      form, and which the taller field would otherwise burst. */
-  .time-input { width: 104px; }
+  /* Wide enough for the hour, the minutes, AM or PM and the clock glyph;
+     at 104 the meridiem was cut to its first letter. */
+  .time-input { width: 128px; }
   .person-weight .input { width: 62px; height: 38px; padding: 0 8px; }
   .person-amount .input,
   .split-line-note { height: 38px; }
@@ -347,6 +349,15 @@
     gap: 10px;
     padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
   }
+  /* A footer with tools ahead of its buttons — the transaction sheet's
+     templates, split and who-paid — is two rows here, not one: in a single
+     line the tools pushed Save past the right edge of the glass, where it
+     could not be pressed. The tools wrap rather than scroll, because their
+     menus hang off them and a scrolling row would clip the menus. */
+  .sheet-foot:has(.foot-lead) { flex-wrap: wrap; }
+  .sheet-foot .foot-lead { flex: 1 1 100%; flex-wrap: wrap; gap: 6px; }
+  .sheet-foot:has(.foot-lead) .foot-actions { flex: 1 1 100%; margin-left: 0; }
+  .sheet-foot:has(.foot-lead) .foot-actions > * { flex: 1; justify-content: center; }
   /* The keys are the Mac's way of pressing these; there is no keyboard here
      to press them with. */
   .btn-keys,
@@ -445,11 +456,18 @@
   /* Search takes its own line: shrunk into a row beside the filter button it
      is a slot, and a slot is not something you can read a query back out of. */
   .search-box { flex: 1 1 100%; min-width: 0; }
-  /* Hung off its button, it would run off the window; pinned to the right
-     edge of the anchor it opens inwards instead. */
+  /* Hung off its button it ran off the window: the button wraps to the
+     start of a line on a phone, and a popup pinned to its right edge opened
+     leftwards into nothing. The toolbar is the anchor here instead, so the
+     popup spans it edge to edge wherever the button happened to land. */
+  .tx-toolbar { position: relative; }
+  .tx-toolbar .filter-anchor { position: static; }
   .filter-pop {
-    width: min(calc(100vw - 24px), 460px);
+    left: 0;
+    right: 0;
+    width: auto;
     max-height: min(64dvh, 480px);
+    transform-origin: top center;
   }
   .filter-group { padding: 12px 14px; }
   .filter-clear { padding: 10px 14px; }
@@ -650,6 +668,17 @@
 
   .label-row,
   .tpl-row { gap: 10px; padding: 11px 14px; }
+  /* Glyph, name and use count on one line, the actions under the name. In
+     one flex line the four of them overlapped: the name column was squeezed
+     to a word wide and the count was drawn over it. */
+  .tpl-row {
+    display: grid;
+    grid-template-columns: 32px minmax(0, 1fr) auto;
+    align-items: start;
+    row-gap: 4px;
+  }
+  .tpl-glyph { grid-row: span 2; }
+  .tpl-actions { grid-column: 2 / -1; margin-left: -10px; flex-wrap: wrap; gap: 2px; }
   .tpl-fields { grid-template-columns: minmax(0, 1fr); }
 
   /* --------------------------------------------------------------- import */

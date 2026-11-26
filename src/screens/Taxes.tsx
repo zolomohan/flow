@@ -548,7 +548,7 @@ export function Taxes({ onOpenTransaction }: { onOpenTransaction: (tx: Transacti
                 />
                 <Card padded={false}>
                   {data.unfiled.map((tx) => (
-                    <TransactionRow key={tx.id} tx={tx} onClick={() => onOpenTransaction(tx)} showDate={tx.occurredAt} />
+                    <TransactionRow key={tx.id} tx={tx} onClick={() => onOpenTransaction(tx)} showDate={shortDayLabel(tx.occurredAt)} />
                   ))}
                 </Card>
               </>

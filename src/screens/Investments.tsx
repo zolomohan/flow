@@ -389,11 +389,19 @@ export function Investments({
             {open.length === 0 ? (
               <Empty
                 screen
-                title={tab === 'gold' ? 'No gold tracked' : 'No funds tracked'}
+                title={
+                  tab === 'gold'
+                    ? 'No gold tracked'
+                    : tab === 'deposit'
+                      ? 'No deposits tracked'
+                      : 'No funds tracked'
+                }
                 body={
                   tab === 'gold'
                     ? 'Coins, a chain, bangles: weighed, and valued at the day’s rate.'
-                    : 'Add a scheme and what you bought. Its NAV is fetched daily.'
+                    : tab === 'deposit'
+                      ? 'A fixed or recurring deposit: its rate and dates, and what it earns until it matures.'
+                      : 'Add a scheme and what you bought. Its NAV is fetched daily.'
                 }
               />
             ) : (
