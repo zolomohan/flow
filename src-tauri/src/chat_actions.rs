@@ -58,6 +58,10 @@ pub fn tools(note: &str) -> Vec<Value> {
         if !actions.is_empty() {
             props.insert("action".into(), json!({ "type": "string", "enum": actions }));
         }
+        for k in ["amount", "principal", "opening_balance", "credit_limit", "cashback_cap", "instalment"] {
+            props.insert(k.into(), json!({ "type": "integer", "description": "Paise, as a number." }));
+        }
+        props.insert("ids".into(), json!({ "type": "array", "items": { "type": "string" } }));
         json!({
             "name": name,
             "description": description,
@@ -81,13 +85,13 @@ pub fn tools(note: &str) -> Vec<Value> {
                    due_on?, note?, settled?}}. A debt that is part of a transaction (a shared bill, or a whole \
                    bill someone owes you) is not made here: give that transaction `shares` with edit_transaction.\n\
                  - delete: {{id}}\n\
-                 - payment: {{id?, debt_id, amount, occurred_at, note?, transaction_id?, cash_account_id?}} — money \
+                 - payment: {{id?, debt_id, amount (paise, a number), occurred_at, note?, transaction_id?, cash_account_id?}} — money \
                    back against one debt. transaction_id links a posting already in the book; otherwise \
                    cash_account_id says which account it moved through, or leave both out to record it alone.\n\
                  - delete_payment: {{id}}\n\
                  - addition: same fields as payment — more lent or borrowed on a debt already open.\n\
                  - delete_addition: {{id}}\n\
-                 - person_repayment: {{direction: lent|borrowed, counterparty, amount, occurred_at, note?, \
+                 - person_repayment: {{direction: lent|borrowed, counterparty, amount (paise, a number), occurred_at, note?, \
                    transaction_id?, cash_account_id?}} — one repayment spread over everything a person owes, \
                    oldest first, the way the Debts screen records \"Ravi paid me back\".\n\
                  - delete_person_repayment: {{id}} (the spread id debt_payments.spread_id)"
@@ -206,6 +210,52 @@ pub fn tools(note: &str) -> Vec<Value> {
 
 // ------------------------------------------------------------ the input
 
+/// Fields that are whole numbers in the app: paise, days, counts, and the
+/// ×10⁴ figures.
+fn is_number_key(k: &str) -> bool {
+    matches!(
+        k,
+        "amount" | "principal" | "opening_balance" | "credit_limit" | "cashback_cap" | "cashback"
+            | "instalment" | "statement_day" | "due_day" | "every"
+    ) || k.ends_with("_e4")
+}
+
+fn is_flag_key(k: &str) -> bool {
+    matches!(k, "settled" | "archived" | "closed" | "silent" | "include_children" | "delete_children")
+}
+
+/// The input as the app needs it. Without a schema to hold it to, Claude
+/// sometimes writes a number as text ("738459") or a flag as "true"; those
+/// are read as what they plainly are rather than refused.
+pub(crate) fn normalize(v: &Value) -> Value {
+    match v {
+        Value::Object(m) => Value::Object(
+            m.iter()
+                .map(|(k, v)| {
+                    let v = match v {
+                        Value::String(t) if is_number_key(k) => {
+                            let t = t.trim().replace([',', '_'], "");
+                            t.parse::<i64>().map(|n| json!(n)).unwrap_or_else(|_| v.clone())
+                        }
+                        Value::Number(n) if is_number_key(k) && n.as_i64().is_none() => {
+                            n.as_f64().map(|f| json!(f.round() as i64)).unwrap_or_else(|| v.clone())
+                        }
+                        Value::String(t) if is_flag_key(k) => match t.trim() {
+                            "true" => json!(true),
+                            "false" => json!(false),
+                            _ => v.clone(),
+                        },
+                        _ => normalize(v),
+                    };
+                    (k.clone(), v)
+                })
+                .collect(),
+        ),
+        Value::Array(a) => Value::Array(a.iter().map(normalize).collect()),
+        v => v.clone(),
+    }
+}
+
 fn camel_key(k: &str) -> String {
     let mut out = String::new();
     let mut up = false;
@@ -244,7 +294,7 @@ pub(crate) fn opt_parse<T: DeserializeOwned>(v: &Value) -> Result<Option<T>> {
     if v.is_null() {
         return Ok(None);
     }
-    serde_json::from_value(camel(v)).map(Some).map_err(|e| format!("The change doesn't fit what the app expects: {e}"))
+    serde_json::from_value(camel(&normalize(v))).map(Some).map_err(|e| format!("The change doesn't fit what the app expects: {e}"))
 }
 
 pub(crate) fn parse_transaction(input: &Value) -> Result<TransactionInput> {
@@ -431,6 +481,7 @@ fn a_transaction(conn: &Connection, t: &Value) -> Option<CardRow> {
 
 /// What the change is, for its card and for the history once it's done.
 pub fn describe(conn: &Connection, tool: &str, input: &Value) -> Result<(String, Card)> {
+    let input = &normalize(input);
     if !input.is_object() {
         return Err("The change didn't come through in a form that can be read.".into());
     }
@@ -619,6 +670,7 @@ pub fn describe(conn: &Connection, tool: &str, input: &Value) -> Result<(String,
 // ------------------------------------------------------------ doing it
 
 pub fn apply(conn: &Connection, tool: &str, input: &Value) -> Result<Value> {
+    let input = &normalize(input);
     let action = action_of(tool, input)?;
     let id = || s(input, "id");
     let done = match (tool, action.as_str()) {

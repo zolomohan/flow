@@ -709,6 +709,7 @@ fn plural(n: usize, one: &str) -> String {
 /// Read from the book, so ids become names; it checks only what it needs to
 /// say, and the save itself checks the rest.
 fn describe_change(conn: &Connection, name: &str, input: &Value) -> Result<(String, Vec<String>)> {
+    let input = &chat_actions::normalize(input);
     if !input.is_object() {
         return Err("The change didn't come through in a form that can be read.".into());
     }
@@ -964,6 +965,7 @@ pub(crate) fn card_rows(conn: &Connection, ids: &[String]) -> (Vec<CardRow>, usi
 }
 
 fn change_card(conn: &Connection, name: &str, input: &Value) -> Result<Card> {
+    let input = &chat_actions::normalize(input);
     let mut card = Card::default();
     match name {
         "add_transaction" => {
@@ -1127,6 +1129,7 @@ fn change_card(conn: &Connection, name: &str, input: &Value) -> Result<Card> {
 /// Makes one approved change on the app's own connection, and says what
 /// happened in words the history can show.
 fn apply_change(conn: &Connection, name: &str, input: &Value) -> Result<Value> {
+    let input = &chat_actions::normalize(input);
     let (title, _) = describe_change(conn, name, input)?;
     let result = match name {
         "add_transaction" => {
@@ -2570,8 +2573,9 @@ mod tests {
             .query_row("SELECT id FROM debts WHERE transaction_id = ?1 AND counterparty = 'Ravi'", [&tx], |r| r.get(0))
             .unwrap();
 
-        // He pays some of it back.
-        let pay = json!({ "action": "payment", "debt_id": debt, "amount": 50000, "occurred_at": "2026-11-22" });
+        // He pays some of it back; the amount written as text, as Claude
+        // sometimes does, still reads as the number it is.
+        let pay = json!({ "action": "payment", "debt_id": debt, "amount": "50000", "occurred_at": "2026-11-22" });
         let (title, _) = describe_change(&conn, "debts", &pay).unwrap();
         assert!(title.starts_with("Record ₹500 paid back on Ravi"), "{title}");
         apply_change(&conn, "debts", &pay).unwrap();
