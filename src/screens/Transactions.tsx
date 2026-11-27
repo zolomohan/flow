@@ -15,7 +15,7 @@ import {
 } from '../lib/format';
 import { itemVariants, listVariants, popover, spring } from '../lib/motion';
 import type {
-  Transaction, TransactionPatch, TransactionSummary, TxKind,
+  Folder, Transaction, TransactionPatch, TransactionSummary, TxKind,
 } from '../lib/types';
 
 type KindFilter = 'all' | TxKind;
@@ -87,7 +87,6 @@ const PAGE = 300;
  */
 const STAGGER_UP_TO = 120;
 /** The Ask Claude menu's first choice, as against a saved chat's id. */
-const NEW_CHAT = '__new__';
 const PLAIN_LIST = { initial: {}, animate: { transition: { staggerChildren: 0 } } };
 
 export function Transactions({
@@ -487,10 +486,6 @@ export function Transactions({
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   });
-  const askOptions: SelectOption[] = [
-    { value: NEW_CHAT, label: 'New chat', icon: 'plus' },
-    ...chats.map((c) => ({ value: c.id, label: c.title, icon: 'messages-square', group: 'Add to a chat' })),
-  ];
   const askAbout = async (chatId: string | null) => {
     await bringTransactions(chosen.map((r) => r.id), chosen, chatId);
     onAskAbout?.();
@@ -502,7 +497,10 @@ export function Transactions({
   // it is applied to.
   const bulkFolders = useMemo<SelectOption[]>(
     () =>
-      folders.map((f) => ({
+      // Newest first: by when it was made or last had something put in it.
+      [...folders]
+        .sort((a, b) => folderRecency(b).localeCompare(folderRecency(a)))
+        .map((f) => ({
         value: f.id,
         label: f.name,
         icon: f.icon,
@@ -1194,33 +1192,7 @@ export function Transactions({
               </div>
             ) : (
               <>
-            {onAskAbout && (
-              <button
-                className="bulk-quick-ask"
-                onClick={openQuick}
-                disabled={working}
-                title="Ask Claude about these, right here  /"
-              >
-                <Icon name="sparkles" size={14} />
-                Quick ask
-                <kbd>/</kbd>
-              </button>
-            )}
             <div className="bulk-fields">
-              {onAskAbout && (
-                <Select
-                  options={askOptions}
-                  value={null}
-                  onChange={(id) => {
-                    if (!id) return;
-                    void askAbout(id === NEW_CHAT ? null : id);
-                  }}
-                  placeholder="Open in Ask"
-                  searchable={chats.length > 6}
-                  searchPlaceholder="Find a chat"
-                  disabled={working}
-                />
-              )}
               <Select
                 options={bulkCategories}
                 value={null}
@@ -1260,6 +1232,7 @@ export function Transactions({
                 value={null}
                 onChange={(id) => id && void fileInFolder(id)}
                 placeholder={folders.length ? 'Into a folder' : 'No folders yet'}
+                menuWidth={440}
                 searchable
                 searchPlaceholder="Find a folder"
                 disabled={working || folders.length === 0}
@@ -1313,6 +1286,42 @@ export function Transactions({
               {/* The two that need no naming: a bin and a cross, where six
                   controls are already competing for the width. Deleting still
                   asks first, so the glyph alone cannot lose anything. */}
+              {onAskAbout && (
+                <div className="bulk-ask">
+                  <button
+                    className="bulk-ask-button"
+                    onClick={openQuick}
+                    disabled={working}
+                    aria-label="Quick ask about these"
+                    title="Quick ask about these  /"
+                  >
+                    <Icon name="sparkles" size={15} />
+                  </button>
+                  {/* Hover for the other ways in: a chat in Ask, new or saved. */}
+                  {!working && (
+                    <div className="bulk-ask-menu" role="menu">
+                      <button role="menuitem" onClick={openQuick}>
+                        <Icon name="sparkles" size={14} />
+                        <span>Quick ask</span>
+                        <kbd>/</kbd>
+                      </button>
+                      <button role="menuitem" onClick={() => void askAbout(null)}>
+                        <Icon name="plus" size={14} />
+                        <span>New chat in Ask</span>
+                      </button>
+                      {chats.length > 0 && <div className="bulk-ask-label">Add to a chat</div>}
+                      <div className="bulk-ask-chats">
+                        {chats.map((c) => (
+                          <button key={c.id} role="menuitem" onClick={() => void askAbout(c.id)} title={c.title}>
+                            <Icon name="messages-square" size={14} />
+                            <span>{c.title}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
               <IconButton
                 icon="trash-2"
                 label={`Delete ${pickedSet.size}`}
@@ -1394,4 +1403,10 @@ function Total({
       <strong>{money(value, { sign: signed && value > 0 })}</strong>
     </motion.div>
   );
+}
+
+/** When a folder was last in use: made, or the newest posting put in it. */
+function folderRecency(f: Folder): string {
+  const made = f.createdAt.slice(0, 10);
+  return f.lastAt && f.lastAt.slice(0, 10) > made ? f.lastAt.slice(0, 10) : made;
 }

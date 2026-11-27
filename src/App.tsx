@@ -6,6 +6,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { INVESTMENT_TABS, Sidebar, isInvestmentRoute, type Route } from './components/Sidebar';
 import { MobileBar, MoreSheet, TabBar } from './components/MobileChrome';
 import { api } from './lib/api';
+import { newChat } from './lib/chat';
 import { CommandPalette } from './components/CommandPalette';
 import {
   TransactionSheet, type SplitFocus, type TxDraft,
@@ -439,6 +440,13 @@ function Shell() {
       if ((e.metaKey || e.ctrlKey) && (e.key === ']' || e.key === 'ArrowRight')) {
         e.preventDefault();
         forward();
+        return;
+      }
+      // ⌘⇧O, a new chat in Ask from anywhere.
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'o') {
+        e.preventDefault();
+        newChat();
+        setRoute('ask');
         return;
       }
       if ((e.metaKey || e.ctrlKey) && /^[1-9]$/.test(e.key)) {

@@ -9292,27 +9292,132 @@ kbd {
 }
 
 /* The ledger bar's way into a quick chat: first, and plainly a button. */
-.bulk-quick-ask {
+
+/* ------------------------------------------------------- Ask: the head */
+
+/* The chat's title, Save and New chat stay put while the chat scrolls under
+   them. The screen's top padding moves into the head so the head can carry
+   the page's own background up to the window's edge. */
+.screen.ask-screen { --ask-top: calc(var(--titlebar-h) + 10px); padding-top: 0; }
+.ask-head {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  padding-top: var(--ask-top);
+  padding-bottom: 12px;
+  margin-bottom: -12px;
+  background: linear-gradient(var(--bg) calc(100% - 12px), color-mix(in srgb, var(--bg) 0%, transparent));
+}
+.ask-unsaved {
+  display: block;
+  width: fit-content;
+  margin-top: 4px;
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  background: var(--surface-inset);
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 550;
+  vertical-align: middle;
+}
+
+/* Auto mode: a switch in the composer, lit while it's on. */
+.ask-auto {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  justify-content: center;
+  gap: 5px;
+  min-width: 34px;
   height: 34px;
-  padding: 0 10px 0 12px;
-  border-radius: var(--r-md);
-  background: var(--violet-soft);
-  color: var(--violet);
-  font-size: 13px;
+  padding: 0 9px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--r-full);
+  background: none;
+  color: var(--ink-4);
+  font-size: 12.5px;
   font-weight: 650;
-  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
 }
-.bulk-quick-ask:hover:not(:disabled) { background: color-mix(in srgb, var(--violet) 18%, var(--surface)); }
-.bulk-quick-ask:disabled { opacity: 0.5; cursor: default; }
-.bulk-quick-ask kbd {
-  padding: 1px 6px;
-  border-radius: 5px;
-  background: var(--surface);
+.ask-auto:hover { background: var(--surface-inset); color: var(--ink-2); }
+.ask-auto.is-on { background: var(--amber-soft); color: var(--amber); }
+
+/* ------------------------------------------------- ledger: ask about these */
+
+/* Quick ask sits by Delete as one icon; hovering it offers Ask's chats. */
+.bulk-ask { position: relative; display: flex; }
+.bulk-ask-button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--violet) 12%, transparent);
   color: var(--violet);
-  font: inherit;
-  font-size: 11.5px;
-  font-weight: 700;
+  cursor: pointer;
+  transition: background var(--fast) var(--ease);
 }
+.bulk-ask-button:hover:not(:disabled) { background: color-mix(in srgb, var(--violet) 20%, transparent); }
+.bulk-ask-button:disabled { opacity: 0.5; cursor: default; }
+.bulk-ask-menu {
+  position: absolute;
+  right: -40px;
+  bottom: calc(100% + 10px);
+  z-index: 30;
+  width: 300px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(4px);
+  transition: opacity 0.12s var(--ease), transform 0.12s var(--ease), visibility 0s linear 0.12s;
+}
+/* A bridge over the gap, so the pointer can travel up into the menu. */
+.bulk-ask-menu::after { content: ''; position: absolute; left: 0; right: 0; top: 100%; height: 12px; }
+.bulk-ask:hover .bulk-ask-menu,
+.bulk-ask:focus-within .bulk-ask-menu {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition-delay: 0.12s, 0.12s, 0s;
+}
+.bulk-ask-menu button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 9px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+.bulk-ask-menu button:hover { background: var(--surface-inset); }
+.bulk-ask-menu button svg { flex-shrink: 0; color: var(--ink-3); }
+.bulk-ask-menu button span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bulk-ask-menu kbd {
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--surface-inset);
+  color: var(--ink-3);
+  font: 600 11px/18px var(--font-mono, ui-monospace, monospace);
+}
+.bulk-ask-label {
+  padding: 8px 9px 4px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+}
+.bulk-ask-chats { max-height: 240px; overflow-y: auto; }

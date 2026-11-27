@@ -444,7 +444,6 @@
   .bulk-fields .select-trigger { white-space: nowrap; }
   /* No keyboard to press `/` on; without the key the bar's own buttons
      fit on the first row beside it. */
-  .bulk-quick-ask kbd { display: none; }
   .bulk-bar { column-gap: 8px; }
   .bulk-actions { gap: 2px; }
   .bulk-actions { border-left: 0; padding-left: 0; }

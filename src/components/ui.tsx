@@ -236,7 +236,7 @@ export interface SelectOption {
 /** Custom listbox — the native one can't carry colour swatches or groups. */
 export function Select({
   options, value, onChange, placeholder = 'Select…', disabled, allowClear, searchable,
-  searchPlaceholder = 'Type to filter…', clearLabel = 'None',
+  searchPlaceholder = 'Type to filter…', clearLabel = 'None', menuWidth,
 }: {
   options: SelectOption[];
   value: string | null;
@@ -250,6 +250,8 @@ export function Select({
   /** Puts a filter box at the top of the menu, for a long list. */
   searchable?: boolean;
   searchPlaceholder?: string;
+  /** The least the menu may be across, for options too long for the trigger. */
+  menuWidth?: number;
 }) {
   const [open, setOpen] = useState(false);
   const [rect, setRect] = useState<DOMRect | null>(null);
@@ -331,8 +333,10 @@ export function Select({
       exit="exit"
       style={{
         position: 'fixed',
-        left: rect.left,
-        width: rect.width,
+        ...(() => {
+          const width = Math.min(Math.max(rect.width, menuWidth ?? 0), window.innerWidth - 16);
+          return { width, left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)) };
+        })(),
         ...(dropUp
           ? { bottom: window.innerHeight - rect.top + 6, transformOrigin: 'bottom center' }
           : { top: rect.bottom + 6, transformOrigin: 'top center' }),

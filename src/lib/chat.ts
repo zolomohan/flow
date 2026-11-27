@@ -105,6 +105,9 @@ interface State {
   /** The conversation open now; null until its first question. */
   chatId: string | null;
   title: string;
+  /** Kept in the saved list. A new chat isn't until the user saves it; one
+   *  opened from the list is, and stays in step after every reply. */
+  saved: boolean;
   /** Every saved conversation, latest first. */
   chats: ChatSummary[];
   /** Statements waiting in the composer for the next question. */
@@ -134,7 +137,55 @@ type LookupPart = Part & { kind: 'lookup' };
 const titles = new Map<string, string>();
 
 /** Every chat that may be waiting on a run, so one listener can serve all. */
-const sessions = new Set<{ onProgress: (p: AiChatProgress) => void; onRead: (p: AiReadProgress) => void }>();
+const sessions = new Set<{
+  onProgress: (p: AiChatProgress) => void;
+  onRead: (p: AiReadProgress) => void;
+  onAuto: () => void;
+}>();
+
+// ------------------------------------------------------------- auto mode
+//
+// With auto mode on, every change Claude proposes is applied as it comes,
+// without its card waiting for Apply. It holds for every chat, Ask's and the
+// ledger's, and is remembered on this Mac. ⇧Tab turns it on and off.
+
+const AUTO_KEY = 'flow.ask.auto';
+let auto = (() => {
+  try {
+    return localStorage.getItem(AUTO_KEY) === '1';
+  } catch {
+    return false;
+  }
+})();
+const autoSubscribers = new Set<() => void>();
+
+export function setAutoMode(on: boolean) {
+  if (on === auto) return;
+  auto = on;
+  try {
+    localStorage.setItem(AUTO_KEY, on ? '1' : '0');
+  } catch {
+    /* remembered for this visit only */
+  }
+  autoSubscribers.forEach((f) => f());
+  sessions.forEach((s) => s.onAuto());
+}
+
+export const toggleAutoMode = () => setAutoMode(!auto);
+
+export function useAutoMode(): boolean {
+  return useSyncExternalStore(
+    (f) => {
+      autoSubscribers.add(f);
+      return () => autoSubscribers.delete(f);
+    },
+    () => auto,
+  );
+}
+
+/** ⇧Tab, the key that turns auto mode on and off. */
+export const isAutoKey = (e: { key: string; shiftKey: boolean; metaKey: boolean; ctrlKey: boolean; altKey: boolean }) =>
+  e.key === 'Tab' && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey;
 let listening = false;
 function startListening() {
   if (listening || !isDesktop) return;
@@ -157,6 +208,7 @@ export function createChat(save: boolean) {
   let state: State = {
     chatId: null,
     title: '',
+    saved: false,
     chats: [],
     files: [],
     askingFiles: [],
@@ -248,6 +300,12 @@ export function createChat(save: boolean) {
     }
     if (state.run !== run) return;
     for (const p of reply.pending) titles.set(p.id, p.title);
+    // In auto mode the changes go straight in, as though applied by hand.
+    if (auto && reply.pending.length > 0) {
+      set({ messages: reply.messages, live: null, run: null, asking: null, askingFiles: [], askingSelection: null, pending: reply.pending, decisions: {} });
+      await resume(Object.fromEntries(reply.pending.map((p) => [p.id, true])));
+      return;
+    }
     set({
       messages: reply.messages,
       live: null,
@@ -263,7 +321,7 @@ export function createChat(save: boolean) {
 
   /** Saves the open conversation, and refreshes the list it appears in. */
   async function persist() {
-    if (!save) return;
+    if (!save || !state.saved) return;
     if (!state.chatId || state.messages.length === 0) return;
     try {
       await api.chatSave(state.chatId, state.title, state.messages, state.pending);
@@ -291,6 +349,7 @@ export function createChat(save: boolean) {
       set({
         chatId: chat.id,
         title: chat.title,
+        saved: true,
         messages: chat.messages,
         pending: chat.pending,
         decisions: {},
@@ -309,8 +368,25 @@ export function createChat(save: boolean) {
   async function renameChat(id: string, title: string) {
     const name = title.replace(/\s+/g, ' ').trim();
     if (!name) return;
-    await api.chatRename(id, name);
     if (id === state.chatId) set({ title: name });
+    if (id === state.chatId && !state.saved) return;
+    await api.chatRename(id, name);
+    await refreshChats();
+  }
+
+  /** Keeps the open conversation: it joins the list and is saved from now on. */
+  async function saveChat() {
+    if (!save || state.saved || !state.chatId || state.messages.length === 0) return;
+    set({ saved: true });
+    await persist();
+    if (state.error) set({ saved: false });
+  }
+
+  /** Lets the open conversation go from the list; it stays on screen. */
+  async function unsaveChat() {
+    if (!state.saved || !state.chatId) return;
+    await api.chatDelete(state.chatId);
+    set({ saved: false });
     await refreshChats();
   }
 
@@ -428,6 +504,7 @@ export function createChat(save: boolean) {
     set({
       chatId: null,
       title: '',
+      saved: false,
       files: [],
       askingFiles: [],
       selection: null,
@@ -460,11 +537,16 @@ export function createChat(save: boolean) {
     );
   }
 
-  const session = { onProgress, onRead };
+  /** Auto mode turned on with changes waiting applies them. */
+  function onAuto() {
+    if (auto && !state.run && state.pending.length > 0 && Object.keys(state.decisions).length === 0) decideAll(true);
+  }
+
+  const session = { onProgress, onRead, onAuto };
   sessions.add(session);
   return {
     ask, attach, detach, decide, decideAll, stop, newChat, takeReturned, use,
-    openChat, renameChat, deleteChat, refreshChats, bringTransactions, dropSelection,
+    openChat, renameChat, deleteChat, refreshChats, bringTransactions, dropSelection, saveChat, unsaveChat,
     /** Hands transactions to this chat without opening or resetting it. */
     select: (ids: string[], known: Transaction[]) => set({ selection: selectionOf(ids, known) }),
     /** Stops listening, for a chat that is closed for good. */
@@ -481,7 +563,7 @@ export type ChatSession = ReturnType<typeof createChat>;
 const main = createChat(true);
 export const {
   ask, attach, detach, decide, decideAll, stop, newChat, takeReturned,
-  openChat, renameChat, deleteChat, refreshChats, bringTransactions, dropSelection,
+  openChat, renameChat, deleteChat, refreshChats, bringTransactions, dropSelection, saveChat, unsaveChat,
 } = main;
 export const useChat = main.use;
 

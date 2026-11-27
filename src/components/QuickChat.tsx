@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from
 import { motion } from 'motion/react';
 import { Icon } from './Icon';
 import { Answer, PendingCard } from './ChatParts';
-import { createChat, turns, type ChatSession } from '../lib/chat';
+import { createChat, isAutoKey, toggleAutoMode, turns, useAutoMode, type ChatSession } from '../lib/chat';
 import { spring } from '../lib/motion';
 import type { Transaction } from '../lib/types';
 
@@ -28,6 +28,7 @@ export function QuickChat({
   }
   const chat = session.current;
   const state = chat.use();
+  const auto = useAutoMode();
   const [draft, setDraft] = useState('');
   const input = useRef<HTMLTextAreaElement>(null);
   const log = useRef<HTMLDivElement>(null);
@@ -79,7 +80,10 @@ export function QuickChat({
     void chat.ask(q);
   };
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+    if (isAutoKey(e)) {
+      e.preventDefault();
+      toggleAutoMode();
+    } else if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       submit();
     } else if (e.key === 'Escape') {
@@ -166,6 +170,15 @@ export function QuickChat({
       )}
 
       <div className="quick-chat-compose">
+        <button
+          className={`ask-auto ${auto ? 'is-on' : ''}`}
+          onClick={toggleAutoMode}
+          aria-pressed={auto}
+          title={auto ? 'Auto mode is on: changes apply without asking  ⇧Tab' : 'Auto mode: apply changes without asking  ⇧Tab'}
+        >
+          <Icon name="zap" size={13} strokeWidth={2.4} />
+          {auto && <span>Auto</span>}
+        </button>
         <textarea
           ref={input}
           rows={1}

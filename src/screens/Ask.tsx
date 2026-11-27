@@ -7,8 +7,8 @@ import { Button, Confirm } from '../components/ui';
 import { Answer, PendingCard } from '../components/ChatParts';
 import { api, isDesktop } from '../lib/api';
 import {
-  ask, attach, decide, decideAll, deleteChat, detach, dropSelection, newChat, openChat,
-  refreshChats, renameChat, stop, takeReturned, turns, useChat,
+  ask, attach, decide, decideAll, deleteChat, detach, dropSelection, isAutoKey, newChat, openChat,
+  refreshChats, renameChat, saveChat, stop, takeReturned, toggleAutoMode, turns, useAutoMode, useChat,
 } from '../lib/chat';
 import { spring } from '../lib/motion';
 import type { AiStatus } from '../lib/types';
@@ -41,6 +41,7 @@ const STARTERS = [
  */
 export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
   const chat = useChat();
+  const auto = useAutoMode();
   const [draft, setDraft] = useState('');
   const [status, setStatus] = useState<AiStatus | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -68,6 +69,21 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
   }, [listOpen]);
   const input = useRef<HTMLTextAreaElement>(null);
   const bottom = useRef<HTMLDivElement>(null);
+
+  // ⇧Tab turns auto mode on and off; ⌘S keeps the open chat.
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (isAutoKey(e)) {
+        e.preventDefault();
+        toggleAutoMode();
+      } else if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        void saveChat();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   useEffect(() => {
     api.aiStatus().then(setStatus).catch(() => setStatus(null));
@@ -212,6 +228,7 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
             <h1>{chat.chatId ? chat.title || 'Untitled chat' : 'New chat'}</h1>
             <Icon name="chevron-down" size={18} />
           </button>
+          {chat.chatId && !chat.saved && <span className="ask-unsaved">Not saved</span>}
           <AnimatePresence>
             {listOpen && (
               <motion.div
@@ -223,7 +240,7 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
               >
                 <div className="ask-chats-label">Your chats</div>
                 <div className="ask-chats-list">
-                  {chat.chats.length === 0 && <p className="ask-chats-none">Your chats will be kept here.</p>}
+                  {chat.chats.length === 0 && <p className="ask-chats-none">Chats you save are kept here.</p>}
                   {chat.chats.map((c) => (
                     <div key={c.id} className={`ask-chat-item ${c.id === chat.chatId ? 'is-active' : ''}`}>
                       {renaming?.id === c.id ? (
@@ -280,7 +297,18 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
           </AnimatePresence>
         </div>
         <div className="head-actions">
-          {chat.chatId && (
+          {chat.chatId && !chat.saved && (
+            <Button
+              tone="ghost"
+              icon="bookmark"
+              onClick={() => void saveChat()}
+              disabled={busy || chat.messages.length === 0}
+              title="Keep this chat in your list  ⌘S"
+            >
+              Save
+            </Button>
+          )}
+          {chat.chatId && chat.saved && (
             <Button
               tone="ghost"
               icon="pencil"
@@ -294,7 +322,7 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
             </Button>
           )}
           {chat.chatId && (
-            <Button icon="plus" onClick={() => { setListOpen(false); newChat(); }}>
+            <Button icon="plus" onClick={() => { setListOpen(false); newChat(); }} title="New chat  ⌘⇧O">
               New chat
             </Button>
           )}
@@ -375,7 +403,7 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
                   {chat.pending.length === 1
                     ? 'Claude wants to make this change'
                     : `Claude wants to make ${chat.pending.length} changes`}
-                  <small>Nothing is written until you apply it.</small>
+                  <small>Nothing is written until you apply it. ⇧Tab turns on auto mode, which applies changes as they come.</small>
                 </span>
                 {chat.pending.length > 1 && (
                   <span className="ask-pending-all">
@@ -433,6 +461,15 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
         )}
         <div className="ask-compose-row">
         <button
+          className={`ask-auto ${auto ? 'is-on' : ''}`}
+          onClick={toggleAutoMode}
+          aria-pressed={auto}
+          title={auto ? 'Auto mode is on: changes apply without asking  ⇧Tab' : 'Auto mode: apply changes without asking  ⇧Tab'}
+        >
+          <Icon name="zap" size={14} strokeWidth={2.4} />
+          {auto && <span>Auto</span>}
+        </button>
+        <button
           className="ask-clip"
           onClick={browse}
           disabled={busy || waiting}
@@ -448,6 +485,8 @@ export function Ask({ onOpenSettings }: { onOpenSettings: () => void }) {
           placeholder={
             waiting
               ? 'Apply or decline the change above first'
+              : auto
+                ? 'Auto mode: changes apply as Claude makes them…'
               : chat.files.length > 0
                 ? 'Which account is it for? Or just send to import it'
                 : chat.selection
