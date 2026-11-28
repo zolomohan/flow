@@ -1470,6 +1470,11 @@ kbd {
   box-shadow: var(--shadow-lg);
   pointer-events: none;
 }
+/* The tip opens away from the nearer edge: rightwards from a bar in the left
+   half, leftwards from one in the right half. Opened rightwards from the
+   last bars it ran off the side of a phone. (Its own transform is motion's,
+   so the centring above never applies; the edges are what place it.) */
+.flow-col:nth-last-child(-n + 6) .flow-tip { left: auto; right: 50%; }
 .flow-tip strong { font-size: 12.5px; font-weight: 600; }
 .tip-row { display: flex; align-items: center; gap: 6px; font-size: 12px; opacity: 0.82; }
 .tip-row i { width: 7px; height: 7px; border-radius: 99px; }
