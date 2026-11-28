@@ -1,5 +1,6 @@
 mod ai;
 mod capture;
+mod capture_ai;
 mod chat;
 mod chat_actions;
 mod chat_files;
@@ -611,6 +612,33 @@ fn sync_captures(db: State<Db>, book: State<chat::BookPath>) -> R<CaptureSync> {
     })
 }
 
+/// Claude reads one capture (typed or dictated words, an SMS, or a picture)
+/// and it is filed: posted when Claude is sure and capture auto mode is on,
+/// otherwise left in the Inbox. Saved before Claude is called, so a failed
+/// call never loses it.
+#[tauri::command]
+async fn capture_ingest(
+    db: State<'_, Db>,
+    text: Option<String>,
+    image: Option<capture_ai::Image>,
+    source: Option<String>,
+) -> R<capture::Ingested> {
+    let text = text.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+    if text.is_none() && image.is_none() {
+        return Err("Nothing to log: type something or attach a picture.".into());
+    }
+    let source = source.unwrap_or_else(|| if image.is_some() { "image" } else { "typed" }.into());
+    let placeholder = text.clone().unwrap_or_else(|| "A picture".into());
+    let (id, ctx) = with_db(&db, |c| {
+        if companion::role(c)? == companion::Role::Companion {
+            return Err("Log this on the device that holds the book.".into());
+        }
+        Ok((capture::save_unread(c, &placeholder, &source)?, capture_ai::context(c)?))
+    })?;
+    let reading = capture_ai::read(&ctx, text.as_deref(), image.as_ref()).await;
+    with_db(&db, |c| capture::file_reading(c, &id, reading))
+}
+
 /// Where the phone's half of the book stands: the folder, the last
 /// snapshot, how far each device has been applied, and what is held.
 #[tauri::command]
@@ -1134,6 +1162,7 @@ pub fn run() {
             remove_from_folder,
             confirm_triage,
             sync_captures,
+            capture_ingest,
             companion_status,
             companion_sync,
             companion_catch_up,

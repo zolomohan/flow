@@ -26,7 +26,7 @@ import { press, spring } from '../lib/motion';
 const TABS: { id: Route; label: string; icon: string }[] = [
   { id: 'overview', label: 'Overview', icon: 'layout-dashboard' },
   { id: 'transactions', label: 'Ledger', icon: 'list-filter' },
-  { id: 'siri', label: 'Siri', icon: 'sparkles' },
+  { id: 'siri', label: 'Inbox', icon: 'sparkles' },
 ];
 
 const TAB_IDS = new Set<Route>(TABS.map((t) => t.id));

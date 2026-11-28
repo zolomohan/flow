@@ -16,6 +16,8 @@ import type {
   Account,
   BulkResult,
   Capture,
+  CaptureImage,
+  CaptureIngested,
   CaptureSync,
   AccountInput,
   Category,
@@ -193,6 +195,9 @@ interface Store {
   /** Writes one waiting capture into the ledger, wearing Triage. */
   postCapture: (id: string, input: TransactionInput) => Promise<Transaction>;
   dismissCapture: (id: string) => Promise<void>;
+  /** Claude reads one capture; it is posted or left in the Inbox, and the
+   *  outcome is said in a toast. */
+  logCapture: (text: string | null, image: CaptureImage | null) => Promise<CaptureIngested>;
   saveLabel: (input: LabelInput) => Promise<Label>;
   deleteLabel: (id: string) => Promise<void>;
   saveFolder: (input: FolderInput) => Promise<Folder>;
@@ -571,6 +576,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       syncCaptures,
       postCapture: (id, input) => mutate(() => api.postCapture(id, input), 'Added to the ledger'),
       dismissCapture: (id) => mutate(() => api.dismissCapture(id), 'Capture dismissed'),
+      logCapture: async (text, image) => {
+        const done = await mutate(() => api.captureIngest(text, image));
+        toast(done.summary);
+        return done;
+      },
       saveLabel: (input) =>
         mutate(() => api.saveLabel(input), input.id ? 'Label updated' : 'Label added'),
       deleteLabel: (id) => mutate(() => api.deleteLabel(id), 'Label deleted'),

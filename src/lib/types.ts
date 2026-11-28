@@ -1308,3 +1308,21 @@ export interface CompanionConflict {
   reason: string;
   createdAt: string;
 }
+
+/* ---------------------------------------------------- captures read by Claude */
+
+/** A picture to log: a screenshot of a payment, a receipt, a PDF. */
+export interface CaptureImage {
+  mediaType: string;
+  /** Base64, without the data: prefix. */
+  data: string;
+}
+
+/** What happened to one capture Claude read. */
+export interface CaptureIngested {
+  id: string;
+  status: 'posted' | 'pending' | 'dismissed';
+  transactionId: string | null;
+  /** One line saying what it became, or why it waits. */
+  summary: string;
+}

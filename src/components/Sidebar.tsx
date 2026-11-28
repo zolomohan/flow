@@ -53,7 +53,7 @@ export const NAV: NavItem[] = [
   { id: 'overview', label: 'Overview', icon: 'layout-dashboard' },
   { id: 'transactions', label: 'Transactions', icon: 'list-filter' },
   { id: 'ask', label: 'Ask', icon: 'messages-square' },
-  { id: 'siri', label: 'Siri', icon: 'sparkles' },
+  { id: 'siri', label: 'Inbox', icon: 'sparkles' },
   { id: 'planned', label: 'Planned', icon: 'repeat' },
   { id: 'debts', label: 'Debts', icon: 'arrow-left-right' },
   { id: 'funds', label: 'Mutual funds', icon: 'trending-up' },

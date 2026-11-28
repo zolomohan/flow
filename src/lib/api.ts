@@ -10,6 +10,8 @@ import type {
   AccountInput,
   Capture,
   CaptureSync,
+  CaptureImage,
+  CaptureIngested,
   CompanionApplied,
   CompanionCaughtUp,
   CompanionConflict,
@@ -205,6 +207,10 @@ export const api = {
    *  often as you like: a line already read is refused by its own digest. */
   syncCaptures: () => call<CaptureSync>('sync_captures'),
 
+  /** Claude reads a typed sentence, an SMS or a picture, and it is posted
+   *  (sure, with capture auto mode on) or left in the Inbox. */
+  captureIngest: (text: string | null, image: CaptureImage | null, source?: string) =>
+    call<CaptureIngested>('capture_ingest', { text, image, source: source ?? null }),
   /** Where the phone's half of the book stands. See docs/companion.md. */
   companionStatus: () => call<CompanionStatus>('companion_status'),
   /** Takes in the phone's changes now and publishes the book. Null when no

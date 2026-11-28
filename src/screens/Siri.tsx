@@ -1,12 +1,12 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { Icon, SiriMark } from '../components/Icon';
-import { Button, Card, Empty, Field, Segmented, Select, Sheet, TextInput } from '../components/ui';
+import { Button, Card, Empty, IconButton, Field, Segmented, Select, Sheet, Switch, TextArea, TextInput } from '../components/ui';
 import type { SelectOption } from '../components/ui';
 import { useStore } from '../lib/store';
 import { itemVariants, listVariants, spring } from '../lib/motion';
 import { dayLabel, money, paiseToRupeeString, rupeesToPaise, timeLabel } from '../lib/format';
-import type { Capture, TransactionInput, TxKind } from '../lib/types';
+import type { Capture, CaptureImage, TransactionInput, TxKind } from '../lib/types';
 
 const KINDS: { value: TxKind; label: string; icon: string; accent: string }[] = [
   { value: 'expense', label: 'Spent', icon: 'arrow-up-right', accent: '#F2724F' },
@@ -20,6 +20,8 @@ const MISSING: Record<string, string> = {
   account: 'no account',
   destination: 'no destination',
   category: 'no category',
+  reading: 'Claude is reading it',
+  confirm: 'ready to confirm',
 };
 
 /**
@@ -52,8 +54,8 @@ export function Siri({ onOpenTransaction }: { onOpenTransaction?: (id: string) =
     <div className="screen has-fold">
       <header className="screen-head">
         <div>
-          <h1>Siri</h1>
-          <p>Transactions you dictated to your phone.</p>
+          <h1>Inbox</h1>
+          <p>Say, type or show a transaction, and Claude logs it.</p>
         </div>
         <div className="head-actions">
           <Button tone="secondary" icon="refresh-cw" onClick={check} disabled={checking}>
@@ -61,6 +63,8 @@ export function Siri({ onOpenTransaction }: { onOpenTransaction?: (id: string) =
           </Button>
         </div>
       </header>
+
+      <LogBox />
 
       {captures.length === 0 ? (
         <Empty
@@ -98,6 +102,97 @@ export function Siri({ onOpenTransaction }: { onOpenTransaction?: (id: string) =
         spacer={captures.length > 0}
       />
     </div>
+  );
+}
+
+/** Where the capture auto mode switch is kept in the book. */
+const CAPTURE_AUTO = 'capture_auto';
+
+/** Reads a picked file as base64, without the data: prefix. */
+function readImage(file: File): Promise<CaptureImage> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error);
+    reader.onload = () => {
+      const url = String(reader.result);
+      resolve({ mediaType: file.type || 'image/jpeg', data: url.slice(url.indexOf(',') + 1) });
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Type a sentence, paste a bank SMS or attach a screenshot, and Claude reads
+ * it. The same path the Log transaction action will take from Siri, the
+ * share sheet and the Watch, so it can be tried here first.
+ */
+function LogBox() {
+  const { logCapture, settings, saveSetting } = useStore();
+  const auto = settings[CAPTURE_AUTO] !== '0';
+  const [text, setText] = useState('');
+  const [image, setImage] = useState<{ name: string; data: CaptureImage } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const picker = useRef<HTMLInputElement>(null);
+
+  const pick = async (file: File | undefined) => {
+    if (!file) return;
+    setImage({ name: file.name, data: await readImage(file) });
+  };
+
+  const send = async () => {
+    if (busy || (!text.trim() && !image)) return;
+    setBusy(true);
+    try {
+      await logCapture(text.trim() || null, image?.data ?? null);
+      setText('');
+      setImage(null);
+    } catch {
+      /* said in a toast; the words stay so they can be sent again */
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card className="log-box">
+      <TextArea
+        value={text}
+        placeholder="450 at Swiggy on HDFC, or paste a bank SMS"
+        aria-label="What to log"
+        rows={2}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            void send();
+          }
+        }}
+      />
+      <div className="log-box-foot">
+        <input
+          ref={picker}
+          type="file"
+          accept="image/*,application/pdf"
+          hidden
+          onChange={(e) => {
+            void pick(e.target.files?.[0]);
+            e.target.value = '';
+          }}
+        />
+        <Button tone="secondary" icon="paperclip" onClick={() => picker.current?.click()} disabled={busy}>
+          {image ? image.name : 'Attach'}
+        </Button>
+        {image && (
+          <IconButton icon="x" label="Remove picture" onClick={() => setImage(null)} disabled={busy} />
+        )}
+        <span className="log-box-auto" title="When Claude is sure, log it without asking">
+          <Switch on={auto} onChange={(on) => saveSetting(CAPTURE_AUTO, on ? '1' : '0')} label="Auto-log" size="md" />
+        </span>
+        <Button tone="primary" icon="sparkles" onClick={send} disabled={busy || (!text.trim() && !image)}>
+          {busy ? 'Reading…' : 'Log'}
+        </Button>
+      </div>
+    </Card>
   );
 }
 

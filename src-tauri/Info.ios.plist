@@ -17,6 +17,11 @@
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 
+	<!-- The Inbox's Attach button offers "Take Photo" beside the library,
+	     and WKWebView asks for the camera through this. -->
+	<key>NSCameraUsageDescription</key>
+	<string>Take a photo of a receipt or bill for Claude to log.</string>
+
 	<!-- The book is the point of the app; a phone backup that skipped it
 	     would restore an empty one. -->
 	<key>ITSAppUsesNonExemptEncryption</key>

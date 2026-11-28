@@ -805,7 +805,7 @@ fn account_named(conn: &Connection, name: &str) -> Result<Option<String>> {
 /// top-level category nobody has given children to. Groups with children are
 /// headings — the ledger refuses them, so neither the model nor the resolver
 /// is ever offered one.
-const FILEABLE: &str = "
+pub(crate) const FILEABLE: &str = "
     SELECT c.id, p.name, c.name
     FROM categories c
     LEFT JOIN categories p ON p.id = c.parent_id
@@ -1133,6 +1133,10 @@ fn day_from(phrase: Option<&str>, spoken_on: NaiveDate) -> NaiveDate {
     let Some(phrase) = phrase.map(str::to_lowercase) else {
         return spoken_on;
     };
+    // A date written out, as Claude gives it. Never one still to come.
+    if let Ok(day) = NaiveDate::parse_from_str(phrase.trim(), "%Y-%m-%d") {
+        return day.min(spoken_on);
+    }
     let words: Vec<String> = phrase
         .split(|c: char| !c.is_alphanumeric())
         .filter(|w| !w.is_empty())
@@ -2486,4 +2490,232 @@ mod tests {
         // One without them is a filing, and is offered plainly.
         assert!(categories.lines().any(|l| l == "Health"));
     }
+
+    fn claude_read(amount: f64, sure: bool) -> crate::capture_ai::Reading {
+        crate::capture_ai::Reading {
+            is_transaction: true,
+            said: "450 at Third Wave on HDFC".into(),
+            kind: Some("expense".into()),
+            amount: Some(amount),
+            account: Some("HDFC".into()),
+            category: Some("Food & Drink > Coffee".into()),
+            merchant: Some("Third Wave".into()),
+            sure,
+            ..Default::default()
+        }
+    }
+
+    fn status_of(conn: &Connection, id: &str) -> (String, String) {
+        conn.query_row("SELECT status, unresolved FROM captures WHERE id = ?1", params![id], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn claude_is_told_this_books_accounts_and_fileable_categories() {
+        let conn = book();
+        let ctx = crate::capture_ai::context(&conn).unwrap();
+        assert_eq!(ctx.accounts, vec!["HDFC", "Federal", "Swiggy", "Wallet"]);
+        assert!(ctx.expense_categories.contains(&"Food & Drink > Coffee".to_string()));
+        assert!(!ctx.expense_categories.contains(&"Food & Drink".to_string()));
+    }
+
+    #[test]
+    fn a_capture_claude_is_sure_of_goes_straight_in() {
+        let conn = book();
+        let id = save_unread(&conn, "450 third wave hdfc", "typed").unwrap();
+        assert_eq!(status_of(&conn, &id), ("pending".into(), "reading".into()));
+
+        let done = file_reading(&conn, &id, Ok(claude_read(450.0, true))).unwrap();
+        assert_eq!(done.status, "posted");
+        assert_eq!(done.summary, "Logged ₹450 at Third Wave.");
+        let tx = db::get_transaction(&conn, done.transaction_id.as_deref().unwrap()).unwrap();
+        assert_eq!((tx.amount, tx.merchant.as_str()), (450_00, "Third Wave"));
+    }
+
+    #[test]
+    fn unsure_or_auto_off_waits_in_the_inbox() {
+        let conn = book();
+        let id = save_unread(&conn, "something at third wave", "typed").unwrap();
+        let done = file_reading(&conn, &id, Ok(claude_read(450.0, false))).unwrap();
+        assert_eq!(done.status, "pending");
+        assert_eq!(status_of(&conn, &id).1, "confirm");
+
+        db::set_setting(&conn, AUTO_SETTING, "0").unwrap();
+        let id = save_unread(&conn, "450 third wave hdfc", "typed").unwrap();
+        let done = file_reading(&conn, &id, Ok(claude_read(450.0, true))).unwrap();
+        assert_eq!(done.status, "pending");
+        assert!(done.summary.contains("waiting for you to confirm"));
+    }
+
+    #[test]
+    fn an_otp_and_a_payment_already_logged_are_set_aside() {
+        let conn = book();
+        let id = save_unread(&conn, "Your OTP is 123456", "sms").unwrap();
+        let otp = crate::capture_ai::Reading { said: "OTP".into(), ..Default::default() };
+        assert_eq!(file_reading(&conn, &id, Ok(otp)).unwrap().status, "dismissed");
+
+        let first = save_unread(&conn, "450 third wave hdfc", "sms").unwrap();
+        let tx = file_reading(&conn, &first, Ok(claude_read(450.0, true))).unwrap().transaction_id.unwrap();
+        let second = save_unread(&conn, "A picture", "image").unwrap();
+        let mut dup = claude_read(450.0, true);
+        dup.duplicate_of = Some(tx.clone());
+        let done = file_reading(&conn, &second, Ok(dup)).unwrap();
+        assert_eq!((done.status.as_str(), done.transaction_id), ("dismissed", Some(tx)));
+    }
+
+    #[test]
+    fn without_claude_the_book_reads_the_words_itself() {
+        let conn = book();
+        let id = save_unread(&conn, "spent 120 on coffee from HDFC", "typed").unwrap();
+        let done = file_reading(&conn, &id, Err("offline".into())).unwrap();
+        // Whatever it made of them, the capture is kept.
+        assert!(matches!(done.status.as_str(), "posted" | "pending"));
+        assert_eq!(status_of(&conn, &id).0, done.status);
+    }
+
+}
+
+
+/* ------------------------------------------------------- read by Claude */
+
+/// Whether a capture Claude is sure of goes straight into the ledger. On
+/// unless turned off: off, everything Claude reads waits in the Inbox.
+pub const AUTO_SETTING: &str = "capture_auto";
+
+pub fn auto(conn: &Connection) -> Result<bool> {
+    Ok(db::setting(conn, AUTO_SETTING)?.as_deref() != Some("0"))
+}
+
+/// What happened to one capture sent to Claude.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Ingested {
+    pub id: String,
+    /// posted | pending | dismissed
+    pub status: String,
+    pub transaction_id: Option<String>,
+    /// One line for a notification or a toast: what it became, or why not.
+    pub summary: String,
+}
+
+/// Saves a capture before anything reads it, so it can't be lost to a
+/// failed call or a closed app. It waits in the Inbox as "reading" until
+/// `file_reading` says what it is.
+pub fn save_unread(conn: &Connection, said: &str, source: &str) -> Result<String> {
+    let id = new_id();
+    let at = now();
+    conn.execute(
+        "INSERT INTO captures (id, digest, said, raw, source, captured_at, ingested_at, status, unresolved)
+         VALUES (?1, ?2, ?3, ?3, ?4, ?5, ?5, 'pending', 'reading')",
+        params![id, format!("ingest:{id}"), said.trim(), source, at],
+    )
+    .map_err(oops)?;
+    Ok(id)
+}
+
+/// Files a capture saved by `save_unread` with Claude's reading, or, when
+/// Claude couldn't be reached, with the book's own reading of the words.
+pub fn file_reading(
+    conn: &Connection,
+    id: &str,
+    reading: std::result::Result<crate::capture_ai::Reading, String>,
+) -> Result<Ingested> {
+    let (said, source, captured_at): (String, String, String) = conn
+        .query_row(
+            "SELECT said, source, captured_at FROM captures WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .map_err(oops)?;
+    let at = chrono::DateTime::parse_from_rfc3339(&captured_at)
+        .ok()
+        .map(|d| d.with_timezone(&Local).format("%Y-%m-%dT%H:%M:%S").to_string());
+
+    let done = |status: &str, tx: Option<String>, unresolved: &str, summary: String| -> Result<Ingested> {
+        conn.execute(
+            "UPDATE captures SET status = ?2, transaction_id = ?3, unresolved = ?4 WHERE id = ?1",
+            params![id, status, tx, unresolved],
+        )
+        .map_err(oops)?;
+        Ok(Ingested { id: id.into(), status: status.into(), transaction_id: tx, summary })
+    };
+
+    let (spoken, sure, failed) = match &reading {
+        Ok(r) => {
+            if !r.is_transaction {
+                return done("dismissed", None, "not a transaction", "Not a transaction, so nothing was logged.".into());
+            }
+            if let Some(dup) = r.duplicate_of.as_deref().filter(|d| db::get_transaction(conn, d).is_ok()) {
+                return done("dismissed", Some(dup.to_string()), "already logged", "Already in the book.".into());
+            }
+            let said = if r.said.trim().is_empty() { said.clone() } else { r.said.clone() };
+            let spoken = Spoken {
+                said,
+                raw: String::new(),
+                at: at.clone(),
+                source: source.clone(),
+                hints: Hints {
+                    kind: r.kind.clone(),
+                    amount: r.amount,
+                    account: r.account.clone(),
+                    to_account: r.to_account.clone(),
+                    category: r.category.clone(),
+                    merchant: r.merchant.clone(),
+                    when: r.when.clone(),
+                    note: r.note.clone(),
+                },
+            };
+            // An image is saved before it is read, under a placeholder; once
+            // read, what it showed is what was "said".
+            conn.execute("UPDATE captures SET said = ?2 WHERE id = ?1", params![id, spoken.said.trim()])
+                .map_err(oops)?;
+            (spoken, r.sure, None)
+        }
+        Err(e) => (
+            Spoken { said: said.clone(), raw: String::new(), at, source, hints: Hints::default() },
+            // The book's own reading is careful enough to post when it is
+            // complete, as it always has for the Siri drop.
+            true,
+            Some(e.clone()),
+        ),
+    };
+
+    let r = resolve(conn, &spoken)?;
+    conn.execute(
+        "UPDATE captures SET kind = ?2, amount = ?3, account_id = ?4, to_account_id = ?5,
+                category_id = ?6, merchant = ?7, occurred_at = ?8, note = ?9
+         WHERE id = ?1",
+        params![id, r.kind, r.amount, r.account_id, r.to_account_id, r.category_id, r.merchant, r.occurred_at, r.note],
+    )
+    .map_err(oops)?;
+
+    let figure = format!("₹{:.2}", r.amount as f64 / 100.0);
+    let figure = figure.strip_suffix(".00").unwrap_or(&figure).to_string();
+    if r.complete() && sure && auto(conn)? {
+        match post(conn, id, input_from(&r)) {
+            Ok(tx) => {
+                let what = if r.merchant.is_empty() { String::new() } else { format!(" at {}", r.merchant) };
+                return Ok(Ingested {
+                    id: id.into(),
+                    status: "posted".into(),
+                    transaction_id: Some(tx.id),
+                    summary: format!("Logged {figure}{what}."),
+                });
+            }
+            Err(why) => return done("pending", None, &why, format!("Saved for review: {why}")),
+        }
+    }
+    let unresolved = r.unresolved.join(",");
+    let summary = match (&failed, r.unresolved.is_empty()) {
+        (Some(e), _) => format!("Saved for review. Claude couldn't read it: {e}"),
+        (None, true) if !auto(conn)? => format!("{figure} at {} is waiting for you to confirm.", r.merchant),
+        (None, true) => "Saved for review: Claude wasn't sure.".into(),
+        (None, false) => format!("Saved for review: {}.", r.unresolved.join(", ")),
+    };
+    // Complete but held back: say why it waits, so the Inbox doesn't read empty.
+    let unresolved = if unresolved.is_empty() { "confirm".to_string() } else { unresolved };
+    done("pending", None, &unresolved, summary)
+
 }
