@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from '../components/Icon';
 import { TransactionRow } from '../components/TransactionRow';
+import { SwipeRow, type SwipeAction } from '../components/SwipeRow';
 import { bringTransactions, refreshChats, useChat } from '../lib/chat';
 import { QuickChat } from '../components/QuickChat';
 import {
@@ -138,7 +139,7 @@ export function Transactions({
   onAskAbout?: () => void;
 }) {
   const {
-    accounts, categories, labels, folders, addToFolder, labelTransactions,
+    accounts, categories, labels, folders, addToFolder, removeFromFolder, labelTransactions,
     month, setMonth, listTransactions, transactionSummary,
     revision, updateTransactions, deleteTransactions, confirmTriage, toast,
   } = useStore();
@@ -597,6 +598,59 @@ export function Transactions({
   // A bulk delete is the one action here with no way back, so it is asked
   // for twice: once on the toolbar, once in a dialog that says how many.
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  /* A delete asked for by swiping one row: it borrows the selection to say
+     which, and gives it back if the answer is no. */
+  const [swipeDelete, setSwipeDelete] = useState(false);
+  /* The labels and folders of one row, opened by swiping it right. The
+     sets are the sheet's own copy, so a tick shows at once. */
+  const [tagging, setTagging] = useState<{
+    tx: Transaction; labels: Set<string>; folders: Set<string>;
+  } | null>(null);
+  const openTags = (tx: Transaction) =>
+    setTagging({
+      tx,
+      labels: new Set(tx.labels.map((l) => l.id)),
+      folders: new Set(tx.folders.map((f) => f.id)),
+    });
+  const toggleTag = async (which: 'labels' | 'folders', id: string) => {
+    if (!tagging) return;
+    const on = !tagging[which].has(id);
+    const next = new Set(tagging[which]);
+    if (on) next.add(id);
+    else next.delete(id);
+    setTagging({ ...tagging, [which]: next });
+    try {
+      if (which === 'labels') await labelTransactions([tagging.tx.id], id, on);
+      else if (on) await addToFolder(id, [tagging.tx.id]);
+      else await removeFromFolder(id, [tagging.tx.id]);
+    } catch {
+      /* the store has already said what went wrong */
+    }
+  };
+  const swipeActions = (tx: Transaction): { leading: SwipeAction[]; trailing: SwipeAction[] } => ({
+    leading: [
+      { icon: 'bookmark', label: 'Label', tone: 'purple', onClick: () => openTags(tx) },
+      { icon: 'folder', label: 'Folder', tone: 'blue', onClick: () => openTags(tx) },
+    ],
+    trailing: [
+      ...(onSplitTransaction && tx.kind !== 'transfer'
+        ? [{ icon: 'split', label: 'Split', tone: 'orange' as const, onClick: () => onSplitTransaction(tx) }]
+        : []),
+      ...(onOweTransaction
+        ? [{ icon: 'user-round', label: 'Owed', tone: 'gray' as const, onClick: () => onOweTransaction(tx) }]
+        : []),
+      {
+        icon: 'trash-2',
+        label: 'Delete',
+        tone: 'red',
+        onClick: () => {
+          setPicked([tx.id]);
+          setSwipeDelete(true);
+          setConfirmingDelete(true);
+        },
+      },
+    ],
+  });
 
   const removePicked = async () => {
     setConfirmingDelete(false);
@@ -605,6 +659,7 @@ export function Transactions({
       const gone = await deleteTransactions([...pickedSet]);
       toast(`${gone} ${gone === 1 ? 'entry' : 'entries'} deleted`);
       clearPicked();
+      setSwipeDelete(false);
     } catch {
       /* the store has already said what went wrong */
     } finally {
@@ -1212,39 +1267,57 @@ export function Transactions({
                   className={`tx-list ${pickedSet.size ? 'is-picking' : ''}`}
                   variants={listing}
                 >
-                  {day.items.map((tx) => (
-                    <TransactionRow
-                      key={tx.id}
-                      tx={tx}
-                      onClick={
-                        pickMany ? () => pick(tx, false) : () => onOpenTransaction(tx)
-                      }
-                      onSplit={
-                        picking || !onSplitTransaction
-                          ? undefined
-                          : () => onSplitTransaction(tx)
-                      }
-                      onDebt={
-                        picking || !onOweTransaction
-                          ? undefined
-                          : () => onOweTransaction(tx)
-                      }
-                      onRefund={
-                        picking || !onRefundTransaction
-                          ? undefined
-                          : () => onRefundTransaction(tx)
-                      }
-                      selected={pickedSet.has(tx.id)}
-                      enterDelay={
-                        // Long lists simply appear; past a point the stagger
-                        // stops being a flourish and becomes a wait.
-                        rows.length > STAGGER_UP_TO
-                          ? 0
-                          : (orderOf.get(tx.id) ?? 0) * 0.028
-                      }
-                      onSelect={selectable ? (range) => pick(tx, range) : undefined}
-                    />
-                  ))}
+                  {day.items.map((tx) => {
+                    const rowEl = (
+                      <TransactionRow
+                        key={tx.id}
+                        tx={tx}
+                        onClick={
+                          pickMany ? () => pick(tx, false) : () => onOpenTransaction(tx)
+                        }
+                        onSplit={
+                          picking || !onSplitTransaction
+                            ? undefined
+                            : () => onSplitTransaction(tx)
+                        }
+                        onDebt={
+                          picking || !onOweTransaction
+                            ? undefined
+                            : () => onOweTransaction(tx)
+                        }
+                        onRefund={
+                          picking || !onRefundTransaction
+                            ? undefined
+                            : () => onRefundTransaction(tx)
+                        }
+                        selected={pickedSet.has(tx.id)}
+                        enterDelay={
+                          // Long lists simply appear; past a point the stagger
+                          // stops being a flourish and becomes a wait.
+                          rows.length > STAGGER_UP_TO
+                            ? 0
+                            : (orderOf.get(tx.id) ?? 0) * 0.028
+                        }
+                        onSelect={selectable ? (range) => pick(tx, range) : undefined}
+                      />
+                    );
+                    if (!phoneLedger) return rowEl;
+                    const { leading, trailing } = swipeActions(tx);
+                    return (
+                      <SwipeRow
+                        key={tx.id}
+                        leading={leading}
+                        trailing={trailing}
+                        disabled={selectable && (selecting || pickedSet.size > 0) && !swipeDelete}
+                        onLongPress={() => {
+                          setSelecting(true);
+                          pick(tx, false);
+                        }}
+                      >
+                        {rowEl}
+                      </SwipeRow>
+                    );
+                  })}
                 </motion.div>
               </section>
             ))}
@@ -1483,6 +1556,59 @@ export function Transactions({
         )}
       </AnimatePresence>
 
+      {phoneLedger && (
+        <Sheet
+          open={!!tagging}
+          onClose={() => setTagging(null)}
+          title={tagging?.tx.merchant || 'Labels and folders'}
+          subtitle="Labels and folders"
+        >
+          {tagging && (
+            <div className="filter-sheet">
+              <div className="filter-group">
+                <span>Labels</span>
+                {labels.filter((l) => l.name !== 'Triage').length === 0 ? (
+                  <p className="filter-note">No labels yet. Make one under Labels.</p>
+                ) : (
+                  <div className="chip-row">
+                    {labels.filter((l) => l.name !== 'Triage').map((label) => (
+                      <Chip
+                        key={label.id}
+                        color={label.color}
+                        active={tagging.labels.has(label.id)}
+                        onClick={() => void toggleTag('labels', label.id)}
+                      >
+                        {label.name}
+                      </Chip>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="filter-group">
+                <span>Folders</span>
+                {folders.length === 0 ? (
+                  <p className="filter-note">No folders yet. Make one under Folders.</p>
+                ) : (
+                  <div className="chip-row">
+                    {folders.map((folder) => (
+                      <Chip
+                        key={folder.id}
+                        color={folder.color}
+                        active={tagging.folders.has(folder.id)}
+                        onClick={() => void toggleTag('folders', folder.id)}
+                      >
+                        <Icon name={folder.icon || 'folder'} size={12} />
+                        {folder.name}
+                      </Chip>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </Sheet>
+      )}
+
       <Confirm
         open={confirmingDelete}
         title={
@@ -1493,7 +1619,13 @@ export function Transactions({
         confirmLabel={pickedSet.size === 1 ? 'Delete' : `Delete ${pickedSet.size}`}
         busy={working}
         onConfirm={removePicked}
-        onCancel={() => setConfirmingDelete(false)}
+        onCancel={() => {
+          setConfirmingDelete(false);
+          if (swipeDelete) {
+            setPicked([]);
+            setSwipeDelete(false);
+          }
+        }}
       >
         {pickedSet.size === 1
           ? 'This cannot be undone.'

@@ -1147,3 +1147,63 @@
   .segmented,
   .terms-scroll { touch-action: pan-x; }
 }
+
+/* ==================================================================
+   Rows that swipe (`components/SwipeRow`). Phone-only by construction:
+   nothing renders a SwipeRow on a window.
+   ================================================================== */
+
+.swipe-row {
+  position: relative;
+  overflow: hidden;
+  /* Up and down is the list's; sideways is the row's. */
+  touch-action: pan-y;
+}
+.swipe-face {
+  position: relative;
+  z-index: 1;
+  background: var(--surface);
+  touch-action: pan-y;
+}
+.swipe-actions {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  /* Hidden until the face moves, so a resting row never shows a sliver of
+     colour through a rounded corner or a hairline. */
+  visibility: hidden;
+}
+.swipe-row.is-moving .swipe-actions { visibility: visible; }
+.swipe-actions.is-leading { left: 0; }
+.swipe-actions.is-trailing { right: 0; }
+.swipe-action {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 600;
+  background: var(--swipe);
+}
+.swipe-action:active { filter: brightness(0.9); }
+.swipe-action.tone-blue { --swipe: #0a84ff; }
+.swipe-action.tone-orange { --swipe: #ff9f0a; }
+.swipe-action.tone-red { --swipe: #ff3b30; }
+.swipe-action.tone-purple { --swipe: #8e5cf7; }
+.swipe-action.tone-green { --swipe: #30b94d; }
+.swipe-action.tone-gray { --swipe: #8e8e93; }
+
+/* The row's own menu is what the swipe replaces. */
+.swipe-row .tx-row-actions { display: none; }
+/* A picked row's tint has to be on the face, which covers the row behind. */
+.swipe-row:has(.tx-bill.is-picked) .swipe-face {
+  background: color-mix(in srgb, var(--blue) 8%, var(--surface));
+}
+/* Each row is the last of its own wrapper now, so the hairline between rows
+   is asked of the wrapper instead. */
+.swipe-row .tx-bill:last-child .tx-row::after { display: block; }
+.swipe-row:last-child .tx-bill:last-child .tx-row::after { display: none; }
