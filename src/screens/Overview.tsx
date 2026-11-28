@@ -6,7 +6,8 @@ import { BigMoney, CountMoney } from '../components/Money';
 import { Donut, FlowBars, Sparkline, SplitBar } from '../components/charts';
 import { TransactionRow } from '../components/TransactionRow';
 import { MerchantLogo } from '../components/MerchantLogo';
-import { Button, Card, CardHead, Empty, Meter } from '../components/ui';
+import { Button, Card, CardHead, Empty, Meter, Segmented, type SegmentOption } from '../components/ui';
+import { PHONE, useMediaQuery } from '../lib/media';
 import { api } from '../lib/api';
 import { useStore } from '../lib/store';
 import {
@@ -59,6 +60,11 @@ const SLEEVES: { tab: InvestmentTab; name: string; icon: string; color: string }
 /** How much of the portfolio's line the card carries. A year is the read
  *  most people have in mind when they glance at what they hold. */
 const PORTFOLIO_DAYS = 366;
+
+const VIEWS: SegmentOption<'wealth' | 'spending'>[] = [
+  { value: 'wealth', label: 'Wealth' },
+  { value: 'spending', label: 'Spending' },
+];
 
 /** Which sleeve a holding belongs to — the two deposits share one. */
 const sleeveOf = (kind: HoldingKind): InvestmentTab => (isDeposit(kind) ? 'deposit' : kind);
@@ -225,6 +231,12 @@ export function Overview({
     return { avgSpend, savingsRate, perDay, spendingDays, best };
   }, [overview]);
 
+  // The phone splits the page in two: what you are worth, and what you spent.
+  const phone = useMediaQuery(PHONE);
+  const [view, setView] = useState<'wealth' | 'spending'>('wealth');
+  const showWealth = !phone || view === 'wealth';
+  const showSpending = !phone || view === 'spending';
+
   if (!overview || !stats) return null;
 
   const net = overview.income - overview.expense;
@@ -245,10 +257,17 @@ export function Overview({
     <div className="screen ov-screen">
       <header className="screen-head ov-head">
         <h1>Dashboard</h1>
-        <MonthNav month={month} onChange={setMonth} span={span} onSpanChange={setSpan} />
+        {phone ? (
+          <div className="head-actions">
+            <Segmented options={VIEWS} value={view} onChange={setView} name="ov-view" size="sm" />
+          </div>
+        ) : (
+          <MonthNav month={month} onChange={setMonth} span={span} onSpanChange={setSpan} />
+        )}
       </header>
 
       {/* ================================================== wealth centre */}
+      {showWealth && (
       <div className="ov-stack">
         <motion.section
           className="hero"
@@ -459,12 +478,23 @@ export function Overview({
           </div>
         )}
       </div>
+      )}
 
       {/* ================================================= expense centre */}
-      <BandHead
-        title="Spending"
-        hint={`What came in and what went out over ${label}.`}
-      />
+      {showSpending && (
+      <>
+      {phone ? (
+        // The window is the spending half's alone on the phone, so it heads
+        // that half, across the whole width.
+        <div className="ov-range">
+          <MonthNav month={month} onChange={setMonth} span={span} onSpanChange={setSpan} />
+        </div>
+      ) : (
+        <BandHead
+          title="Spending"
+          hint={`What came in and what went out over ${label}.`}
+        />
+      )}
 
       {/* What the window is worth knowing against: the months around it. A
           figure alone says what happened, not whether it was a good one. */}
@@ -708,6 +738,8 @@ export function Overview({
           </Card>
         </div>
       </div>
+      </>
+      )}
     </div>
   );
 }
