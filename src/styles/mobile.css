@@ -1339,12 +1339,14 @@
     flex-wrap: nowrap;
     margin-top: 2px;
   }
-  /* A switch in the head (the folders' sort) takes a line of its own. */
+  /* A switch in the head (the folders' sort) sits top right, level with the
+     title, the way iOS puts one in a large-title bar. */
   .screen-head > .head-actions:has(.segmented) { display: contents; }
   .screen-head > .head-actions > .segmented {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    justify-self: start;
+    grid-column: 2;
+    grid-row: 1;
+    align-self: center;
+    justify-self: end;
   }
   .screen-head > .head-actions > .btn { grid-column: 2; grid-row: 1; }
 
@@ -1630,7 +1632,7 @@
   .app.is-tabless .screen-head .btn:has(> svg.lucide-plus) {
     position: fixed;
     right: 18px;
-    bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
+    bottom: calc(env(safe-area-inset-bottom, 0px) * 0.4 + 8px);
     z-index: 40;
     width: 58px;
     height: 58px;
@@ -1800,4 +1802,42 @@
   .donut-card .breakdown-caret,
   .donut-card .breakdown-children,
   .ov-screen .recent-card { display: none; }
+}
+
+/* Debts' two adds, the page's + in two halves: a floating glass pill,
+   bottom right, the way every page without a tab bar carries its add. */
+@media (max-width: 760px) {
+  .debt-screen .screen-head > .debt-adds {
+    position: fixed;
+    right: 18px;
+    bottom: calc(env(safe-area-inset-bottom, 0px) * 0.4 + 8px);
+    z-index: 40;
+    display: flex;
+    gap: 0;
+    margin: 0;
+    padding: 4px;
+    border-radius: 99px;
+    border: 1px solid rgba(255, 255, 255, 0.55);
+    background: rgba(255, 255, 255, 0.42);
+    -webkit-backdrop-filter: blur(18px) saturate(1.8);
+    backdrop-filter: blur(18px) saturate(1.8);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.7),
+      0 10px 28px -8px rgba(16, 24, 48, 0.35),
+      0 2px 6px rgba(16, 24, 48, 0.08);
+  }
+  :root:not([data-theme='light']) .debt-screen .screen-head > .debt-adds {
+    border-color: rgba(255, 255, 255, 0.14);
+    background: rgba(40, 44, 60, 0.45);
+  }
+  .debt-screen .screen-head > .debt-adds .btn {
+    height: 44px;
+    padding: 0 16px;
+    background: none;
+    border: 0;
+    box-shadow: none;
+    color: var(--ink);
+    font-size: 15px;
+  }
+  .debt-screen .screen-head > .debt-adds .btn svg { width: 17px; height: 17px; }
 }

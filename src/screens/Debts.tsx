@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { PHONE, useMediaQuery } from '../lib/media';
 import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from '../components/Icon';
 import { Button, Empty, Segmented, type SegmentOption } from '../components/ui';
@@ -53,6 +54,7 @@ export function Debts({
     [debts],
   );
   const [tab, setTab] = useState<DebtTab>('lent');
+  const phone = useMediaQuery(PHONE);
   const lent = open.filter((d) => d.direction === 'lent');
   const borrowed = open.filter((d) => d.direction === 'borrowed');
   const owedToYou = lent.reduce((s, d) => s + d.outstanding, 0);
@@ -152,7 +154,13 @@ export function Debts({
               : 'Money you have lent out, and money you owe.'}
           </p>
         </div>
-        <div className="head-actions">
+        {/* On the phone the switch sits up here, level with the title. */}
+        {phone && debts.length > 0 && (
+          <div className="head-actions">
+            <Segmented options={tabs} value={tab} onChange={setTab} name="debt-tab-m" size="sm" />
+          </div>
+        )}
+        <div className="head-actions debt-adds">
           <Button icon="arrow-down-left" onClick={() => onNewDebt('borrowed')}>
             I borrowed
           </Button>
@@ -171,9 +179,11 @@ export function Debts({
         />
       ) : (
         <>
-          <div className="screen-tabs">
-            <Segmented options={tabs} value={tab} onChange={setTab} name="debt-tab" />
-          </div>
+          {!phone && (
+            <div className="screen-tabs">
+              <Segmented options={tabs} value={tab} onChange={setTab} name="debt-tab" />
+            </div>
+          )}
 
           <AnimatePresence mode="wait" initial={false}>
             <motion.div
