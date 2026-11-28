@@ -187,15 +187,6 @@ export function AddChat({
         </div>
 
         <div className="add-chat-log" ref={log}>
-          {!started && (
-            <div className="add-chat-hints">
-              {['450 on lunch at Toit, paid by card', 'Got my salary today', 'How much on cabs this month?'].map((hint) => (
-                <button key={hint} type="button" onClick={() => setDraft(hint)}>
-                  {hint}
-                </button>
-              ))}
-            </div>
-          )}
           {history.map((turn, i) => (
             <div key={i} className="ask-turn">
               {turn.question && (
