@@ -22,6 +22,15 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Take a photo of a receipt or bill for Claude to log.</string>
 
+	<!-- iOS 27 stops any app that hasn't adopted the scene lifecycle on
+	     launch. With this key tao answers configurationForConnecting...
+	     with its own TaoSceneDelegate and puts the window in that scene. -->
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<true/>
+	</dict>
+
 	<!-- The book is the point of the app; a phone backup that skipped it
 	     would restore an empty one. -->
 	<key>ITSAppUsesNonExemptEncryption</key>

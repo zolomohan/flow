@@ -993,9 +993,23 @@ fn set_setting(db: State<Db>, key: String, value: String) -> R<()> {
 /// Writes the whole book to a file of the user's choosing.
 #[tauri::command]
 fn export_book(db: State<Db>, to: String) -> R<String> {
-    let path = std::path::PathBuf::from(&to);
+    let path = picked_path(&to);
     with_db(&db, |c| db::export_book(c, &path))?;
     Ok(to)
+}
+
+/// A path from the file dialog, as the filesystem knows it.
+///
+/// On the Mac the dialog hands back a plain path. On iOS it hands back a
+/// `file://` URL (percent-encoded, so a space is `%20`) to the copy it made in
+/// the app's own tmp folder; read as a path that names nothing, and the import
+/// said the file "is not there any more".
+fn picked_path(picked: &str) -> std::path::PathBuf {
+    picked
+        .starts_with("file://")
+        .then(|| tauri::Url::parse(picked).ok()?.to_file_path().ok())
+        .flatten()
+        .unwrap_or_else(|| std::path::PathBuf::from(picked))
 }
 
 /// Reads one back over this book, keeping a copy of what was here beside it.
@@ -1009,7 +1023,7 @@ fn export_book(db: State<Db>, to: String) -> R<String> {
 /// somebody looking for what they just overwrote would think to look.
 #[tauri::command]
 fn import_book(db: State<Db>, from: String) -> R<String> {
-    let source = std::path::PathBuf::from(&from);
+    let source = picked_path(&from);
     let name = format!(
         "midas-replaced-{}.sqlite3",
         chrono::Local::now().format("%Y%m%d-%H%M%S")
@@ -1225,4 +1239,26 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod picked_path_tests {
+    use super::picked_path;
+    use std::path::PathBuf;
+
+    #[test]
+    fn an_ios_file_url_becomes_its_path() {
+        assert_eq!(
+            picked_path("file:///private/var/mobile/tmp/com.mohanraj.midas-Inbox/midas%202026.sqlite3"),
+            PathBuf::from("/private/var/mobile/tmp/com.mohanraj.midas-Inbox/midas 2026.sqlite3"),
+        );
+    }
+
+    #[test]
+    fn a_plain_path_is_left_alone() {
+        assert_eq!(
+            picked_path("/Users/me/midas 2026.sqlite3"),
+            PathBuf::from("/Users/me/midas 2026.sqlite3"),
+        );
+    }
 }
