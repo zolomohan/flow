@@ -19,7 +19,7 @@ import { cadenceLabel, dueLabel, isLive, monthlyTotal } from '../lib/plans';
 import { isDeposit } from '../lib/types';
 import type {
   CategorySlice, Debt, FlowPoint, HoldingKind, InvestmentTab, Paise, Plan,
-  Transaction,
+  MerchantSlice, Transaction,
 } from '../lib/types';
 
 /** One face on the wealth card: an account, or the holdings kept outside one. */
@@ -524,7 +524,8 @@ export function Overview({
           prevExpense={overview.prevExpense}
           avgSpend={stats.avgSpend}
           savingsRate={stats.savingsRate}
-          fixed={monthlyTotal(plans, 'expense') * span}
+          liquid={overview.liquid}
+          topMerchant={[...overview.topMerchants].filter((m) => m.count > 1).sort((a, b) => b.count - a.count)[0]}
           month={month}
           span={span}
         />
@@ -630,7 +631,6 @@ export function Overview({
                     category its share of it, over the total. The ring is
                     the Mac's; at a phone's width it was a poster. */}
                 <div className="spend-strip">
-                  <strong>{money(overview.expense)}</strong>
                   <div className="spend-strip-bar">
                     {categories.map((c) => (
                       <i
@@ -831,11 +831,13 @@ function BreakdownRow({
           </span>
           <div className="breakdown-main">
             <div className="breakdown-top">
-              <span>{slice.name}</span>
-              <strong>
-                {money(slice.total)}
-                <small className="breakdown-share">{Math.round((slice.total / total) * 100)}%</small>
-              </strong>
+              <span>
+                {slice.name}
+                <small className="breakdown-share">
+                  {Math.round((slice.total / total) * 100)}% · {slice.count} {slice.count === 1 ? 'spend' : 'spends'}
+                </small>
+              </span>
+              <strong>{money(slice.total)}</strong>
             </div>
             <Meter value={slice.total / total} color={slice.color} />
           </div>
@@ -1068,14 +1070,15 @@ function PlannedCard({ plans, onOpen }: { plans: Plan[]; onOpen: () => void }) {
  * and how much of the month was spoken for before it began.
  */
 function SpendPace({
-  expense, income, prevExpense, avgSpend, savingsRate, fixed, month, span,
+  expense, income, prevExpense, avgSpend, savingsRate, liquid, topMerchant, month, span,
 }: {
   expense: number;
   income: number;
   prevExpense: number;
   avgSpend: number;
   savingsRate: number | null;
-  fixed: number;
+  liquid: number;
+  topMerchant: MerchantSlice | undefined;
   month: string;
   span: number;
 }) {
@@ -1085,7 +1088,6 @@ function SpendPace({
   const inMonth = new Date(y, m, 0).getDate();
   const current = span === 1 && month === monthKey();
   const elapsed = current ? new Date().getDate() : inMonth * span;
-  const perDay = Math.round(expense / Math.max(1, elapsed));
   const projected = current ? Math.round((expense / Math.max(1, elapsed)) * inMonth) : null;
   const usual = avgSpend * span;
   const delta = percentDelta(expense, prevExpense);
@@ -1093,9 +1095,8 @@ function SpendPace({
   // marker for "usual" always lands on it.
   const scale = Math.max(projected ?? expense, usual, 1);
   const over = (projected ?? expense) > usual;
-  // What is left of a usual month, a day, for the days still to come.
-  const left = Math.max(1, inMonth - elapsed + 1);
-  const room = Math.round((usual - expense) / left);
+  // How many usual months the cash in hand would carry, were nothing to come in.
+  const runway = avgSpend > 0 ? liquid / avgSpend : null;
 
   return (
     <section className="pace">
@@ -1123,32 +1124,26 @@ function SpendPace({
             ? <>{compactMoney(Math.abs(expense - usual))} {expense > usual ? 'above' : 'below'} a usual {span > 1 ? 'stretch' : 'month'} of {compactMoney(usual)}</>
             : <>Not enough months to compare against yet</>}
       </p>
-      <div className={`pace-stats ${current && usual > 0 || fixed > 0 ? '' : 'is-two'}`}>
+      <div className="pace-stats">
         <div>
           <span>Saved</span>
           <strong className={savingsRate === null ? '' : savingsRate >= 20 ? 'is-good' : savingsRate < 0 ? 'is-bad' : ''}>
             {savingsRate === null ? '—' : `${Math.round(savingsRate)}%`}
           </strong>
-          <small>{savingsRate === null ? 'little came in' : `of ${compactMoney(income)}`}</small>
+          <small>{savingsRate === null ? 'little came in' : `${compactMoney(Math.abs(income - expense))} ${income >= expense ? 'kept' : 'short'}`}</small>
         </div>
         <div>
-          <span>Per day</span>
-          <strong>{compactMoney(perDay)}</strong>
-          <small>over {elapsed} {elapsed === 1 ? 'day' : 'days'}</small>
+          <span>Runway</span>
+          <strong className={runway !== null && runway < 3 ? 'is-bad' : ''}>
+            {runway === null ? '—' : runway >= 24 ? '2y+' : `${runway < 10 ? runway.toFixed(1) : Math.round(runway)} mo`}
+          </strong>
+          <small>if income stopped</small>
         </div>
-        {current && usual > 0 ? (
-          <div>
-            <span>{room <= 0 ? 'Over usual' : 'Room left'}</span>
-            <strong className={room <= 0 ? 'is-bad' : ''}>{compactMoney(room <= 0 ? expense - usual : room)}</strong>
-            <small>{room <= 0 ? 'so far this month' : `a day for ${left} ${left === 1 ? 'day' : 'days'}`}</small>
-          </div>
-        ) : fixed > 0 ? (
-          <div>
-            <span>Fixed</span>
-            <strong>{compactMoney(fixed)}</strong>
-            <small>{expense > 0 ? `${Math.round((Math.min(fixed, expense) / expense) * 100)}% of spend` : 'planned'}</small>
-          </div>
-        ) : null}
+        <div>
+          <span>Most often</span>
+          <strong className="pace-name">{topMerchant ? topMerchant.merchant : '—'}</strong>
+          <small>{topMerchant ? `${topMerchant.count} times · ${compactMoney(topMerchant.total)}` : 'no merchants yet'}</small>
+        </div>
       </div>
     </section>
   );

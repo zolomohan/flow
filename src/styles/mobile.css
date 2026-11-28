@@ -2089,3 +2089,19 @@
   /* Spent and what came in are on the pace card already. */
   .ov-screen .spend-main .flow-card { display: none; }
 }
+
+@media (max-width: 760px) {
+  /* Where it went: name with its share under it, the amount alone on the
+     right, so every figure lines up down one edge. */
+  .ov-screen .donut-card .breakdown-top span { display: grid; gap: 1px; }
+  .ov-screen .donut-card .breakdown-top strong { display: block; align-self: center; }
+  .ov-screen .donut-card .breakdown-share { font-size: 12px; font-weight: 500; color: var(--ink-3); }
+  .ov-screen .donut-card .spend-strip { margin: 4px 0 10px; }
+  .pace-stats strong.pace-name {
+    font-size: 17px;
+    line-height: 26px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
