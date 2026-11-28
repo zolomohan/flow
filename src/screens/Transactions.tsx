@@ -955,20 +955,29 @@ export function Transactions({
           <div className="phone-head-row">
             <h1>Transactions</h1>
             <div className="phone-head-tools">
-              <button
-                type="button"
-                className="head-text-btn"
-                onClick={() => {
-                  if (selecting) setPicked([]);
-                  setSelecting((v) => !v);
-                }}
-              >
-                {selecting ? 'Done' : 'Select'}
-              </button>
+              <span className="head-filter">
+                <IconButton
+                  icon="list-filter"
+                  label="Filters"
+                  size={36}
+                  onClick={() => setShowFilters(true)}
+                />
+                {phoneFilterCount > 0 && <span className="head-filter-count">{phoneFilterCount}</span>}
+              </span>
+              <span className={`head-select ${selecting ? 'is-on' : ''}`}>
+                <IconButton
+                  icon={selecting ? 'x' : 'check-circle-2'}
+                  label={selecting ? 'Done' : 'Select'}
+                  size={36}
+                  onClick={() => {
+                    if (selecting) setPicked([]);
+                    setSelecting((v) => !v);
+                  }}
+                />
+              </span>
             </div>
           </div>
-          {/* The window, as on the Dashboard's Spending half, across the
-              width; the filters a small button at its end. */}
+          {/* The window, as on the Dashboard's Spending half, across the width. */}
           <div className="ledger-range" {...periodSwipe}>
             {months > 0 ? (
               <MonthNav
@@ -986,15 +995,6 @@ export function Transactions({
                 All time
               </button>
             )}
-            <span className="head-filter">
-              <IconButton
-                icon="list-filter"
-                label="Filters"
-                size={40}
-                onClick={() => setShowFilters(true)}
-              />
-              {phoneFilterCount > 0 && <span className="head-filter-count">{phoneFilterCount}</span>}
-            </span>
           </div>
         </header>
       ) : (
@@ -1100,11 +1100,6 @@ export function Transactions({
               <span>Type</span>
               <Segmented options={KIND_FILTERS} value={kind} onChange={setKind} name="tx-filter-m" size="sm" />
             </div>
-            <div className="filter-group">
-              <span>Period</span>
-              <Segmented options={ranges} value={range} onChange={setRange} name="tx-range-m" size="sm" />
-              {months > 0 && <MonthNav month={month} onChange={setMonth} span={months} />}
-            </div>
             {filterGroups}
           </div>
         </Sheet>
@@ -1207,7 +1202,7 @@ export function Transactions({
         )}
       </AnimatePresence>
 
-      {!picking && <div className="totals-strip">
+      {!picking && !phoneLedger && <div className="totals-strip">
         <Total label="Money in" value={summary?.income ?? 0} tone="in" />
         <Total label="Money out" value={summary?.expense ?? 0} tone="out" />
         <Total
@@ -1309,7 +1304,7 @@ export function Transactions({
                             ? 0
                             : (orderOf.get(tx.id) ?? 0) * 0.028
                         }
-                        onSelect={selectable ? (range) => pick(tx, range) : undefined}
+                        onSelect={selectable || (phoneLedger && !picking) ? (range) => pick(tx, range) : undefined}
                       />
                     );
                     if (!phoneLedger) return rowEl;

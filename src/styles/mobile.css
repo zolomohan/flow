@@ -2136,3 +2136,33 @@
   .ledger-range .head-filter .icon-btn { color: var(--solid); }
   .ledger-range .head-filter-count { background: var(--solid); color: var(--on-solid); }
 }
+
+/* Select and the filters, side by side in the head, both round ink icons;
+   Select fills in while it is on. */
+@property --ledger-pad { syntax: '<length>'; inherits: true; initial-value: 14px; }
+@property --ledger-indent { syntax: '<length>'; inherits: true; initial-value: 58px; }
+@media (max-width: 760px) {
+  .phone-ledger-head .head-filter .icon-btn,
+  .phone-ledger-head .head-select .icon-btn { color: var(--solid); }
+  .head-select .icon-btn { transition: background var(--fast) var(--ease), color var(--fast) var(--ease); }
+  .head-select.is-on .icon-btn { background: var(--solid); color: var(--on-solid); }
+  .phone-head-tools { gap: 6px; }
+
+  /* The tick boxes slide in from the edge as the rows make room for them,
+     and back out the same way: the box is always there on the phone's
+     ledger, only folded away. */
+  .ledger-days { transition: --ledger-pad 280ms var(--ease), --ledger-indent 280ms var(--ease); }
+  .ledger-days .tx-check {
+    transition: opacity 220ms var(--ease), transform 280ms var(--ease),
+      background var(--fast) var(--ease), border-color var(--fast) var(--ease);
+  }
+  .ledger-days:not(.is-selectable) .tx-check {
+    opacity: 0;
+    transform: translateX(-24px) scale(0.6);
+    pointer-events: none;
+  }
+}
+@media (max-width: 760px) {
+  /* The boxes only stand while choosing now, so they stand at full strength. */
+  .ledger-days.is-selectable .tx-check { opacity: 1; }
+}
