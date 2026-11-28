@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Icon } from '../components/Icon';
 import { BigMoney } from '../components/Money';
@@ -376,8 +377,21 @@ export function HoldingDetail({
           ) : (
             <motion.ul className="detail-lot-list" variants={listVariants} initial="initial" animate="animate">
               <AnimatePresence initial={false}>
-                {holding.lots.map((lot) => (
-                  <motion.li key={lot.id} variants={itemVariants} layout="position" transition={spring}>
+                {holding.lots.map((lot, i) => {
+                  // A band over each year's first entry.
+                  const year = (lot.allottedAt ?? lot.occurredAt).slice(0, 4);
+                  const prev = holding.lots[i - 1];
+                  const newYear = !prev || (prev.allottedAt ?? prev.occurredAt).slice(0, 4) !== year;
+                  const inYear = holding.lots.filter((l) => (l.allottedAt ?? l.occurredAt).startsWith(year));
+                  return (
+                  <Fragment key={lot.id}>
+                  {newYear && (
+                    <li className="band-head lot-year">
+                      {year}
+                      <span>{inYear.length} {inYear.length === 1 ? 'entry' : 'entries'}</span>
+                    </li>
+                  )}
+                  <motion.li variants={itemVariants} layout="position" transition={spring}>
                     <button className="detail-lot" onClick={() => onEditLot(lot)}>
                       <span className={`lot-mark ${lot.kind === 'sell' ? 'is-sell' : ''}`}>
                         <Icon
@@ -435,7 +449,9 @@ export function HoldingDetail({
                       </span>
                     </button>
                   </motion.li>
-                ))}
+                  </Fragment>
+                  );
+                })}
               </AnimatePresence>
             </motion.ul>
           )}

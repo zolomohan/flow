@@ -1866,3 +1866,70 @@
 @media (max-width: 400px) {
   .folder-section-head { margin-inline: -13px; padding-inline: 13px; }
 }
+
+/* ───────────────── Section bands. Every grouped list on the phone — the
+   ledger's days, Accounts' and Planned's groups, the Inbox's days, a card's
+   months, a holding's years — is headed the way Folders' years are: a band
+   across the whole width, the name large on the left and its figure on the
+   right, held at the top while its rows scroll under it. */
+@media (max-width: 760px) {
+  .account-group > .group-title,
+  .day-head,
+  .band-head {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 0 -16px;
+    padding: 10px 16px;
+    background: color-mix(in srgb, var(--bg) 80%, transparent);
+    -webkit-backdrop-filter: blur(16px) saturate(1.6);
+    backdrop-filter: blur(16px) saturate(1.6);
+    border-top: 1px solid var(--line-soft);
+    border-bottom: 1px solid var(--line-soft);
+    font-size: 19px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    text-transform: none;
+    color: var(--ink);
+    list-style: none;
+  }
+  .account-group > .group-title > span,
+  .day-head > span:last-child,
+  .band-head > span {
+    font-size: 13.5px;
+    font-weight: 500;
+    letter-spacing: 0;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+  }
+  .day-head > span:first-child { font-size: 17px; }
+  .day-head .day-net.is-up { color: var(--green); }
+  .account-group > .group-title { margin-bottom: 10px; }
+
+  /* The ledger is a plain list edge to edge, so its day bands are too. */
+  .card.ledger {
+    margin-inline: -16px;
+    border-radius: 0;
+    border-left: 0;
+    border-right: 0;
+    box-shadow: none;
+  }
+  .card.ledger .day-head { margin: 0; padding-left: var(--ledger-pad, 16px); }
+  .card.ledger .day-group:first-child .day-head { border-top: 0; }
+
+  /* Inside a card the band runs the card's width. */
+  .card .band-head { margin: 0; }
+  .detail-lot-list .band-head { padding-block: 8px; font-size: 17px; }
+}
+@media (max-width: 400px) {
+  .account-group > .group-title { margin-inline: -13px; padding-inline: 13px; }
+  .card.ledger { margin-inline: -13px; }
+}
+@media (max-width: 760px) {
+  .account-group > .group-title > span { padding-left: 0; }
+  .account-group > .group-title > span::before { display: none; }
+}

@@ -5,7 +5,7 @@ import { Button, Card, Empty, IconButton, Field, Segmented, Select, Sheet, Switc
 import type { SelectOption } from '../components/ui';
 import { useStore } from '../lib/store';
 import { itemVariants, listVariants, spring } from '../lib/motion';
-import { dayLabel, money, paiseToRupeeString, rupeesToPaise, timeLabel } from '../lib/format';
+import { dayKey, dayLabel, money, paiseToRupeeString, rupeesToPaise, timeLabel } from '../lib/format';
 import type { Capture, CaptureImage, TransactionInput, TxKind } from '../lib/types';
 
 const KINDS: { value: TxKind; label: string; icon: string; accent: string }[] = [
@@ -79,16 +79,25 @@ export function Siri({ onOpenTransaction }: { onOpenTransaction?: (id: string) =
           }
         />
       ) : (
-        <motion.div
-          className="capture-list"
-          variants={listVariants}
-          initial="initial"
-          animate="animate"
-        >
-          {captures.map((capture) => (
-            <CaptureRow key={capture.id} capture={capture} />
-          ))}
-        </motion.div>
+        // By the day they were said, each under a band of its own.
+        byDay(captures).map((day) => (
+          <section key={day.key} className="account-group">
+            <h2 className="group-title">
+              {dayLabel(day.key)}
+              <span>{day.items.length} waiting</span>
+            </h2>
+            <motion.div
+              className="capture-list"
+              variants={listVariants}
+              initial="initial"
+              animate="animate"
+            >
+              {day.items.map((capture) => (
+                <CaptureRow key={capture.id} capture={capture} />
+              ))}
+            </motion.div>
+          </section>
+        ))
       )}
 
       {/* Everything that did land, folded away at the foot of the screen. A
@@ -105,6 +114,18 @@ export function Siri({ onOpenTransaction }: { onOpenTransaction?: (id: string) =
       />
     </div>
   );
+}
+
+/** Captures in day groups, newest day first, keeping their order within it. */
+function byDay(list: Capture[]) {
+  const days: { key: string; items: Capture[] }[] = [];
+  for (const capture of list) {
+    const key = dayKey(capture.capturedAt);
+    const last = days[days.length - 1];
+    if (last && last.key === key) last.items.push(capture);
+    else days.push({ key, items: [capture] });
+  }
+  return days;
 }
 
 /** Where the capture auto mode switch is kept in the book. */

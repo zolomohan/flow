@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { motion } from 'motion/react';
 import { ordinalDay } from '../components/DateField';
 import { Icon } from '../components/Icon';
@@ -14,6 +14,7 @@ import { useStore } from '../lib/store';
 import {
   cashbackRate, compactMoney, money, monthKey, monthWindowBounds, percent, shiftMonth,
   shortDayLabel,
+  monthLabel,
 } from '../lib/format';
 import { itemVariants, listVariants } from '../lib/motion';
 import type { CardStat, Paise, Transaction, TransactionSummary } from '../lib/types';
@@ -796,9 +797,24 @@ export function CardPage({
         ) : rows.length ? (
           <>
             <div className="tx-list">
-              {rows.map((tx, i) => (
+              {rows.map((tx, i) => {
+                // A band over each month's first entry, with what it charged.
+                const month = tx.occurredAt.slice(0, 7);
+                const newMonth = i === 0 || rows[i - 1].occurredAt.slice(0, 7) !== month;
+                const charged = newMonth
+                  ? rows
+                    .filter((r) => r.occurredAt.startsWith(month) && r.kind === 'expense')
+                    .reduce((sum, r) => sum + r.amount, 0)
+                  : 0;
+                return (
+                <Fragment key={tx.id}>
+                {newMonth && (
+                  <div className="band-head card-month">
+                    {monthLabel(month, true)}
+                    <span>{money(charged)} charged</span>
+                  </div>
+                )}
                 <TransactionRow
-                  key={tx.id}
                   tx={tx}
                   showDate={shortDayLabel(tx.occurredAt)}
                   // Long lists simply appear; a stagger over hundreds of rows
@@ -806,7 +822,9 @@ export function CardPage({
                   enterDelay={rows.length > CARD_STAGGER_UP_TO ? 0 : i * 0.028}
                   onClick={() => onOpenTransaction(tx)}
                 />
-              ))}
+                </Fragment>
+                );
+              })}
             </div>
             {remaining > 0 && (
               <div className="ledger-more card-more">

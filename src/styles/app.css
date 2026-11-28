@@ -9776,3 +9776,22 @@ kbd {
 /* The phone's strip over Where it went, and each row's share; the Mac has
    the ring and its own % column, so both are off there. */
 .spend-strip, .breakdown-share { display: none; }
+
+/* A month or year heading inside a list (a card's months, a holding's
+   years), drawn like the ledger's day heads. The phone makes it a band. */
+.band-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 22px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line-soft);
+  list-style: none;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: var(--wide);
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.band-head > span { text-transform: none; letter-spacing: 0; font-weight: 500; }
