@@ -118,6 +118,19 @@
     background: transparent;
   }
 
+  /* Every width under 900px is a rail on the Mac, which drops the words and
+     keeps the glyphs (`app.css`, "Narrow windows"). The drawer is a full
+     column whatever the width, so it puts back everything the rail took. */
+  .phone-drawer .brand-text { display: flex; }
+  .phone-drawer .side-label { display: inline; }
+  .phone-drawer .nav-content { justify-content: flex-start; }
+  .phone-drawer .nav-count { position: static; margin-left: auto; }
+  .phone-drawer .side-foot { flex-direction: row; }
+  .phone-drawer .side-search, .phone-drawer .side-add { justify-content: flex-start; }
+  .phone-drawer .nav-group-label { height: auto; padding: 14px 10px 5px; color: var(--ink-4); }
+  .phone-drawer .nav-group-label::after { content: none; }
+  .phone-drawer .brand { justify-content: flex-start; padding-inline: 8px; }
+
   /* The screen: above the panel, and opaque, since it is what hides the
      panel when shut. The paper is the shell's own, drifted the same way. */
   .app.is-phone .main {
