@@ -563,6 +563,41 @@
   /* Pure decoration, and decoration that only ever appeared on hover: on a
      phone it is a column of nothing. */
   .tx-chevron { display: none; }
+
+  /* Two columns of words, not three. Beside the figure the tags took a
+     column of their own, and at 430 they were wider than the payee: a row in
+     two folders kept its folders and lost its name. Here they are a line of
+     their own under the payee, so the name and the figure never give way to
+     somebody's filing, and a row with none is the height it always was. */
+  .tx-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      'avatar main right'
+      'avatar tags tags';
+    column-gap: 12px;
+    row-gap: 0;
+    align-items: center;
+  }
+  .tx-row > .tx-avatar { grid-area: avatar; }
+  .tx-row > .tx-main { grid-area: main; }
+  .tx-row > .tx-right { grid-area: right; align-self: center; }
+  /* With tags under it the figure sits against the payee's lines, not the
+     middle of the whole row. */
+  .tx-row:has(> .tx-tags:not(:empty)) > .tx-avatar { align-self: start; margin-top: 2px; }
+  .tx-row > .tx-tags {
+    grid-area: tags;
+    flex-wrap: nowrap;
+    gap: 5px;
+    margin-top: 6px;
+    overflow: hidden;
+    /* Fades out rather than cutting a chip in half where a third one runs
+       out of room. */
+    mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
+  }
+  .tx-row > .tx-tags:empty { display: none; }
+  .tx-tags .tx-label,
+  .tx-tags .tx-folder { margin-left: 0; flex: none; }
   .tx-row-actions { right: 8px; }
   .day-head { padding-right: 14px; }
   .day-head .day-net { margin-right: 0; }
@@ -898,7 +933,6 @@
 
   .tab-label { font-size: 9.5px; }
   .tx-right { min-width: 82px; }
-  .tx-tags { display: none; }
   .month-label { min-width: 104px; font-size: 12.5px; }
 
   /* The bill's parts still add up under the row; the note about them is one
