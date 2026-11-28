@@ -10,7 +10,7 @@ import {
   DRAWER_RADIUS, DRAWER_WIDTH, backFade, backProgress, drawerProgress, useDrawer, useDrawerMoving,
 } from './lib/drawer';
 import {
-  NATIVE_TAB_ROUTES, nativeTabsExpected, badgeNativeTab, holdNativeTabs, onNativeAdd, onNativeTab, selectNativeTab,
+  NATIVE_TAB_ROUTES, nativeTabsExpected, holdNativeTabs, onNativeAdd, onNativeTab, selectNativeTab,
   showNativeTabs,
   type NativeTab,
 } from './lib/nativeTabs';
@@ -38,6 +38,9 @@ import { Taxes } from './screens/Taxes';
 import { Debts } from './screens/Debts';
 import type { DebtPerson } from './lib/debts';
 import { Investments } from './screens/Investments';
+import { Portfolio } from './screens/Portfolio';
+import { AddChat } from './components/AddChat';
+import { isDeposit } from './lib/types';
 import { Categories } from './screens/Categories';
 import { Folders } from './screens/Folders';
 import { Labels } from './screens/Labels';
@@ -60,6 +63,10 @@ import type {
   TxKind,
   TxTemplate,
 } from './lib/types';
+
+/** Whether a route has the tab bar: a tab's own page, or one of the three
+ *  sleeves the Investments tab opens onto. */
+const tabRoute = (route: Route) => NATIVE_TAB_ROUTES.has(route) || isInvestmentRoute(route);
 
 const ROUTE_KEYS: Route[] = [
   'overview',
@@ -254,7 +261,7 @@ const SPLASH_MS = 1850;
 const SPLASH_EXIT_MS = 420;
 
 function Shell() {
-  const { ready, fatal, accounts, captures } = useStore();
+  const { ready, fatal, accounts } = useStore();
   const {
     route, stop, marks, navigate: setRoute, back, forward, canBack, canForward,
   } = useHistory('overview');
@@ -278,7 +285,7 @@ function Shell() {
     // A page opened from the drawer has no tab bar, so back is the only way
     // out of it; with nothing behind it (reopened there), back is the
     // Dashboard the drawer lives on.
-    canBack: canBack || (phone && !NATIVE_TAB_ROUTES.has(route)),
+    canBack: canBack || (phone && !tabRoute(route)),
     onBack: canBack ? back : () => setRoute('overview'),
     // The drawer is the Dashboard's: everywhere else a swipe from the left
     // edge is back, and nothing else.
@@ -288,15 +295,22 @@ function Shell() {
   /* Pages reached through the drawer are a step aside from the tabs, not a
      tab of their own: they take the whole screen, and back (the edge swipe)
      is the way out. */
-  const tabless = phone && !NATIVE_TAB_ROUTES.has(route);
+  const tabless = phone && !tabRoute(route);
   /* The screen rides right off the panel, rounding the edge it leaves by;
      the page inside follows a back swipe off the right edge. */
   const screenX = useTransform(drawerProgress, [0, 1], [0, DRAWER_WIDTH]);
   const screenRadius = useTransform(drawerProgress, [0, 1], [0, DRAWER_RADIUS]);
   const pageX = useTransform(backProgress, (v) => v * (mainRef.current?.clientWidth || window.innerWidth));
-  /* What the add button beside the native bar runs. A ref, because the
-     listener is set up once and `newTransaction` is declared further down. */
-  const newTransactionRef = useRef<() => void>(() => {});
+  /* The phone's +: a chat panel rather than the form (see `AddChat`), and
+     whether it has been dragged up to the whole screen, which puts the tab
+     bar away. */
+  const [addChat, setAddChat] = useState(false);
+  const [addChatFull, setAddChatFull] = useState(false);
+  useEffect(() => {
+    if (nativeTabsH === null || !addChatFull) return;
+    holdNativeTabs(true);
+    return () => holdNativeTabs(false);
+  }, [nativeTabsH, addChatFull]);
   /* Whether index.html's splash is still on screen. UIKit draws the bar over
      the web view, splash and all, so it is not put up until the splash has
      gone. False from the start when there is none — a live reload. */
@@ -314,9 +328,10 @@ function Shell() {
     const listeners = [
       onNativeTab((tab) => {
         setDrawer(false);
+        setAddChat(false);
         setRoute(tab);
       }),
-      onNativeAdd(() => newTransactionRef.current()),
+      onNativeAdd(() => setAddChat(true)),
     ];
     return () => {
       for (const l of listeners) l.then((x) => x.unregister()).catch(() => {});
@@ -325,7 +340,9 @@ function Shell() {
   // The lit tab follows the page, however the page got there.
   useEffect(() => {
     if (nativeTabsH === null) return;
-    selectNativeTab(NATIVE_TAB_ROUTES.has(route) ? (route as NativeTab) : 'none');
+    selectNativeTab(
+      isInvestmentRoute(route) ? 'investments' : NATIVE_TAB_ROUTES.has(route) ? (route as NativeTab) : 'none',
+    );
   }, [nativeTabsH, route]);
   /* The bar rides with the screen in spirit: UIKit cannot follow a finger
      frame by frame, so it steps down the moment the screen starts to move
@@ -341,10 +358,6 @@ function Shell() {
     holdNativeTabs(true);
     return () => holdNativeTabs(false);
   }, [nativeTabsH, tabless]);
-  useEffect(() => {
-    if (nativeTabsH === null) return;
-    badgeNativeTab('siri', captures.length);
-  }, [nativeTabsH, captures.length]);
 
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [txOpen, setTxOpen] = useState(false);
@@ -409,7 +422,6 @@ function Shell() {
     setSplitFocus(null);
     setTxOpen(true);
   }, []);
-  newTransactionRef.current = () => newTransaction();
 
   // Opening whatever a debt or a repayment names: the sheet asking gives way
   // to the posting itself, since one modal over another is nobody's idea of
@@ -510,6 +522,20 @@ function Shell() {
     setLabelFocus((f) => ({ ids: [labelId], token: f.token + 1 }));
     setRoute('transactions');
   }, [setRoute]);
+
+  /* A holding opened from the Investments page: its sleeve's screen opens
+     straight onto it, and its back goes back to the page it came from. */
+  const [holdingFocus, setHoldingFocus] = useState<string | null>(null);
+  const openHolding = useCallback(
+    (holding: Holding) => {
+      setHoldingFocus(holding.id);
+      setRoute(holding.kind === 'gold' ? 'gold' : isDeposit(holding.kind) ? 'deposits' : 'funds');
+    },
+    [setRoute],
+  );
+  useEffect(() => {
+    if (!isInvestmentRoute(route)) setHoldingFocus(null);
+  }, [route]);
 
   // Each sleeve is a route of its own, so arriving from a gold card lands on
   // gold and the sidebar says so.
@@ -832,12 +858,17 @@ function Shell() {
               />
             ) : isInvestmentRoute(route) ? (
               <Investments
+                key={`${route}:${holdingFocus ?? ''}`}
                 tab={INVESTMENT_TABS[route]}
+                focusId={holdingFocus}
+                onFocusBack={() => (canBack ? back() : setRoute('investments'))}
                 onNewHolding={newHolding}
                 onEditHolding={editHolding}
                 onAddLot={(holding) => setLotTarget({ holding, lot: null })}
                 onEditLot={(holding, lot) => setLotTarget({ holding, lot })}
               />
+            ) : route === 'investments' ? (
+              <Portfolio onOpenHolding={openHolding} onNewHolding={() => newHolding('fund')} />
             ) : route === 'ask' ? (
               <Ask onOpenSettings={() => setRoute('settings')} />
             ) : route === 'siri' ? (
@@ -919,16 +950,26 @@ function Shell() {
       />
       {phone && (
         <>
-          {nativeTabsH === null && !nativeTabsExpected && !tabless && <TabBar
+          {nativeTabsH === null && !nativeTabsExpected && !tabless && !addChatFull && <TabBar
             route={route}
             onNavigate={(next) => {
               setMoreOpen(false);
+              setAddChat(false);
               setRoute(next);
             }}
-            onAdd={() => newTransaction()}
-            onMore={() => setMoreOpen((open) => !open)}
+            onAdd={() => setAddChat(true)}
             moreOpen={moreOpen}
           />}
+          {addChat && (
+            <AddChat
+              onClose={() => setAddChat(false)}
+              onManual={() => {
+                setAddChat(false);
+                newTransaction();
+              }}
+              onFull={setAddChatFull}
+            />
+          )}
           <MoreSheet
             open={moreOpen}
             onClose={() => setMoreOpen(false)}

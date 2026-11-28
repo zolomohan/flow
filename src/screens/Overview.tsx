@@ -235,9 +235,6 @@ export function Overview({
   const categories = overview.topCategories;
   const categoryTotal = categories.reduce((sum, c) => sum + c.total, 0) || 1;
   const label = periodLabel(month, span);
-  // Negative balances and what you have borrowed, which the chip names
-  // rather than quietly folding into the figure above it.
-  const owed = overview.debt;
   // The heat-map is a calendar, so it shows the last month of the window
   // rather than trying to lay a whole year out as one.
   const rhythmDays = span > 1
@@ -262,42 +259,17 @@ export function Overview({
           <div className="hero-top">
             <div>
               <span className="hero-label">Net worth</span>
-              <BigMoney value={overview.netWorth} className="hero-amount" />
-              <div className="hero-chips">
-                <HeroChip
-                  dot="in"
-                  label="Cash"
-                  value={overview.liquid}
-                  hint="See your accounts"
-                  onClick={onGoAccounts}
-                />
-                {overview.investments > 0 && (
-                  <HeroChip
-                    icon="coins"
-                    label="Invested"
-                    value={overview.investments}
-                    hint="See your investments"
-                    onClick={() => onGoInvestments(portfolio.sleeves[0]?.tab ?? 'fund')}
-                  />
-                )}
-                {overview.lentOutstanding > 0 && (
-                  <HeroChip
-                    dot="in"
-                    label="Lent out"
-                    value={overview.lentOutstanding}
-                    hint="See who owes you"
-                    onClick={onGoDebts}
-                  />
-                )}
-                {owed > 0 && (
-                  <HeroChip
-                    dot="out"
-                    label="Owed"
-                    value={owed}
-                    hint="See what you owe"
-                    onClick={onGoDebts}
-                  />
-                )}
+              {/* The period's trend rides with the figure it moves, rather
+                  than in a footer of its own. */}
+              <div className="hero-value">
+                <BigMoney value={overview.netWorth} className="hero-amount" />
+                <span
+                  className={`hero-trend ${net >= 0 ? 'is-up' : 'is-down'}`}
+                  title={`${money(Math.abs(net))} ${net >= 0 ? 'saved' : 'over'} · ${label}`}
+                >
+                  <Icon name={net >= 0 ? 'trending-up' : 'trending-down'} size={13} />
+                  {money(Math.abs(net))}
+                </span>
               </div>
             </div>
           </div>
@@ -314,19 +286,6 @@ export function Overview({
             />
           </div>
 
-          {/* The one figure here that belongs to the period rather than to
-              the balance sheet, kept off the chip row above so the two are
-              never read as the same kind of number. */}
-          <div className="hero-split">
-            <span className="hero-split-note">
-              <Icon name="calendar-days" size={13} />
-              {label}
-            </span>
-            <span className={`hero-chip ${net >= 0 ? 'is-up' : 'is-down'}`}>
-              <Icon name={net >= 0 ? 'trending-up' : 'trending-down'} size={13} />
-              {money(Math.abs(net))} {net >= 0 ? 'saved' : 'over'}
-            </span>
-          </div>
         </motion.section>
 
         {/* Where the money actually sits, given a card of its own: the hero
@@ -748,25 +707,6 @@ function BandHead({ title, hint }: { title: string; hint: string }) {
       <h2>{title}</h2>
       <p>{hint}</p>
     </div>
-  );
-}
-
-/** A figure off the balance sheet, and the screen it belongs to. */
-function HeroChip({
-  label, value, hint, onClick, dot, icon,
-}: {
-  label: string;
-  value: Paise;
-  hint: string;
-  onClick: () => void;
-  dot?: 'in' | 'out';
-  icon?: string;
-}) {
-  return (
-    <button type="button" className="hero-chip is-link" onClick={onClick} title={hint}>
-      {dot ? <i className={`dot dot-${dot}`} /> : icon ? <Icon name={icon} size={13} /> : null}
-      {label} {money(value)}
-    </button>
   );
 }
 

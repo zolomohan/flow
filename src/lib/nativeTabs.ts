@@ -14,8 +14,16 @@ import { isDesktop } from './api';
 const PLUGIN = 'native-tabs';
 
 /** The routes that have a tab. Everything else lives in the drawer. */
-export type NativeTab = 'overview' | 'transactions' | 'siri' | 'ask';
-export const NATIVE_TAB_ROUTES = new Set<string>(['overview', 'transactions', 'siri', 'ask']);
+export type NativeTab = 'overview' | 'transactions' | 'investments' | 'cards';
+/** Each tab's route and the SF Symbol it is drawn with, in order. Sent with
+ *  `show`, so the bar can change without rebuilding the app. */
+const TABS: { id: NativeTab; symbol: string }[] = [
+  { id: 'overview', symbol: 'square.grid.2x2' },
+  { id: 'transactions', symbol: 'list.bullet.rectangle' },
+  { id: 'investments', symbol: 'chart.line.uptrend.xyaxis' },
+  { id: 'cards', symbol: 'creditcard' },
+];
+export const NATIVE_TAB_ROUTES = new Set<string>(TABS.map((t) => t.id));
 
 const onIOS = isDesktop && /iPhone|iPad|iPod/.test(navigator.userAgent);
 
@@ -23,15 +31,21 @@ const onIOS = isDesktop && /iPhone|iPad|iPod/.test(navigator.userAgent);
  *  not even for the moment before UIKit's arrives. */
 export const nativeTabsExpected = onIOS;
 
+/* UIKit's bar outlives the page: a reload paints the splash again under a
+   bar still up from before. Put it down at once; `show` brings it back. */
+if (onIOS) invoke(`plugin:${PLUGIN}|set_hidden`, { hidden: true }).catch(() => {});
+
 let shown: Promise<number | null> | null = null;
 let active = false;
 
 /** Puts the bar up. Resolves to the height it covers, or null if there is none. */
 export function showNativeTabs(): Promise<number | null> {
   if (!onIOS) return Promise.resolve(null);
-  shown ??= invoke<{ height: number }>(`plugin:${PLUGIN}|show`)
+  shown ??= invoke<{ height: number }>(`plugin:${PLUGIN}|show`, { tabs: TABS })
     .then((r) => {
       active = true;
+      // Anything that held it down before it was up still does.
+      if (sheets > 0) invoke(`plugin:${PLUGIN}|set_hidden`, { hidden: true }).catch(() => {});
       return r.height;
     })
     .catch(() => null);

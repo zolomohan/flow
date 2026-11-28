@@ -70,7 +70,7 @@ export const backFade: MotionValue<number> = motionValue(1);
 
 /** Anything the person is typing into, or a sheet over the page, keeps its
  *  touches: neither gesture means anything there. */
-const IGNORE = 'input, textarea, select, [contenteditable], .sheet, .scrim, .palette';
+const IGNORE = 'input, textarea, select, [contenteditable], .sheet, .scrim, .palette, .add-chat, .add-chat-shade';
 
 export function useDrawer({
   page,

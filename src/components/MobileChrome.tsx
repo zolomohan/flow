@@ -17,7 +17,7 @@
 import { motion, useTransform } from 'motion/react';
 import { DRAWER_WIDTH, drawerProgress } from '../lib/drawer';
 import { Icon, SiriMark } from './Icon';
-import { NAV, Sidebar, type Route } from './Sidebar';
+import { INVESTMENT_TABS, NAV, Sidebar, isInvestmentRoute, type Route } from './Sidebar';
 import { NATIVE_TAB_ROUTES } from '../lib/nativeTabs';
 import { Sheet } from './ui';
 import { useStore } from '../lib/store';
@@ -27,10 +27,15 @@ import { press, spring } from '../lib/motion';
 const TABS: { id: Route; label: string; icon: string }[] = [
   { id: 'overview', label: 'Dashboard', icon: 'layout-dashboard' },
   { id: 'transactions', label: 'Ledger', icon: 'list-filter' },
-  { id: 'siri', label: 'Inbox', icon: 'sparkles' },
+  { id: 'investments', label: 'Investments', icon: 'trending-up' },
+  { id: 'cards', label: 'Cards', icon: 'credit-card' },
 ];
 
 const TAB_IDS = new Set<Route>(TABS.map((t) => t.id));
+
+/** What the drawer leaves out: what has a tab, and the sleeves, which the
+ *  Investments tab opens onto. */
+const DRAWER_HIDES = new Set<string>([...NATIVE_TAB_ROUTES, ...Object.keys(INVESTMENT_TABS)]);
 
 /**
  * The bar across the bottom. Four destinations and the one thing a phone is
@@ -39,18 +44,13 @@ const TAB_IDS = new Set<Route>(TABS.map((t) => t.id));
  * since it goes somewhere no back button returns from.
  */
 export function TabBar({
-  route, onNavigate, onAdd, onMore, moreOpen,
+  route, onNavigate, onAdd, moreOpen,
 }: {
   route: Route;
   onNavigate: (route: Route) => void;
   onAdd: () => void;
-  onMore: () => void;
   moreOpen: boolean;
 }) {
-  const { captures } = useStore();
-  // More is lit by whatever is on screen as much as by being open: a screen
-  // reached through it is still a screen that lives behind it.
-  const moreActive = moreOpen || !TAB_IDS.has(route);
 
   return (
     <nav className="tab-bar" aria-label="Sections">
@@ -73,18 +73,15 @@ export function TabBar({
         <Icon name="plus" size={23} strokeWidth={2.5} />
       </motion.button>
 
-      <TabButton
-        tab={TABS[2]}
-        active={TABS[2].id === route && !moreOpen}
-        count={captures.length}
-        onClick={() => onNavigate(TABS[2].id)}
-      />
+      {TABS.slice(2).map((tab) => (
+        <TabButton
+          key={tab.id}
+          tab={tab}
+          active={(tab.id === route || (tab.id === 'investments' && isInvestmentRoute(route))) && !moreOpen}
+          onClick={() => onNavigate(tab.id)}
+        />
+      ))}
 
-      <TabButton
-        tab={{ id: 'settings', label: 'More', icon: 'grid-2x2' }}
-        active={moreActive}
-        onClick={onMore}
-      />
     </nav>
   );
 }
@@ -126,7 +123,7 @@ export function MoreSheet({
   onNavigate: (route: Route) => void;
 }) {
   const { theme, toggleTheme } = useStore();
-  const rest = NAV.filter((item) => !TAB_IDS.has(item.id));
+  const rest = NAV.filter((item) => !TAB_IDS.has(item.id) && !isInvestmentRoute(item.id));
 
   const go = (next: Route) => {
     onNavigate(next);
@@ -185,7 +182,7 @@ export function PhoneDrawer({
     <motion.div className="phone-drawer" style={{ x: panelX, opacity: drawerProgress }}>
       <Sidebar
         drawer
-        hide={NATIVE_TAB_ROUTES}
+        hide={DRAWER_HIDES}
         route={route}
         onNavigate={onNavigate}
         onAdd={none}

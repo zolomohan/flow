@@ -13,6 +13,7 @@ export type Route =
   | 'siri'
   | 'planned'
   | 'debts'
+  | 'investments'
   | 'funds'
   | 'gold'
   | 'deposits'
@@ -88,6 +89,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: 'Investments',
     items: [
+      { id: 'investments', label: 'Portfolio', icon: 'piggy-bank' },
       { id: 'funds', label: 'Mutual funds', icon: 'trending-up' },
       { id: 'gold', label: 'Gold', icon: 'coins' },
       { id: 'deposits', label: 'Deposits', icon: 'landmark' },

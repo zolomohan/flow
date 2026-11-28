@@ -6,6 +6,15 @@ struct SelectArgs: Decodable {
   let id: String
 }
 
+struct TabArg: Decodable, Equatable {
+  let id: String
+  let symbol: String
+}
+
+struct ShowArgs: Decodable {
+  let tabs: [TabArg]?
+}
+
 struct HiddenArgs: Decodable {
   let hidden: Bool
 }
@@ -49,12 +58,13 @@ class NativeTabsPlugin: Plugin, UITabBarControllerDelegate {
   private var tint: UIColor = UIColor(hex: "#20294c")!
 
   /// Ids are the page's routes. Icons only: the four are few enough to be
-  /// told apart by shape.
-  private let routes: [(id: String, title: String, symbol: String)] = [
-    ("overview", "Dashboard", "square.grid.2x2"),
-    ("transactions", "Ledger", "list.bullet.rectangle"),
-    ("siri", "Inbox", "tray"),
-    ("ask", "Ask", "bubble.left.and.text.bubble.right"),
+  /// told apart by shape. The page sends its own list with `show`, so a
+  /// change of tabs needs no rebuild; this is what is drawn if it does not.
+  private var routes: [TabArg] = [
+    TabArg(id: "overview", symbol: "square.grid.2x2"),
+    TabArg(id: "transactions", symbol: "list.bullet.rectangle"),
+    TabArg(id: "investments", symbol: "chart.line.uptrend.xyaxis"),
+    TabArg(id: "cards", symbol: "creditcard"),
   ]
 
   override func load(webview: WKWebView) {
@@ -76,28 +86,8 @@ class NativeTabsPlugin: Plugin, UITabBarControllerDelegate {
       let parent = manager.viewController
     else { return nil }
 
-    let symbol = UIImage.SymbolConfiguration(pointSize: 17, weight: .medium)
-    var tabs: [UITab] = routes.map { route in
-      UITab(
-        title: "",
-        image: UIImage(systemName: route.symbol, withConfiguration: symbol),
-        identifier: route.id
-      ) { [weak self] _ in self?.emptyPage() ?? UIViewController() }
-    }
-    let add = UISearchTab { [weak self] _ in self?.emptyPage() ?? UIViewController() }
-    add.title = ""
-    add.image = UIImage(
-      systemName: "plus",
-      withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold))
-    tabs.append(add)
-
-    let controller = UITabBarController(tabs: tabs)
-    // iOS 26 sets the search tab apart on its own. iOS 27 only does that for
-    // the tab it is told is prominent, and otherwise draws it in the bar as
-    // a fifth item.
-    if #available(iOS 27.0, *) {
-      controller.prominentTabIdentifier = add.identifier
-    }
+    let controller = UITabBarController(tabs: makeTabs())
+    markProminent(controller)
     controller.delegate = self
     controller.view.backgroundColor = .clear
     controller.view.tintColor = tint
@@ -131,6 +121,37 @@ class NativeTabsPlugin: Plugin, UITabBarControllerDelegate {
     return controller
   }
 
+  @available(iOS 18.0, *)
+  private func makeTabs() -> [UITab] {
+    let symbol = UIImage.SymbolConfiguration(pointSize: 17, weight: .medium)
+    var tabs: [UITab] = routes.map { route in
+      UITab(
+        title: "",
+        image: UIImage(systemName: route.symbol, withConfiguration: symbol),
+        identifier: route.id
+      ) { [weak self] _ in self?.emptyPage() ?? UIViewController() }
+    }
+    let add = UISearchTab { [weak self] _ in self?.emptyPage() ?? UIViewController() }
+    add.title = ""
+    add.image = UIImage(
+      systemName: "plus",
+      withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold))
+    tabs.append(add)
+    return tabs
+  }
+
+  /// iOS 26 sets the search tab apart on its own. iOS 27 only does that for
+  /// the tab it is told is prominent, and otherwise draws it in the bar as a
+  /// fifth item.
+  @available(iOS 18.0, *)
+  private func markProminent(_ controller: UITabBarController) {
+    if #available(iOS 27.0, *),
+      let add = controller.tabs.first(where: { $0 is UISearchTab })
+    {
+      controller.prominentTabIdentifier = add.identifier
+    }
+  }
+
   // MARK: - UITabBarControllerDelegate
 
   @available(iOS 18.0, *)
@@ -155,14 +176,27 @@ class NativeTabsPlugin: Plugin, UITabBarControllerDelegate {
   /// Puts the bar up and answers with how much of the bottom of the screen it
   /// covers, home indicator included.
   @objc public func show(_ invoke: Invoke) {
+    let wanted = (try? invoke.parseArgs(ShowArgs.self))?.tabs
     DispatchQueue.main.async {
+      // The bar outlives a reload of the page, so a new list of tabs is
+      // swapped into the one already up rather than waiting for a relaunch.
+      var changed = false
+      if let wanted = wanted, !wanted.isEmpty, wanted != self.routes {
+        self.routes = wanted
+        changed = true
+      }
       guard let controller = self.install(), let container = self.container,
         let host = container.superview
       else {
         invoke.reject("No native tab bar here (needs iOS 18 and a web view in a window).")
         return
       }
+      if changed, #available(iOS 18.0, *) {
+        controller.setTabs(self.makeTabs(), animated: false)
+        self.markProminent(controller)
+      }
       container.isHidden = false
+      container.alpha = 1
       host.bringSubviewToFront(container)
       host.layoutIfNeeded()
       let bar = controller.tabBar

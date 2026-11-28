@@ -1487,3 +1487,128 @@
     grid-template-rows: minmax(0, 1fr);
   }
 }
+
+/* ───────────────────────── The + panel: a chat that drags up to full screen.
+   `--p` runs 0 (half, above the tab bar) to 1 (the whole screen); the height,
+   the corners and the gap below are all read from it, so a drag moves one
+   number. The keyboard, when it is up, lifts the panel over it. */
+.add-chat-shade {
+  position: fixed;
+  inset: 0;
+  z-index: 56;
+  background: rgba(10, 14, 30, 0.32);
+}
+.add-chat {
+  --compact: 52dvh;
+  --lift: max(calc(var(--tabs-h, 0px) * (1 - var(--p))), var(--kb, 0px));
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: var(--lift);
+  z-index: 57;
+  display: flex;
+  flex-direction: column;
+  height: min(
+    calc(var(--compact) + (100dvh - var(--compact)) * var(--p)),
+    calc(100dvh - var(--lift))
+  );
+  padding-top: calc(var(--safe-t, 0px) * var(--p));
+  background: var(--surface);
+  border-radius: calc(26px * (1 - var(--p))) calc(26px * (1 - var(--p))) 0 0;
+  box-shadow: 0 -12px 40px -12px rgba(16, 24, 48, 0.3);
+  overflow: hidden;
+  touch-action: none;
+}
+.add-chat-head { flex-shrink: 0; padding: 8px 12px 10px 16px; cursor: grab; touch-action: none; }
+.add-chat-grip {
+  display: block;
+  width: 38px;
+  height: 5px;
+  margin: 0 auto 10px;
+  border-radius: 99px;
+  background: var(--line-strong);
+}
+.add-chat-bar { display: flex; align-items: center; gap: 10px; }
+.add-chat-mark {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  background: var(--violet-soft);
+  color: var(--violet);
+  flex-shrink: 0;
+}
+.add-chat-title { display: flex; flex-direction: column; flex: 1; min-width: 0; font-size: 16px; font-weight: 650; color: var(--ink); }
+.add-chat-title small { font-size: 12px; font-weight: 500; color: var(--ink-3); }
+.add-chat-manual {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 13px;
+  border-radius: 99px;
+  background: var(--surface-inset);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+}
+.add-chat-close {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 99px;
+  background: var(--surface-inset);
+  color: var(--ink-2);
+}
+.add-chat-log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 6px 16px 14px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 15px;
+}
+.add-chat-log .ask-q-bubble { font-size: 15px; }
+.add-chat-log .ask-q-bubble,
+.add-chat-log .chat-md { -webkit-user-select: text; user-select: text; }
+.add-chat-hints { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 10px; }
+.add-chat-hints button {
+  padding: 9px 14px;
+  border-radius: 18px;
+  background: var(--surface-inset);
+  color: var(--ink-2);
+  font-size: 14.5px;
+  text-align: left;
+}
+.add-chat-compose {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+  margin: 0 12px;
+  padding: 6px 6px 6px 8px;
+  margin-bottom: calc(10px + var(--safe-b, env(safe-area-inset-bottom, 0px)) * var(--p));
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: var(--surface);
+}
+.add-chat-compose textarea {
+  flex: 1;
+  min-height: 34px;
+  padding: 7px 2px;
+  border: none;
+  outline: none;
+  resize: none;
+  background: none;
+  font-size: 16px;
+  line-height: 1.4;
+  color: var(--ink);
+}
+.add-chat-compose .ask-send { border-radius: 99px; }

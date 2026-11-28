@@ -9637,3 +9637,133 @@ kbd {
   display: inline-flex;
   align-items: center;
 }
+
+/* Net worth with the period's trend beside it: one figure and which way it
+   went, rather than a chip row and a footer. */
+.hero-value { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; }
+.hero-trend {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  transform: translateY(-4px);
+}
+.hero-trend.is-up { color: var(--green-bright); }
+.hero-trend.is-down { color: #ff9a94; }
+
+/* ───────────────────────────── Investments page (Portfolio) */
+.portfolio-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 20px 22px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-2xl);
+  box-shadow: var(--shadow-xs);
+}
+.portfolio-range {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  font-size: 13.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.portfolio-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: var(--wide);
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.portfolio-value { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; }
+.portfolio-amount {
+  font-size: 36px;
+  font-weight: 650;
+  letter-spacing: var(--tight);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.portfolio-trend {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.portfolio-sub { font-size: 13px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.portfolio .is-up { color: var(--green); }
+.portfolio .is-down { color: var(--red); }
+.portfolio-chart { margin: 10px -6px 0; }
+
+.portfolio-group { margin-top: 22px; }
+.portfolio-group-head { display: flex; align-items: center; gap: 8px; padding: 0 4px 8px; }
+.portfolio-group-head h2 { flex: 1; margin: 0; font-size: 15px; font-weight: 600; color: var(--ink); }
+.portfolio-group-icon {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r-sm);
+  background: var(--surface-inset);
+}
+.portfolio-group-worth { font-size: 13.5px; font-weight: 600; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+.portfolio-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+.portfolio-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 112px;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-xs);
+  cursor: pointer;
+  transition: transform var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+.portfolio-card:hover { border-color: var(--line); }
+.portfolio-card:active { transform: scale(0.985); }
+.portfolio-card-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.portfolio-card-name {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.portfolio-card-detail {
+  font-size: 12px;
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.portfolio-card-figures {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.portfolio-card-figures strong { font-size: 16px; font-weight: 650; color: var(--ink); }
+.portfolio-card-chart { display: block; height: 44px; }
+.portfolio-card-flat {
+  display: block;
+  height: 100%;
+  background: linear-gradient(var(--line), var(--line)) center / 100% 1.5px no-repeat;
+  opacity: 0.8;
+}
