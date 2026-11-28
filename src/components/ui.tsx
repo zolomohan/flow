@@ -652,6 +652,16 @@ export function Sheet({
                 {onBack && (
                   <IconButton icon="chevron-left" label="Back" onClick={onBack} />
                 )}
+                {/* A phone's sheet says Cancel where iOS does, top left, and
+                    carries its one primary button top right — the footer is
+                    drawn again up here and the stylesheet keeps only that
+                    button of it (`.sheet-head-action` in mobile.css). Saving
+                    is then never a scroll away or under the keyboard. */}
+                {phone && footer && !onBack && (
+                  <button type="button" className="sheet-head-cancel" onClick={onClose}>
+                    Cancel
+                  </button>
+                )}
                 {/* Keyed on the title, so moving between pages reads as a
                     change of place rather than text quietly swapping. */}
                 <AnimatePresence mode="wait" initial={false}>
@@ -667,15 +677,19 @@ export function Sheet({
                     {subtitle && <p className="sheet-sub">{subtitle}</p>}
                   </motion.div>
                 </AnimatePresence>
-                {aside}
-                <IconButton icon="x" label="Close" onClick={onClose} />
+                {!(phone && footer) && aside}
+                {phone && footer ? (
+                  <div className="sheet-head-action">{footer}</div>
+                ) : (
+                  <IconButton icon="x" label="Close" onClick={onClose} />
+                )}
               </header>
               <div className="sheet-body">
                 <SheetCanvas full={full || phone}>
                   {children}
                 </SheetCanvas>
               </div>
-              {footer && <footer className="sheet-foot">{footer}</footer>}
+              {footer && <footer className={`sheet-foot ${phone ? 'is-phone' : ''}`}>{footer}</footer>}
             </motion.div>
           </motion.div>
         </SheetCtx.Provider>

@@ -451,6 +451,58 @@
   .sheet-foot .foot-lead { flex: 1 1 100%; flex-wrap: wrap; gap: 6px; }
   .sheet-foot:has(.foot-lead) .foot-actions { flex: 1 1 100%; margin-left: 0; }
   .sheet-foot:has(.foot-lead) .foot-actions > * { flex: 1; justify-content: center; }
+  /* Cancel top left, the title in the middle, the primary action top right:
+     the footer is drawn a second time in the header, and only its last
+     group's primary button is shown there. The footer keeps what is left —
+     the tools and the destructive buttons — and goes when nothing is. */
+  .sheet-head:has(.sheet-head-action) {
+    display: grid;
+    grid-template-columns: minmax(72px, auto) minmax(0, 1fr) minmax(72px, auto);
+    align-items: center;
+    padding: 24px 8px 10px;
+  }
+  .sheet-head:has(.sheet-head-action) .sheet-heading { text-align: center; min-width: 0; }
+  .sheet-head:has(.sheet-head-action) .sheet-title,
+  .sheet-head:has(.sheet-head-action) .sheet-sub {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .sheet-head:has(.sheet-head-action) > .icon-btn { justify-self: start; }
+  .sheet-head-cancel {
+    justify-self: start;
+    padding: 8px;
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--blue);
+  }
+  .sheet-head-action { justify-self: end; display: flex; min-width: 0; }
+  .sheet-head-action > *,
+  .sheet-head-action .foot-actions > * { display: none; }
+  .sheet-head-action > .foot-actions:last-child { display: flex; }
+  .sheet-head-action > .foot-actions:last-child > .btn-primary {
+    display: inline-flex;
+    height: auto;
+    padding: 8px;
+    background: none;
+    border: 0;
+    box-shadow: none;
+    color: var(--blue);
+    font-size: 16px;
+    font-weight: 650;
+    white-space: nowrap;
+  }
+  .sheet-head-action .btn-primary svg { display: none; }
+  .sheet-head-action .btn-primary:disabled { color: var(--ink-4); opacity: 1; }
+  .sheet-head-cancel:active,
+  .sheet-head-action .btn-primary:active { opacity: 0.5; }
+
+  .sheet-foot.is-phone > .foot-actions:last-child { display: none; }
+  .sheet-foot.is-phone:not(:has(.foot-lead > *, .foot-actions:not(:last-child))) { display: none; }
+  .sheet:has(.sheet-foot.is-phone) .sheet-body {
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  }
+
   /* The keys are the Mac's way of pressing these; there is no keyboard here
      to press them with. */
   .btn-keys,
