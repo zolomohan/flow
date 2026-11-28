@@ -16,11 +16,6 @@ import type { InvestmentLot } from '../lib/types';
 import { isDeposit } from '../lib/types';
 import type { Holding, HoldingKind, LotKind, Scheme } from '../lib/types';
 
-const KINDS: SegmentOption<HoldingKind>[] = [
-  { value: 'gold', label: 'Gold', icon: 'coins', accent: 'var(--amber)' },
-  { value: 'fund', label: 'Mutual fund', icon: 'trending-up', accent: 'var(--violet)' },
-];
-
 /** Which kind of deposit, once the sheet is already on deposits. */
 const DEPOSIT_KINDS: SegmentOption<HoldingKind>[] = [
   { value: 'fd', label: 'Fixed', icon: 'landmark', accent: 'var(--blue)' },
@@ -190,7 +185,11 @@ export function HoldingSheet({
     <Sheet
       open={open}
       onClose={onClose}
-      title={editing ? 'Edit holding' : 'New holding'}
+      title={
+        editing
+          ? 'Edit holding'
+          : kind === 'gold' ? 'New gold' : kind === 'fund' ? 'New mutual fund' : 'New deposit'
+      }
       subtitle={
         kind === 'fd'
           ? 'One sum, left to earn until it matures'
@@ -226,13 +225,17 @@ export function HoldingSheet({
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit();
         }}
       >
-        <Segmented
-          options={isDeposit(kind) ? DEPOSIT_KINDS : KINDS}
-          value={kind}
-          onChange={setKind}
-          name="holding-kind"
-          size="lg"
-        />
+        {/* Each sleeve adds its own kind: a fund from the funds screen, gold
+            from gold. Only a deposit has a choice left to make. */}
+        {isDeposit(kind) && (
+          <Segmented
+            options={DEPOSIT_KINDS}
+            value={kind}
+            onChange={setKind}
+            name="holding-kind"
+            size="lg"
+          />
+        )}
 
         {isDeposit(kind) ? (
           <>

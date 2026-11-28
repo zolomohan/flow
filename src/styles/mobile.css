@@ -455,47 +455,64 @@
      the footer is drawn a second time in the header, and only its last
      group's primary button is shown there. The footer keeps what is left —
      the tools and the destructive buttons — and goes when nothing is. */
+  /* iOS 26's sheet: a round close top left, the title in the middle and the
+     primary action top right as a round tick in the accent. The footer is
+     drawn a second time in the header and only its last group's primary
+     button is shown there, as the tick; its words stay as its label. The
+     footer keeps what is left — the tools and the destructive buttons — and
+     goes when nothing is. */
   .sheet-head:has(.sheet-head-action) {
     display: grid;
-    grid-template-columns: minmax(72px, auto) minmax(0, 1fr) minmax(72px, auto);
+    grid-template-columns: 44px minmax(0, 1fr) 44px;
     align-items: center;
-    padding: 24px 8px 10px;
+    padding: 22px 12px 12px;
   }
   .sheet-head:has(.sheet-head-action) .sheet-heading { text-align: center; min-width: 0; }
-  .sheet-head:has(.sheet-head-action) .sheet-title,
-  .sheet-head:has(.sheet-head-action) .sheet-sub {
+  .sheet-head:has(.sheet-head-action) .sheet-title {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .sheet-head:has(.sheet-head-action) .sheet-sub { display: none; }
   .sheet-head:has(.sheet-head-action) > .icon-btn { justify-self: start; }
+  .sheet-head-cancel,
+  .sheet-head-action > .foot-actions:last-child > .btn-primary {
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border-radius: 99px;
+  }
   .sheet-head-cancel {
     justify-self: start;
-    padding: 8px;
-    font-size: 16px;
-    font-weight: 500;
-    color: var(--blue);
+    background: var(--surface-inset);
+    color: var(--ink-2);
   }
   .sheet-head-action { justify-self: end; display: flex; min-width: 0; }
   .sheet-head-action > *,
   .sheet-head-action .foot-actions > * { display: none; }
   .sheet-head-action > .foot-actions:last-child { display: flex; }
   .sheet-head-action > .foot-actions:last-child > .btn-primary {
-    display: inline-flex;
-    height: auto;
-    padding: 8px;
-    background: none;
+    position: relative;
     border: 0;
-    box-shadow: none;
-    color: var(--blue);
-    font-size: 16px;
-    font-weight: 650;
-    white-space: nowrap;
+    background: var(--blue);
+    box-shadow: 0 4px 12px -4px color-mix(in srgb, var(--blue) 60%, transparent);
+    font-size: 0;
+    color: #fff;
   }
   .sheet-head-action .btn-primary svg { display: none; }
-  .sheet-head-action .btn-primary:disabled { color: var(--ink-4); opacity: 1; }
+  .sheet-head-action .btn-primary::after {
+    content: '';
+    width: 19px;
+    height: 19px;
+    background: currentColor;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E") center / contain no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E") center / contain no-repeat;
+  }
+  .sheet-head-action .btn-primary:disabled { background: var(--surface-inset); color: var(--ink-4); box-shadow: none; opacity: 1; }
   .sheet-head-cancel:active,
-  .sheet-head-action .btn-primary:active { opacity: 0.5; }
+  .sheet-head-action .btn-primary:active { transform: scale(0.92); }
 
   .sheet-foot.is-phone > .foot-actions:last-child { display: none; }
   .sheet-foot.is-phone:not(:has(.foot-lead > *, .foot-actions:not(:last-child))) { display: none; }
@@ -1603,3 +1620,102 @@
   color: var(--ink);
 }
 .add-chat-compose .ask-send { border-radius: 99px; }
+
+/* ───────────────── A page with no tab bar: its + floats, Liquid Glass.
+   Bottom right, where a thumb is, over the page rather than in its head. */
+@media (max-width: 760px) {
+  .app.is-tabless .screen-head .btn:has(> svg.lucide-plus) {
+    position: fixed;
+    right: 18px;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
+    z-index: 40;
+    width: 58px;
+    height: 58px;
+    margin: 0;
+    border: 1px solid rgba(255, 255, 255, 0.55);
+    background: rgba(255, 255, 255, 0.42);
+    -webkit-backdrop-filter: blur(18px) saturate(1.8);
+    backdrop-filter: blur(18px) saturate(1.8);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.7),
+      inset 0 -1px 0 rgba(255, 255, 255, 0.15),
+      0 10px 28px -8px rgba(16, 24, 48, 0.35),
+      0 2px 6px rgba(16, 24, 48, 0.08);
+    color: var(--ink);
+  }
+  .app.is-tabless .screen-head .btn:has(> svg.lucide-plus) svg { width: 24px; height: 24px; stroke-width: 2.4; }
+  .app.is-tabless .screen-head .btn:has(> svg.lucide-plus):active { transform: scale(0.92); }
+  :root:not([data-theme='light']) .app.is-tabless .screen-head .btn:has(> svg.lucide-plus) {
+    border-color: rgba(255, 255, 255, 0.14);
+    background: rgba(40, 44, 60, 0.45);
+    color: #fff;
+  }
+}
+
+/* ───────────────── Fewer subtitles. A line under every title explaining
+   it read as a form, not an app: on the phone the title says it alone. */
+@media (max-width: 760px) {
+  .screen-head:not(.detail-head) p,
+  .card-hint,
+  .sheet-sub { display: none; }
+}
+
+/* ───────────────── The Dashboard's cards, cut down for the phone.
+   Each card says one thing and the rest goes: tiles become a list, the
+   labels, counts and hints that only restate the heading are dropped, and
+   a card's way in is a chevron rather than a word and an arrow. */
+@media (max-width: 760px) {
+  /* Card links: a chevron in the corner. */
+  .ov-stack .card-head .btn-quiet,
+  .spend-grid .card-head .btn-quiet {
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    justify-content: center;
+    font-size: 0;
+    gap: 0;
+    color: var(--ink-4);
+  }
+  .ov-stack .card-head .btn-quiet svg,
+  .spend-grid .card-head .btn-quiet svg { width: 18px; height: 18px; }
+
+  /* Where it sits: a list, value on the right. */
+  .wallet-grid { display: flex; flex-direction: column; gap: 0; margin: 0 -4px; }
+  .wallet-tile {
+    padding: 9px 4px;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .wallet-tile:last-child { border-bottom: 0; }
+  .wallet-text { flex: 1; flex-direction: row; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .wallet-text strong { font-size: 15px; font-weight: 500; }
+  .wallet-text > span { font-size: 15px; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .wallet-glyph { width: 30px; height: 30px; }
+
+  /* Investments and debts: the figure, the line, the rows. */
+  .wealth-chart > span,
+  .sleeve-list .cat-count,
+  .sleeve-list .meter,
+  .flow-figures .delta-flat,
+  .owing-name small { display: none; }
+  .sleeve-list .cat-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+  /* Spending: the band's sentence goes, the tiles lose their glyphs and
+     footnotes and sit as four figures. */
+  .ov-band p { display: none; }
+  .stat { padding: 12px 14px; gap: 4px; }
+  .stat-glyph, .stat-hint { display: none; }
+  .stat-label { font-size: 10.5px; }
+  .stat-value { font-size: 19px; }
+
+  /* Recent activity: who and how much; the tags are the ledger's business. */
+  .recent-card .tx-tags { display: none !important; }
+
+  /* An empty card is a line, not a poster. */
+  .planned-card .empty-art-wrap,
+  .recent-card .empty-art-wrap { display: none; }
+  .planned-card .empty,
+  .recent-card .empty { padding: 4px 0 8px; min-height: 0; }
+}

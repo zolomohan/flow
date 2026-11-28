@@ -11,7 +11,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import { PriceChart, Sparkline } from '../components/charts';
 import { Icon } from '../components/Icon';
-import { Button, Empty, Segmented, type SegmentOption } from '../components/ui';
+import { Segmented, type SegmentOption } from '../components/ui';
 import { api } from '../lib/api';
 import { useStore } from '../lib/store';
 import { money, percent } from '../lib/format';
@@ -39,10 +39,9 @@ const SLEEVES: { tab: InvestmentTab; name: string; icon: string; color: string }
 const sleeveOf = (kind: HoldingKind): InvestmentTab => (isDeposit(kind) ? 'deposit' : kind);
 
 export function Portfolio({
-  onOpenSleeve, onNewHolding,
+  onOpenSleeve,
 }: {
   onOpenSleeve: (tab: InvestmentTab) => void;
-  onNewHolding: () => void;
 }) {
   const { holdings, revision } = useStore();
   const [range, setRange] = useState<Range>('366');
@@ -87,8 +86,8 @@ export function Portfolio({
   const movedPct = moved !== null && line![0].value > 0 ? (moved / line![0].value) * 100 : null;
 
   const groups = SLEEVES.flatMap((sleeve) => {
+    // Every sleeve has its card, held or not: it is the way in to add one.
     const mine = open.filter((h) => sleeveOf(h.kind) === sleeve.tab);
-    if (!mine.length) return [];
     const base = mine.reduce((s, h) => s + h.invested - h.realised, 0);
     const ret = mine.reduce((s, h) => s + h.totalReturn, 0);
     return [{
@@ -104,22 +103,9 @@ export function Portfolio({
     <div className="screen portfolio">
       <header className="screen-head">
         <h1>Investments</h1>
-        <div className="screen-actions">
-          <Button tone="quiet" icon="plus" onClick={onNewHolding}>
-            Add holding
-          </Button>
-        </div>
       </header>
 
-      {open.length === 0 ? (
-        <Empty
-          screen
-          art="growth"
-          title="Nothing held yet"
-          body="Add a fund, some gold or a deposit and it shows up here, with how it has moved."
-        />
-      ) : (
-        <>
+      {open.length > 0 && (
           <motion.section
             className="portfolio-hero"
             initial={{ opacity: 0, y: 12 }}
@@ -158,6 +144,7 @@ export function Portfolio({
               )}
             </div>
           </motion.section>
+      )}
 
           <motion.div className="portfolio-list" variants={listVariants} initial="hidden" animate="show">
             {groups.map((group) => {
@@ -181,7 +168,7 @@ export function Portfolio({
                       {group.name}
                     </span>
                     <span className="portfolio-card-detail">
-                      {group.count} {group.count === 1 ? 'holding' : 'holdings'}
+                      {group.count === 0 ? 'Nothing yet' : `${group.count} ${group.count === 1 ? 'holding' : 'holdings'}`}
                       {worth > 0 && ` · ${percent((group.worth / worth) * 100)} of it`}
                     </span>
                     <span className="portfolio-card-figures">
@@ -203,8 +190,6 @@ export function Portfolio({
               );
             })}
           </motion.div>
-        </>
-      )}
     </div>
   );
 }

@@ -862,7 +862,7 @@ function Shell() {
                 onEditLot={(holding, lot) => setLotTarget({ holding, lot })}
               />
             ) : route === 'investments' ? (
-              <Portfolio onOpenSleeve={openInvestments} onNewHolding={() => newHolding('fund')} />
+              <Portfolio onOpenSleeve={openInvestments} />
             ) : route === 'ask' ? (
               <Ask onOpenSettings={() => setRoute('settings')} />
             ) : route === 'siri' ? (

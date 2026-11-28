@@ -652,14 +652,14 @@ export function Sheet({
                 {onBack && (
                   <IconButton icon="chevron-left" label="Back" onClick={onBack} />
                 )}
-                {/* A phone's sheet says Cancel where iOS does, top left, and
-                    carries its one primary button top right — the footer is
+                {/* A phone's sheet has iOS's round close top left, and carries
+                    its one primary button top right as a round tick — the footer is
                     drawn again up here and the stylesheet keeps only that
                     button of it (`.sheet-head-action` in mobile.css). Saving
                     is then never a scroll away or under the keyboard. */}
                 {phone && footer && !onBack && (
-                  <button type="button" className="sheet-head-cancel" onClick={onClose}>
-                    Cancel
+                  <button type="button" className="sheet-head-cancel" onClick={onClose} aria-label="Cancel">
+                    <Icon name="x" size={18} strokeWidth={2.4} />
                   </button>
                 )}
                 {/* Keyed on the title, so moving between pages reads as a
