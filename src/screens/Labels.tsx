@@ -76,6 +76,8 @@ export function Labels({
         {labels.length === 0 ? (
           <div className="card-pad">
             <Empty
+              art="label"
+              tone="violet"
               title="No labels yet"
               body="Tag any transaction, then filter your ledger by it."
             />

@@ -653,6 +653,7 @@ export function Overview({
               </div>
             ) : (
               <Empty
+                art="donut"
                 title="No spending yet"
                 body="Categorise your spending to see it broken down here."
               />
@@ -693,6 +694,7 @@ export function Overview({
             ) : (
               <div className="card-pad">
                 <Empty
+                  art="receipt"
                   title="Nothing recorded yet"
                   body="Your latest transactions appear here."
                   action={<Button tone="primary" icon="plus" onClick={onAddTransaction}>Add transaction</Button>}
@@ -736,7 +738,7 @@ export function Overview({
                 ))}
               </motion.ul>
             ) : (
-              <Empty title="No merchants yet" body="Expenses with a merchant are ranked here." />
+              <Empty art="shop" tone="amber" title="No merchants yet" body="Expenses with a merchant are ranked here." />
             )}
           </Card>
         </div>
@@ -999,6 +1001,7 @@ function PlannedCard({ plans, onOpen }: { plans: Plan[]; onOpen: () => void }) {
       />
       {next.length === 0 ? (
         <Empty
+          art="calendar"
           title="Nothing on the horizon"
           body="Add a planned payment to see what is coming up."
           action={

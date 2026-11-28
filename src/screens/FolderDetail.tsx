@@ -293,6 +293,8 @@ export function FolderDetail({
         ) : rows.length === 0 ? (
           <div className="card-pad">
             <Empty
+              art="folder"
+              tone="violet"
               title="Nothing in this folder yet"
               body="Add transactions from anywhere in your ledger. They stay where they are."
             />

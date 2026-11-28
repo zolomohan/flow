@@ -1,3 +1,4 @@
+import { Fragment, useEffect, useRef } from 'react';
 import { motion } from 'motion/react';
 import { Icon, SiriMark } from './Icon';
 import { OWNER_FALLBACK, OWNER_NAME, useStore } from '../lib/store';
@@ -45,28 +46,69 @@ export interface NavItem {
   icon: string;
 }
 
-/** The day's work first, then the two lists the rest of it is filed against.
- *  Exported because the phone's More sheet is this same list with the
- *  destinations that earned a tab taken out of it — one order, one place to
- *  change it, whichever shell is drawing it. */
-export const NAV: NavItem[] = [
-  { id: 'overview', label: 'Overview', icon: 'layout-dashboard' },
-  { id: 'transactions', label: 'Transactions', icon: 'list-filter' },
-  { id: 'ask', label: 'Ask', icon: 'messages-square' },
-  { id: 'siri', label: 'Siri', icon: 'sparkles' },
-  { id: 'planned', label: 'Planned', icon: 'repeat' },
-  { id: 'debts', label: 'Debts', icon: 'arrow-left-right' },
-  { id: 'funds', label: 'Mutual funds', icon: 'trending-up' },
-  { id: 'gold', label: 'Gold', icon: 'coins' },
-  { id: 'deposits', label: 'Deposits', icon: 'landmark' },
-  { id: 'accounts', label: 'Accounts', icon: 'wallet-cards' },
-  { id: 'cards', label: 'Cards', icon: 'credit-card' },
-  { id: 'taxes', label: 'Taxes', icon: 'scroll-text' },
-  { id: 'categories', label: 'Categories', icon: 'tags' },
-  { id: 'labels', label: 'Labels', icon: 'bookmark' },
-  { id: 'folders', label: 'Folders', icon: 'folder' },
-  { id: 'templates', label: 'Templates', icon: 'shapes' },
+export interface NavGroup {
+  /** Left off the first block: a heading over Overview and the ledger would
+   *  only be a word for "the app", which the window already says. */
+  label?: string;
+  items: NavItem[];
+}
+
+/**
+ * Sixteen rows in one list said nothing about their own shape, so the
+ * column is cut the way drivea's is: the day's work at the top under no
+ * heading, then a named run for each kind of thing the rest of it is.
+ * A heading over one or two rows would be furniture; each of these is long
+ * enough to be worth naming.
+ *
+ * - The day's work: where the money went, the two ways of asking about it,
+ *   and what is due.
+ * - Money: what holds it and what is owed against it.
+ * - Investments: the three sleeves, each priced its own way.
+ * - Organise: the lists everything else is filed against.
+ */
+export const NAV_GROUPS: NavGroup[] = [
+  {
+    items: [
+      { id: 'overview', label: 'Overview', icon: 'layout-dashboard' },
+      { id: 'transactions', label: 'Transactions', icon: 'list-filter' },
+      { id: 'ask', label: 'Ask', icon: 'messages-square' },
+      { id: 'siri', label: 'Siri', icon: 'sparkles' },
+      { id: 'planned', label: 'Planned', icon: 'repeat' },
+    ],
+  },
+  {
+    label: 'Money',
+    items: [
+      { id: 'accounts', label: 'Accounts', icon: 'wallet-cards' },
+      { id: 'cards', label: 'Cards', icon: 'credit-card' },
+      { id: 'debts', label: 'Debts', icon: 'arrow-left-right' },
+      { id: 'taxes', label: 'Taxes', icon: 'scroll-text' },
+    ],
+  },
+  {
+    label: 'Investments',
+    items: [
+      { id: 'funds', label: 'Mutual funds', icon: 'trending-up' },
+      { id: 'gold', label: 'Gold', icon: 'coins' },
+      { id: 'deposits', label: 'Deposits', icon: 'landmark' },
+    ],
+  },
+  {
+    label: 'Organise',
+    items: [
+      { id: 'categories', label: 'Categories', icon: 'tags' },
+      { id: 'labels', label: 'Labels', icon: 'bookmark' },
+      { id: 'folders', label: 'Folders', icon: 'folder' },
+      { id: 'templates', label: 'Templates', icon: 'shapes' },
+    ],
+  },
 ];
+
+/** Every row, in the order the column shows them. Exported because the
+ *  phone's More sheet is this same list with the destinations that earned a
+ *  tab taken out of it — one order, one place to change it, whichever shell
+ *  is drawing it. */
+export const NAV: NavItem[] = NAV_GROUPS.flatMap((group) => group.items);
 
 export function Sidebar({
   route, onNavigate, onAdd, onSearch, onBack, onForward, canBack, canForward,
@@ -83,6 +125,32 @@ export function Sidebar({
   const { overview, theme, toggleTheme, settings, captures } = useStore();
   // Whose book this is, as set under Settings › Your data.
   const owner = settings[OWNER_NAME]?.trim() || OWNER_FALLBACK;
+
+  const initial = owner.trim().charAt(0).toUpperCase() || 'F';
+
+  /* The list fades out at whichever edge it runs past, rather than being cut
+     off there: two variables the mask reads, set from how far it has
+     scrolled, so the fades come and go with the scrolling and the ends of
+     the list are drawn whole when they are in view. */
+  const scroller = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const measure = () => {
+      const top = el.scrollTop > 2 ? 1 : 0;
+      const bottom = el.scrollHeight - el.clientHeight - el.scrollTop > 2 ? 1 : 0;
+      el.style.setProperty('--fade-top', String(top));
+      el.style.setProperty('--fade-bottom', String(bottom));
+    };
+    measure();
+    el.addEventListener('scroll', measure, { passive: true });
+    const watch = new ResizeObserver(measure);
+    watch.observe(el);
+    return () => {
+      el.removeEventListener('scroll', measure);
+      watch.disconnect();
+    };
+  }, []);
 
   return (
     <aside className="sidebar">
@@ -117,6 +185,9 @@ export function Sidebar({
       </div>
 
       <div className="brand">
+        {/* Whose book this is: their initial on the brand's navy, the same
+            badge drivea heads its column with. */}
+        <span className="brand-mark" aria-hidden>{initial}</span>
         <div className="brand-text">
           <strong>{owner}</strong>
           <span>{overview ? money(overview.netWorth) : '—'}</span>
@@ -132,35 +203,46 @@ export function Sidebar({
         </span>
       </button>
 
-      <nav className="nav">
-        {NAV.map((item) => {
-          const active = item.id === route;
-          return (
-            <button
-              key={item.id}
-              className={`nav-item ${active ? 'is-active' : ''}`}
-              onClick={() => onNavigate(item.id)}
-              title={item.label}
-            >
-              {active && (
-                <motion.span layoutId="nav-pill" className="nav-pill" transition={spring} />
-              )}
-              <span className="nav-content">
-                {/* Siri is the one line that wears a mark rather than a
-                    glyph: it is what the thing looks like everywhere else on
-                    the machine, and the colour earns its place by saying so. */}
-                {item.id === 'siri' ? <SiriMark size={17} /> : <Icon name={item.icon} size={17} />}
-                <span className="side-label">{item.label}</span>
-                {/* Only Siri counts: it is the one line that is work
-                    waiting rather than a place to go and look. */}
-                {item.id === 'siri' && captures.length > 0 && (
-                  <span className="nav-count">{captures.length}</span>
-                )}
-              </span>
-            </button>
-          );
-        })}
-      </nav>
+      {/* Only the lists scroll. A window too short for the column takes the
+          room out of these, so the brand, Search, Add and Settings stay
+          where they are put at any height. */}
+      <div className="side-scroll" ref={scroller}>
+        {NAV_GROUPS.map((group) => (
+          <Fragment key={group.label ?? 'top'}>
+            {group.label && <p className="nav-group-label">{group.label}</p>}
+            <nav className="nav" aria-label={group.label}>
+              {group.items.map((item) => {
+                const active = item.id === route;
+                return (
+                  <button
+                    key={item.id}
+                    className={`nav-item ${active ? 'is-active' : ''}`}
+                    onClick={() => onNavigate(item.id)}
+                    title={item.label}
+                  >
+                    {active && (
+                      <motion.span layoutId="nav-pill" className="nav-pill" transition={spring} />
+                    )}
+                    <span className="nav-content">
+                      {/* Siri is the one line that wears a mark rather than a
+                          glyph: it is what the thing looks like everywhere else
+                          on the machine, and the colour earns its place by
+                          saying so. */}
+                      {item.id === 'siri' ? <SiriMark size={17} /> : <Icon name={item.icon} size={17} />}
+                      <span className="side-label">{item.label}</span>
+                      {/* Only Siri counts: it is the one line that is work
+                          waiting rather than a place to go and look. */}
+                      {item.id === 'siri' && captures.length > 0 && (
+                        <span className="nav-count">{captures.length}</span>
+                      )}
+                    </span>
+                  </button>
+                );
+              })}
+            </nav>
+          </Fragment>
+        ))}
+      </div>
 
       <motion.button
         whileTap={press}

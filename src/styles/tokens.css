@@ -42,6 +42,16 @@
   /* Surfaces */
   --bg: #f0f1f5;
   --bg-deep: #e6e7ee;
+  /* The paper's grain, brought over from drivea: a 200px tile of
+     single-pixel specks laid over the ground so it reads as paper rather
+     than as a flat fill. Two tiles — dark specks for a light ground, light
+     ones for a dark — and `--grain` is whichever the theme's ground takes.
+     A ground is written `var(--grain) var(--bg)`; cards and sheets stay
+     flat, so the texture is what they are lifted off. */
+  --grain-paper: url('/textures/grain.png');
+  --grain-band: url('/textures/grain-light.png');
+  --grain: var(--grain-paper);
+
   --surface: #ffffff;
   --surface-2: #fafafb;
   --surface-3: #f4f5f9;
@@ -130,6 +140,9 @@
 :root[data-theme='graphite'],
 :root[data-theme='black'] {
   color-scheme: dark;
+
+  /* The lighter specks, as on drivea.co.uk's dark band. */
+  --grain: var(--grain-band);
 
   --ink-on-dark: #eef0f7;
 
@@ -245,4 +258,9 @@
   --shadow-md: 0 9px 25px rgba(0, 0, 0, 0.75);
   --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.8);
   --shadow-pop: 0 32px 80px rgba(0, 0, 0, 0.85);
+}
+
+/* Printed, every ground is flat. */
+@media print {
+  :root { --grain-paper: none; --grain-band: none; }
 }

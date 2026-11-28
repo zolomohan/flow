@@ -838,6 +838,8 @@ export function CardPage({
           </>
         ) : (
           <Empty
+            art={range === 'all' ? 'card' : 'search'}
+            tone={range === 'all' ? 'blue' : 'ink'}
             title={range === 'all' ? 'Nothing on it yet' : `Nothing in ${rangeWords}`}
             body={
               range === 'all'

@@ -210,6 +210,8 @@ export function Folders({
           {folders.length === 0 ? (
             <Empty
               screen
+              art="folder"
+              tone="violet"
               title="No folders yet"
               body="Group the transactions that belong together: a trip, a move, a project."
             />

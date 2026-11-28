@@ -50,6 +50,8 @@ export function Templates({
       {templates.length === 0 ? (
         <Empty
           screen
+          art="templates"
+          tone="violet"
           title="No templates yet"
           body="Save a transaction you write often, then reuse it in one click."
           action={

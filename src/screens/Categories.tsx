@@ -122,6 +122,8 @@ function CategoriesPanel({ onOpen, onOpenCategory }: {
 
       {tops.length === 0 ? (
         <Empty
+          art="tags"
+          tone="violet"
           title={`No ${kind} categories yet`}
           body="Categories group your spending so totals and charts make sense."
         />

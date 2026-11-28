@@ -197,7 +197,7 @@ function TagSheet({
               />
             </div>
           ))}
-          {rows.length === 0 && <Empty title="No categories on this side yet" />}
+          {rows.length === 0 && <Empty art="tags" tone="violet" title="No categories on this side yet" />}
         </div>
       </div>
     </Sheet>
@@ -323,6 +323,7 @@ export function Taxes({ onOpenTransaction }: { onOpenTransaction: (tx: Transacti
       {!loading && data && data.income === 0 && data.unclassifiedCount === 0 ? (
         <Empty
           screen
+          art="taxes"
           title={`Nothing came in during ${data.label}`}
           body="Income for this year appears here, grouped by head."
         />

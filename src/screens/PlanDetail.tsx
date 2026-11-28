@@ -259,6 +259,7 @@ export function PlanDetail({
             <div className="plan-history-loading" />
           ) : stats.count === 0 ? (
             <Empty
+              art="receipt"
               title="No payments linked yet"
               body="Link the payments you have already made to fill in its history."
             />
@@ -282,7 +283,7 @@ export function PlanDetail({
             <div className="plan-history-loading" />
           ) : timeline.length === 0 ? (
             <div className="card-pad">
-              <Empty title="Nothing yet" body="No cycle has come round." />
+              <Empty art="calendar" title="Nothing yet" body="No cycle has come round." />
             </div>
           ) : (
             <motion.ul
