@@ -151,8 +151,11 @@ kbd {
   height: 100%;
   overflow: hidden;
   /* drivea's paper: the grain tile over the ground. It sits on the shell
-     rather than the page, so it holds still while the page scrolls past. */
+     rather than the page, and `ScrollPane` drifts it up as the page scrolls
+     at a fraction of the page's speed (`--ground-y`) — the ground behind,
+     moving slower than what is on it. */
   background: var(--grain) var(--bg);
+  background-position: 0 var(--ground-y, 0px);
 }
 
 .titlebar-drag {
@@ -481,6 +484,11 @@ kbd {
   font-weight: 600;
   letter-spacing: var(--tight);
 }
+/* The dashboard's head is its name and the period it is showing, on one
+   line at any width: the range is what the whole page answers to. */
+.ov-head { align-items: center; flex-wrap: nowrap; }
+.ov-head h1 { min-width: 0; }
+
 .screen-head p {
   margin-top: 2px;
   font-size: 13.5px;
@@ -9475,6 +9483,8 @@ kbd {
   background:
     var(--grain) fixed,
     linear-gradient(var(--bg) calc(100% - 12px), color-mix(in srgb, var(--bg) 0%, transparent));
+  /* Where the shell's grain has drifted to, so the specks still line up. */
+  background-position: 0 var(--ground-y, 0px), 0 0;
 }
 .ask-unsaved {
   display: block;

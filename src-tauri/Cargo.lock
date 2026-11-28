@@ -2326,6 +2326,7 @@ dependencies = [
  "calamine",
  "chrono",
  "keyring",
+ "objc2",
  "reqwest",
  "rusqlite",
  "serde",
@@ -2333,6 +2334,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "tauri-plugin-native-tabs",
  "tauri-plugin-opener",
  "uuid",
 ]
@@ -4173,6 +4175,14 @@ dependencies = [
  "thiserror 2.0.20",
  "toml 1.1.4+spec-1.1.0",
  "url",
+]
+
+[[package]]
+name = "tauri-plugin-native-tabs"
+version = "0.1.0"
+dependencies = [
+ "tauri",
+ "tauri-plugin",
 ]
 
 [[package]]

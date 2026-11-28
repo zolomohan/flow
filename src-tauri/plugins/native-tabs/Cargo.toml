@@ -1,0 +1,13 @@
+[package]
+name = "tauri-plugin-native-tabs"
+version = "0.1.0"
+edition = "2021"
+publish = false
+links = "tauri-plugin-native-tabs"
+description = "The phone's tab bar as a real UITabBar, so iOS draws it in Liquid Glass."
+
+[dependencies]
+tauri = "2"
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }

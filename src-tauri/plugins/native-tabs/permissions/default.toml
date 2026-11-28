@@ -1,0 +1,13 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = "Everything the page needs to drive the native tab bar."
+permissions = [
+  "allow-show",
+  "allow-set-selected",
+  "allow-set-hidden",
+  "allow-set-badge",
+  "allow-set-tint",
+  "allow-register-listener",
+  "allow-remove-listener",
+]

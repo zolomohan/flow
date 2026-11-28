@@ -1078,12 +1078,41 @@ fn book_path(app_data: std::path::PathBuf) -> std::io::Result<std::path::PathBuf
     Ok(book)
 }
 
+/// iOS 26 lays a blur over whatever scrolls under the status bar and the
+/// home indicator, tinted from the webview rather than from the page — so a
+/// screen in any theme wore a band of navy at the top. The page already keeps
+/// its own content clear of both, so the effect has nothing to do but tint.
+/// Older iOS has no such effect and nothing to hide.
+#[cfg(target_os = "ios")]
+fn hide_edge_blur(app: &tauri::App) {
+    let Some(window) = app.get_webview_window("main") else { return };
+    let _ = window.with_webview(|webview| unsafe {
+        use objc2::{msg_send, runtime::AnyObject, sel};
+        let Some(web) = (webview.inner() as *mut AnyObject).as_ref() else { return };
+        let scroll: *mut AnyObject = msg_send![web, scrollView];
+        let Some(scroll) = scroll.as_ref() else { return };
+        for edge in [sel!(topEdgeEffect), sel!(bottomEdgeEffect)] {
+            let has: bool = msg_send![scroll, respondsToSelector: edge];
+            if !has {
+                continue;
+            }
+            let effect: *mut AnyObject = msg_send![scroll, performSelector: edge];
+            if let Some(effect) = effect.as_ref() {
+                let _: () = msg_send![effect, setHidden: true];
+            }
+        }
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         // Picking where a copy of the book goes, and which one to read back.
         .plugin(tauri_plugin_dialog::init())
+        // The phone's tab bar, drawn by UIKit so iOS can make it glass.
+        // Registers nothing off iOS, where the page draws its own.
+        .plugin(tauri_plugin_native_tabs::init())
         .setup(|app| {
             let book = book_path(app.path().app_data_dir()?)?;
             let conn = db::open(&book).map_err(std::io::Error::other)?;
@@ -1118,6 +1147,8 @@ pub fn run() {
 
             app.manage(Db(Mutex::new(conn)));
             app.manage(chat::BookPath(book));
+            #[cfg(target_os = "ios")]
+            hide_edge_blur(app);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

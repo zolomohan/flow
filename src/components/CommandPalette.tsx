@@ -69,7 +69,7 @@ export function CommandPalette({
       { id: 'new-expense', label: 'New expense', icon: 'arrow-up-right', section: 'Actions', run: () => onNewTransaction('expense') },
       { id: 'new-income', label: 'New income', icon: 'arrow-down-left', tint: 'var(--green)', section: 'Actions', run: () => onNewTransaction('income') },
       { id: 'new-transfer', label: 'New transfer', icon: 'arrow-left-right', tint: 'var(--blue)', section: 'Actions', run: () => onNewTransaction('transfer') },
-      { id: 'go-overview', label: 'Go to Overview', icon: 'layout-dashboard', section: 'Navigate', run: () => onNavigate('overview') },
+      { id: 'go-overview', label: 'Go to Dashboard', icon: 'layout-dashboard', section: 'Navigate', run: () => onNavigate('overview') },
       { id: 'go-transactions', label: 'Go to Transactions', icon: 'list-filter', section: 'Navigate', run: () => onNavigate('transactions') },
       { id: 'go-planned', label: 'Go to Planned', icon: 'repeat', section: 'Navigate', run: () => onNavigate('planned') },
       { id: 'go-accounts', label: 'Go to Accounts', icon: 'wallet-cards', section: 'Navigate', run: () => onNavigate('accounts') },

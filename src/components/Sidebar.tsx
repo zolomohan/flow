@@ -69,7 +69,7 @@ export interface NavGroup {
 export const NAV_GROUPS: NavGroup[] = [
   {
     items: [
-      { id: 'overview', label: 'Overview', icon: 'layout-dashboard' },
+      { id: 'overview', label: 'Dashboard', icon: 'layout-dashboard' },
       { id: 'transactions', label: 'Transactions', icon: 'list-filter' },
       { id: 'ask', label: 'Ask', icon: 'messages-square' },
       { id: 'siri', label: 'Inbox', icon: 'sparkles' },
@@ -111,8 +111,13 @@ export const NAV_GROUPS: NavGroup[] = [
 export const NAV: NavItem[] = NAV_GROUPS.flatMap((group) => group.items);
 
 export function Sidebar({
-  route, onNavigate, onAdd, onSearch, onBack, onForward, canBack, canForward,
+  route, onNavigate, onAdd, onSearch, onBack, onForward, canBack, canForward, hide, drawer,
 }: {
+  /** Rows to leave out — on the phone, the ones the tab bar already holds. */
+  hide?: ReadonlySet<string>;
+  /** Drawn as the phone's drawer: no title bar, search or add, which are the
+   *  Mac's window chrome and the phone has its own for. */
+  drawer?: boolean;
   route: Route;
   onNavigate: (route: Route) => void;
   onAdd: () => void;
@@ -153,13 +158,13 @@ export function Sidebar({
   }, []);
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar ${drawer ? 'is-drawer' : ''}`}>
       {/* Keeps the traffic lights clear of the brand mark. */}
-      <div className="titlebar-drag" data-tauri-drag-region />
+      {!drawer && <div className="titlebar-drag" data-tauri-drag-region />}
 
       {/* Back and forward belong in the title bar, on the traffic lights'
           line, at the far end of the sidebar. */}
-      <div className="titlebar-nav">
+      {!drawer && <div className="titlebar-nav">
         <motion.button
           whileTap={canBack ? press : undefined}
           transition={spring}
@@ -182,7 +187,7 @@ export function Sidebar({
         >
           <Icon name="chevron-right" size={15} strokeWidth={2.4} />
         </motion.button>
-      </div>
+      </div>}
 
       <div className="brand">
         {/* Whose book this is: their initial on the brand's navy, the same
@@ -194,20 +199,23 @@ export function Sidebar({
         </div>
       </div>
 
-      <button className="side-search" onClick={onSearch}>
+      {!drawer && <button className="side-search" onClick={onSearch}>
         <Icon name="search" size={15} />
         <span className="side-label">Search</span>
         <span className="side-kbd">
           <kbd>⌘</kbd>
           <kbd>K</kbd>
         </span>
-      </button>
+      </button>}
 
       {/* Only the lists scroll. A window too short for the column takes the
           room out of these, so the brand, Search, Add and Settings stay
           where they are put at any height. */}
       <div className="side-scroll" ref={scroller}>
-        {NAV_GROUPS.map((group) => (
+        {NAV_GROUPS
+          .map((group) => ({ ...group, items: group.items.filter((item) => !hide?.has(item.id)) }))
+          .filter((group) => group.items.length > 0)
+          .map((group) => (
           <Fragment key={group.label ?? 'top'}>
             {group.label && <p className="nav-group-label">{group.label}</p>}
             <nav className="nav" aria-label={group.label}>
@@ -244,7 +252,7 @@ export function Sidebar({
         ))}
       </div>
 
-      <motion.button
+      {!drawer && <motion.button
         whileTap={press}
         transition={spring}
         className="side-add"
@@ -255,7 +263,7 @@ export function Sidebar({
         <span className="side-kbd side-kbd-dark">
           <kbd>N</kbd>
         </span>
-      </motion.button>
+      </motion.button>}
 
       <div className="side-foot">
         <button

@@ -15,93 +15,22 @@
  */
 
 import { AnimatePresence, motion } from 'motion/react';
+import { useEffect } from 'react';
 import { Icon, SiriMark } from './Icon';
-import { NAV, type Route } from './Sidebar';
+import { NAV, Sidebar, type Route } from './Sidebar';
+import { NATIVE_TAB_ROUTES } from '../lib/nativeTabs';
 import { Sheet } from './ui';
-import { OWNER_FALLBACK, OWNER_NAME, useStore } from '../lib/store';
-import { money } from '../lib/format';
+import { useStore } from '../lib/store';
 import { press, spring } from '../lib/motion';
 
 /** The destinations that earn a slot of their own. Order is left to right. */
 const TABS: { id: Route; label: string; icon: string }[] = [
-  { id: 'overview', label: 'Overview', icon: 'layout-dashboard' },
+  { id: 'overview', label: 'Dashboard', icon: 'layout-dashboard' },
   { id: 'transactions', label: 'Ledger', icon: 'list-filter' },
   { id: 'siri', label: 'Inbox', icon: 'sparkles' },
 ];
 
 const TAB_IDS = new Set<Route>(TABS.map((t) => t.id));
-
-/**
- * The bar across the top: where you have been, whose book this is, and the
- * way into search.
- *
- * It stands where the Mac's title bar does and clears the status bar the same
- * way, which is the one piece of luck in the port — `--titlebar-h` was always
- * a band of chrome nothing may be drawn under, and iOS has one of those too.
- */
-export function MobileBar({
-  onBack, onForward, canBack, canForward, onSearch,
-}: {
-  onBack: () => void;
-  onForward: () => void;
-  canBack: boolean;
-  canForward: boolean;
-  onSearch: () => void;
-}) {
-  const { overview, settings } = useStore();
-  const owner = settings[OWNER_NAME]?.trim() || OWNER_FALLBACK;
-
-  return (
-    <header className="mobile-bar">
-      <motion.button
-        whileTap={canBack ? press : undefined}
-        transition={spring}
-        className="mobile-bar-btn"
-        onClick={onBack}
-        disabled={!canBack}
-        aria-label="Back"
-      >
-        <Icon name="chevron-left" size={20} strokeWidth={2.2} />
-      </motion.button>
-
-      {/* Forward has no gesture behind it — the edge swipe only goes one way —
-          so it appears when there is somewhere to go and takes no room at all
-          when there is not. */}
-      <AnimatePresence initial={false}>
-        {canForward && (
-          <motion.button
-            key="fwd"
-            initial={{ opacity: 0, width: 0 }}
-            animate={{ opacity: 1, width: 34 }}
-            exit={{ opacity: 0, width: 0 }}
-            transition={spring}
-            whileTap={press}
-            className="mobile-bar-btn"
-            onClick={onForward}
-            aria-label="Forward"
-          >
-            <Icon name="chevron-right" size={20} strokeWidth={2.2} />
-          </motion.button>
-        )}
-      </AnimatePresence>
-
-      <div className="mobile-bar-id">
-        <strong>{owner}</strong>
-        <span>{overview ? money(overview.netWorth) : '—'}</span>
-      </div>
-
-      <motion.button
-        whileTap={press}
-        transition={spring}
-        className="mobile-bar-btn"
-        onClick={onSearch}
-        aria-label="Search"
-      >
-        <Icon name="search" size={19} />
-      </motion.button>
-    </header>
-  );
-}
 
 /**
  * The bar across the bottom. Four destinations and the one thing a phone is
@@ -233,5 +162,96 @@ export function MoreSheet({
         </button>
       </div>
     </Sheet>
+  );
+}
+
+/**
+ * The button at the top left of every screen that brings the drawer out. It
+ * floats rather than sitting in a header, because there is no header: each
+ * screen's own title starts beside it.
+ */
+export function DrawerButton({ onClick }: { onClick: () => void }) {
+  return (
+    <motion.button
+      whileTap={press}
+      transition={spring}
+      className="drawer-btn"
+      onClick={onClick}
+      aria-label="Open sidebar"
+    >
+      <Icon name="panel-left" size={19} />
+    </motion.button>
+  );
+}
+
+/**
+ * The phone's sidebar: the Mac's own grouped column, slid in from the left
+ * over a scrim, holding every destination the tab bar does not. Tapping
+ * outside, dragging it back, or going anywhere puts it away.
+ */
+export function PhoneDrawer({
+  open, onClose, route, onNavigate,
+}: {
+  open: boolean;
+  onClose: () => void;
+  route: Route;
+  onNavigate: (route: Route) => void;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  const go = (next: Route) => {
+    onNavigate(next);
+    onClose();
+  };
+  const none = () => {};
+
+  return (
+    <AnimatePresence>
+      {open && (
+        <>
+          <motion.div
+            key="scrim"
+            className="drawer-scrim"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            onClick={onClose}
+          />
+          <motion.div
+            key="panel"
+            className="phone-drawer"
+            initial={{ x: '-100%' }}
+            animate={{ x: 0 }}
+            exit={{ x: '-100%' }}
+            transition={spring}
+            drag="x"
+            dragConstraints={{ left: 0, right: 0 }}
+            dragElastic={{ left: 0.6, right: 0 }}
+            onDragEnd={(_, info) => {
+              if (info.offset.x < -60 || info.velocity.x < -400) onClose();
+            }}
+          >
+            <Sidebar
+              drawer
+              hide={NATIVE_TAB_ROUTES}
+              route={route}
+              onNavigate={go}
+              onAdd={none}
+              onSearch={none}
+              onBack={none}
+              onForward={none}
+              canBack={false}
+              canForward={false}
+            />
+          </motion.div>
+        </>
+      )}
+    </AnimatePresence>
   );
 }

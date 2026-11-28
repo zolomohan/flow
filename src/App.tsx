@@ -2,9 +2,15 @@ import {
   useCallback, useEffect, useLayoutEffect, useRef, useState,
   type MutableRefObject, type ReactNode,
 } from 'react';
+import type { CSSProperties } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { INVESTMENT_TABS, Sidebar, isInvestmentRoute, type Route } from './components/Sidebar';
-import { MobileBar, MoreSheet, TabBar } from './components/MobileChrome';
+import { DrawerButton, MoreSheet, PhoneDrawer, TabBar } from './components/MobileChrome';
+import {
+  NATIVE_TAB_ROUTES, badgeNativeTab, holdNativeTabs, onNativeAdd, onNativeTab, selectNativeTab,
+  showNativeTabs,
+  type NativeTab,
+} from './lib/nativeTabs';
 import { api } from './lib/api';
 import { newChat } from './lib/chat';
 import { CommandPalette } from './components/CommandPalette';
@@ -146,6 +152,9 @@ const RESTORE_FRAMES = 60;
  * offset is asked for again each frame until the page is long enough to hold
  * it, and given up on if it never is.
  */
+/** How far the grain moves for each pixel the page does. */
+const GROUND_DRIFT = 0.35;
+
 function ScrollPane({
   stop, marks, children,
 }: {
@@ -178,6 +187,31 @@ function ScrollPane({
     };
   }, [stop, marks]);
 
+  /* The paper's grain is painted on the shell, behind the page. It follows
+     the page as it scrolls, but at a fraction of the speed, so the ground
+     reads as a layer further back. Written straight to a custom property on
+     the shell, once a frame at most: a re-render per scroll event would be
+     the whole page redrawn to move a texture. */
+  useEffect(() => {
+    const node = pane.current;
+    const shell = node?.closest<HTMLElement>('.app');
+    if (!node || !shell) return;
+    let raf = 0;
+    const paint = () => {
+      raf = 0;
+      shell.style.setProperty('--ground-y', `${-node.scrollTop * GROUND_DRIFT}px`);
+    };
+    const onScroll = () => {
+      if (!raf) raf = requestAnimationFrame(paint);
+    };
+    paint();
+    node.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      node.removeEventListener('scroll', onScroll);
+      cancelAnimationFrame(raf);
+    };
+  }, []);
+
   return (
     <motion.div
       ref={pane}
@@ -198,13 +232,62 @@ const SPLASH_MS = 1850;
 const SPLASH_EXIT_MS = 420;
 
 function Shell() {
-  const { ready, fatal, accounts } = useStore();
+  const { ready, fatal, accounts, captures } = useStore();
   const {
     route, stop, marks, navigate: setRoute, back, forward, canBack, canForward,
   } = useHistory('overview');
   // Which shell is drawing: a sidebar down the side, or a bar top and bottom.
   const phone = usePhone();
   const [moreOpen, setMoreOpen] = useState(false);
+
+  /* On iOS the tab bar is UIKit's (see `lib/nativeTabs`), and this is the
+     height it covers once it is up; null while it is not, and always on the
+     Mac or in a browser, where the page draws its own. */
+  const [nativeTabsH, setNativeTabsH] = useState<number | null>(null);
+  /* The phone's sidebar: every destination without a tab, slid in from the
+     left by the edge swipe or the button at the top of each screen. */
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  /* What the add button beside the native bar runs. A ref, because the
+     listener is set up once and `newTransaction` is declared further down. */
+  const newTransactionRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    if (!phone) return;
+    let live = true;
+    showNativeTabs().then((h) => live && setNativeTabsH(h));
+    return () => {
+      live = false;
+    };
+  }, [phone]);
+  useEffect(() => {
+    if (nativeTabsH === null) return;
+    const listeners = [
+      onNativeTab((tab) => {
+        setDrawerOpen(false);
+        setRoute(tab);
+      }),
+      onNativeAdd(() => newTransactionRef.current()),
+    ];
+    return () => {
+      for (const l of listeners) l.then((x) => x.unregister()).catch(() => {});
+    };
+  }, [nativeTabsH, setRoute]);
+  // The lit tab follows the page, however the page got there.
+  useEffect(() => {
+    if (nativeTabsH === null) return;
+    selectNativeTab(NATIVE_TAB_ROUTES.has(route) ? (route as NativeTab) : 'none');
+  }, [nativeTabsH, route]);
+  // The drawer covers the bar's corner of the screen, so the bar steps down
+  // while it is out, as it does for a sheet.
+  useEffect(() => {
+    if (!drawerOpen) return;
+    holdNativeTabs(true);
+    return () => holdNativeTabs(false);
+  }, [drawerOpen]);
+  useEffect(() => {
+    if (nativeTabsH === null) return;
+    badgeNativeTab('siri', captures.length);
+  }, [nativeTabsH, captures.length]);
+
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [txOpen, setTxOpen] = useState(false);
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
@@ -268,6 +351,7 @@ function Shell() {
     setSplitFocus(null);
     setTxOpen(true);
   }, []);
+  newTransactionRef.current = () => newTransaction();
 
   // Opening whatever a debt or a repayment names: the sheet asking gives way
   // to the posting itself, since one modal over another is nobody's idea of
@@ -464,8 +548,10 @@ function Shell() {
     return () => window.removeEventListener('keydown', onKey);
   }, [newTransaction, setRoute, back, forward]);
 
-  /* Back, by dragging in from the left edge — the gesture every iOS app has,
-     pointed at the trail ⌘[ already walks. It is deliberately narrow-minded:
+  /* The drawer, by dragging in from the left edge — where the sidebar is on
+     the Mac, and where a thumb looks for it. It used to be back; the drawer
+     is the only way to half the destinations now, so it has the gesture. It
+     is deliberately narrow-minded:
      the drag has to start within 22pt of the edge, travel mostly sideways,
      and finish before the thumb has had time to mean something else. A screen
      with its own horizontal scrolling — a rail of chips, a wide table — sits
@@ -487,7 +573,7 @@ function Shell() {
       if (!start || !touch) return;
       const dx = touch.clientX - start.x;
       const dy = Math.abs(touch.clientY - start.y);
-      if (dx > 68 && dy < 46 && performance.now() - start.at < 700) back();
+      if (dx > 68 && dy < 46 && performance.now() - start.at < 700) setDrawerOpen(true);
     };
 
     window.addEventListener('touchstart', onStart, { passive: true });
@@ -496,7 +582,7 @@ function Shell() {
       window.removeEventListener('touchstart', onStart);
       window.removeEventListener('touchend', onEnd);
     };
-  }, [phone, back]);
+  }, [phone]);
 
   /* How much of the window the keyboard is sitting on, published as `--kb`.
      WKWebView does not resize the viewport when the keyboard comes up — the
@@ -568,16 +654,13 @@ function Shell() {
   }
 
   return (
-    <div className={`app ${phone ? 'is-phone' : ''}`}>
-      {phone ? (
-        <MobileBar
-          onBack={back}
-          onForward={forward}
-          canBack={canBack}
-          canForward={canForward}
-          onSearch={() => setPaletteOpen(true)}
-        />
-      ) : (
+    <div
+      className={`app ${phone ? 'is-phone' : ''} ${nativeTabsH !== null ? 'has-native-tabs' : ''}`}
+      style={nativeTabsH !== null ? ({ '--tabs-h': `${nativeTabsH}px` } as CSSProperties) : undefined}
+    >
+      {/* A phone has no bar across the top: the page starts under the
+          status bar, back is the edge swipe, and the tab bar does the rest. */}
+      {!phone && (
         <Sidebar
           route={route}
           onNavigate={setRoute}
@@ -767,7 +850,7 @@ function Shell() {
       />
       {phone && (
         <>
-          <TabBar
+          {nativeTabsH === null && <TabBar
             route={route}
             onNavigate={(next) => {
               setMoreOpen(false);
@@ -776,10 +859,17 @@ function Shell() {
             onAdd={() => newTransaction()}
             onMore={() => setMoreOpen((open) => !open)}
             moreOpen={moreOpen}
-          />
+          />}
           <MoreSheet
             open={moreOpen}
             onClose={() => setMoreOpen(false)}
+            route={route}
+            onNavigate={setRoute}
+          />
+          <DrawerButton onClick={() => setDrawerOpen(true)} />
+          <PhoneDrawer
+            open={drawerOpen}
+            onClose={() => setDrawerOpen(false)}
             route={route}
             onNavigate={setRoute}
           />

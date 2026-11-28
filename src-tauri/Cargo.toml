@@ -21,6 +21,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+tauri-plugin-native-tabs = { path = "plugins/native-tabs" }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
@@ -46,3 +47,8 @@ calamine = "0.26"
 base64 = "0.22"
 # A pasted Claude API key lives in the macOS Keychain, never in the book.
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
+
+# Reaching the WKWebView itself, for the one thing the page cannot say from
+# inside it: iOS 26's blur over the status bar. See `hide_edge_blur`.
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = "0.6"

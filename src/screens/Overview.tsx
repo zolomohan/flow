@@ -10,7 +10,7 @@ import { Button, Card, CardHead, Empty, Meter } from '../components/ui';
 import { api } from '../lib/api';
 import { useStore } from '../lib/store';
 import {
-  accountWorth, compactMoney, dayLabel, debtProgress, initials, money, monthKey,
+  accountWorth, compactMoney, dayLabel, debtProgress, initials, money,
   monthLabel, percent, percentDelta, shortMonthLabel,
 } from '../lib/format';
 import { itemVariants, listVariants, spring } from '../lib/motion';
@@ -234,7 +234,6 @@ export function Overview({
   // same list, and a ring with a piece missing is not a share of anything.
   const categories = overview.topCategories;
   const categoryTotal = categories.reduce((sum, c) => sum + c.total, 0) || 1;
-  const isNow = month === monthKey() && span === 1;
   const label = periodLabel(month, span);
   // Negative balances and what you have borrowed, which the chip names
   // rather than quietly folding into the figure above it.
@@ -247,15 +246,8 @@ export function Overview({
 
   return (
     <div className="screen">
-      <header className="screen-head">
-        <div>
-          <h1>Overview</h1>
-          <p>
-            {isNow
-              ? 'Where your money stands right now.'
-              : `A look back at ${label}.`}
-          </p>
-        </div>
+      <header className="screen-head ov-head">
+        <h1>Dashboard</h1>
         <MonthNav month={month} onChange={setMonth} span={span} onSpanChange={setSpan} />
       </header>
 

@@ -24,12 +24,10 @@
 
 @media (max-width: 760px) {
   :root {
-    /* The bar at the top and the bar at the bottom, named once so the
-       things that float over the page — toasts, the selection bar — can
-       clear them without guessing. The bottom one carries the home
-       indicator's own strip inside it, because everything that has to sit
-       above the tab bar has to sit above that too. */
-    --bar-h: 50px;
+    /* The bar at the bottom, named once so the things that float over the
+       page — toasts, the selection bar — can clear it without guessing. It
+       carries the home indicator's own strip inside it, because everything
+       that has to sit above the tab bar has to sit above that too. */
     --tab-h: 54px;
     --tabs-h: calc(var(--tab-h) + env(safe-area-inset-bottom, 0px));
     --safe-t: env(safe-area-inset-top, 0px);
@@ -57,69 +55,81 @@
   body,
   #root { height: 100vh; }
 
-  /* One column, three rows: chrome, the page, chrome. The bars are in the
+  /* One column, two rows: the page, then the tab bar. The bar is in the
      grid rather than floating over it, so the page is never scrolled under
      something it cannot see past. */
   .app.is-phone {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-rows: minmax(0, 1fr) auto;
   }
 
   .sidebar { display: none; }
 
-  /* The band the Mac keeps clear for its traffic lights is the band iOS
-     keeps for its status bar. Same idea, different reason. */
-  .mobile-bar {
-    position: relative;
-    z-index: 10;
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    height: calc(var(--bar-h) + var(--safe-t));
-    padding: var(--safe-t) 10px 0;
-    background: var(--grain) var(--bg);
-    border-bottom: 1px solid var(--line-soft);
+  /* No bar across the top: the page starts under the status bar, and the
+     band iOS keeps for that is kept clear here rather than by a header. */
+  .app.is-phone .main { padding-top: var(--safe-t); }
+
+  /* On iOS the tab bar is UIKit's, floating over the bottom of the web view
+     (`lib/nativeTabs`). The page takes the whole height and scrolls under
+     the glass; `--tabs-h` is set to what the bar covers, so the last row and
+     everything that already clears the tab bar clear this one too. */
+  .app.is-phone.has-native-tabs { grid-template-rows: minmax(0, 1fr); }
+  .has-native-tabs .main-scroll::after {
+    content: '';
+    display: block;
+    height: var(--tabs-h);
   }
 
-  .mobile-bar-btn {
+  /* ------------------------------------------------------------- drawer */
+
+  /* The way to the drawer, at the top left of every screen. It floats over
+     the page, so each screen's head is pushed over to start beside it. */
+  .drawer-btn {
+    position: fixed;
+    z-index: 20;
+    top: calc(var(--safe-t) + 12px);
+    left: 12px;
     display: grid;
     place-items: center;
-    width: 34px;
-    height: 34px;
-    flex: none;
+    width: 36px;
+    height: 36px;
     padding: 0;
-    line-height: 0;
-    border-radius: var(--r-md);
-    color: var(--ink-2);
-    overflow: hidden;
+    border-radius: var(--r-full);
+    color: var(--ink);
+    background: color-mix(in srgb, var(--surface) 78%, transparent);
+    backdrop-filter: blur(14px) saturate(1.3);
+    -webkit-backdrop-filter: blur(14px) saturate(1.3);
+    border: 1px solid var(--line-soft);
+    box-shadow: var(--shadow-sm);
   }
-  .mobile-bar-btn:disabled { color: var(--ink-4); }
-  .mobile-bar-btn:active:not(:disabled) { background: var(--surface); }
+  .app.is-phone .screen-head { padding-left: 46px; min-height: 36px; }
 
-  /* Whose book, and what it comes to. The same two lines the sidebar's brand
-     block carries, laid on one row because there is only one row. */
-  .mobile-bar-id {
+  .drawer-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    background: color-mix(in srgb, #000 32%, transparent);
+  }
+
+  /* The Mac's column, as a panel: the same grouped lists and faded scroll
+     edges, on the same paper, with the status bar kept clear above it. */
+  .phone-drawer {
+    position: fixed;
+    z-index: 81;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(300px, 82vw);
     display: flex;
-    align-items: baseline;
-    gap: 8px;
+    box-shadow: var(--shadow-lg);
+    touch-action: pan-y;
+  }
+  .phone-drawer .sidebar {
+    display: flex;
     flex: 1;
     min-width: 0;
-    padding-left: 4px;
-  }
-  .mobile-bar-id strong {
-    font-size: 14.5px;
-    font-weight: 600;
-    letter-spacing: var(--tight);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .mobile-bar-id span {
-    flex: none;
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--ink-3);
-    font-variant-numeric: tabular-nums;
+    padding: calc(var(--safe-t) + 14px) 14px calc(env(safe-area-inset-bottom, 0px) + 12px);
+    border-right: 1px solid var(--line-soft);
   }
 
   /* ------------------------------------------------------------- tab bar */
@@ -454,7 +464,7 @@
     bottom: calc(var(--tabs-h) + 10px);
     left: 10px;
     right: 10px;
-    max-height: calc(100dvh - var(--tabs-h) - var(--bar-h) - var(--safe-t) - 24px);
+    max-height: calc(100dvh - var(--tabs-h) - var(--safe-t) - 24px);
   }
 
   /* ------------------------------------------------------------- the ledger */

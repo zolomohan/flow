@@ -14,6 +14,7 @@ import {
   spring, springSoft,
 } from '../lib/motion';
 import { usePhone } from '../lib/media';
+import { holdNativeTabs } from '../lib/nativeTabs';
 
 /* ------------------------------------------------------------------ Button */
 
@@ -571,6 +572,14 @@ export function Sheet({
   /** Nearly the whole window, for work that is a table rather than a form. */
   full?: boolean;
 }) {
+  // The phone's native tab bar sits above the web view and would be drawn
+  // over the sheet's foot, so it steps down while any sheet is open.
+  useEffect(() => {
+    if (!open) return;
+    holdNativeTabs(true);
+    return () => holdNativeTabs(false);
+  }, [open]);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
