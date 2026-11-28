@@ -965,24 +965,35 @@ export function Transactions({
               >
                 {selecting ? 'Done' : 'Select'}
               </button>
-              <span className="head-filter">
-                <IconButton
-                  icon="list-filter"
-                  label="Filters"
-                  size={36}
-                  onClick={() => setShowFilters(true)}
-                />
-                {phoneFilterCount > 0 && <span className="head-filter-count">{phoneFilterCount}</span>}
-              </span>
             </div>
           </div>
-          <div className="period-bar" {...periodSwipe}>
-            <button type="button" className="period-pill" onClick={() => setShowFilters(true)}>
-              {months ? periodLabel(month, months) : 'All time'}
-              <Icon name="chevron-down" size={14} strokeWidth={2.4} />
-            </button>
-            <span className="period-count">
-              {total} {total === 1 ? 'entry' : 'entries'}
+          {/* The window, as on the Dashboard's Spending half, across the
+              width; the filters a small button at its end. */}
+          <div className="ledger-range" {...periodSwipe}>
+            {months > 0 ? (
+              <MonthNav
+                month={month}
+                onChange={setMonth}
+                span={months}
+                onSpanChange={(n) => {
+                  const r = rangeFor(n);
+                  if (r === 'window') setWindowSpan(n);
+                  setRange(r);
+                }}
+              />
+            ) : (
+              <button type="button" className="ledger-all" onClick={() => setRange('month')}>
+                All time
+              </button>
+            )}
+            <span className="head-filter">
+              <IconButton
+                icon="list-filter"
+                label="Filters"
+                size={40}
+                onClick={() => setShowFilters(true)}
+              />
+              {phoneFilterCount > 0 && <span className="head-filter-count">{phoneFilterCount}</span>}
             </span>
           </div>
         </header>
