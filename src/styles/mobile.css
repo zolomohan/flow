@@ -176,12 +176,43 @@
      before the drawer has had a chance to claim it. */
   .app.is-phone .main-scroll { touch-action: pan-y; }
 
-  /* The grain rides on the page and scrolls with it, one to one. The Mac's
-     slower drift is moved from JavaScript, which on iOS trails the
-     compositor's scroll and is seen catching up after the page has stopped. */
-  .app.is-phone .main-scroll {
-    background: var(--grain) var(--bg);
-    background-attachment: local;
+  /* The grain, drifting up at a third of the page's speed — the ground
+     behind, moving slower than what is on it. The Mac moves it from
+     JavaScript; on iOS that trails the compositor's scroll and is seen
+     catching up after the page has stopped. So here it is a scroll-driven
+     animation of a transform, which the compositor runs in step with the
+     scroll itself. The page names its scroll timeline; the screen, which
+     holds both it and the grain, lets the name reach across. `--ground-max`
+     is how far the page can scroll, from `ScrollPane`, set only when the
+     page changes size — never per scroll. */
+  @supports (animation-timeline: scroll()) {
+    .app.is-phone .main { timeline-scope: --page; }
+    .app.is-phone .main-scroll { scroll-timeline: --page y; }
+    .app.is-phone .main::before {
+      content: '';
+      position: absolute;
+      inset: 0 0 auto 0;
+      height: calc(100% + var(--ground-max, 0px) * 0.35);
+      background: var(--grain) var(--bg);
+      pointer-events: none;
+      will-change: transform;
+      animation: ground-drift linear both;
+      animation-timeline: --page;
+    }
+    .app.is-phone .page-track { position: relative; }
+  }
+  @keyframes ground-drift {
+    from { transform: translateY(0); }
+    to { transform: translateY(calc(var(--ground-max, 0px) * -0.35)); }
+  }
+
+  /* Without scroll-driven animations the grain rides on the page instead,
+     one to one: no drift, but nothing trailing either. */
+  @supports not (animation-timeline: scroll()) {
+    .app.is-phone .main-scroll {
+      background: var(--grain) var(--bg);
+      background-attachment: local;
+    }
   }
 
   /* ------------------------------------------------------------- tab bar */

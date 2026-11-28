@@ -198,8 +198,22 @@ function ScrollPane({
   /* Not on a phone. iOS scrolls on the compositor, a frame or more ahead of
      anything JavaScript hears about it, so a texture moved from here trails
      the page and is still settling after the thumb has stopped. There the
-     grain is painted on the page itself and scrolls with it (`mobile.css`). */
+     drift is a scroll-driven animation (`mobile.css`), and all it needs from
+     here is how far the page can scroll — told when the page changes size,
+     never per scroll. */
   const phone = usePhone();
+  useEffect(() => {
+    const node = pane.current;
+    const shell = node?.closest<HTMLElement>('.app');
+    if (!node || !shell || !phone) return;
+    const measure = () =>
+      shell.style.setProperty('--ground-max', `${Math.max(0, node.scrollHeight - node.clientHeight)}px`);
+    const watch = new ResizeObserver(measure);
+    watch.observe(node);
+    for (const child of Array.from(node.children)) watch.observe(child);
+    measure();
+    return () => watch.disconnect();
+  }, [phone]);
   useEffect(() => {
     const node = pane.current;
     const shell = node?.closest<HTMLElement>('.app');
