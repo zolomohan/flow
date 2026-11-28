@@ -12,7 +12,7 @@ import { api } from '../lib/api';
 import { useStore } from '../lib/store';
 import {
   accountWorth, compactMoney, dayLabel, debtProgress, initials, money,
-  monthLabel, percent, percentDelta, shortMonthLabel,
+  monthKey, monthLabel, percent, percentDelta, shortMonthLabel,
 } from '../lib/format';
 import { itemVariants, listVariants, spring } from '../lib/motion';
 import { cadenceLabel, dueLabel, isLive, monthlyTotal } from '../lib/plans';
@@ -515,8 +515,24 @@ export function Overview({
         />
       )}
 
+      {/* The phone opens Spending on one question — how is this going? —
+          rather than four tiles of trivia. */}
+      {phone && (
+        <SpendPace
+          expense={overview.expense}
+          income={overview.income}
+          prevExpense={overview.prevExpense}
+          avgSpend={stats.avgSpend}
+          savingsRate={stats.savingsRate}
+          fixed={monthlyTotal(plans, 'expense') * span}
+          month={month}
+          span={span}
+        />
+      )}
+
       {/* What the window is worth knowing against: the months around it. A
           figure alone says what happened, not whether it was a good one. */}
+      {!phone && (
       <motion.div
         className="stat-row"
         variants={listVariants}
@@ -571,6 +587,7 @@ export function Overview({
           icon="sparkles"
         />
       </motion.div>
+      )}
 
       <div className="spend-grid">
         <div className="ov-col spend-main">
@@ -1041,5 +1058,98 @@ function PlannedCard({ plans, onOpen }: { plans: Plan[]; onOpen: () => void }) {
         </>
       )}
     </Card>
+  );
+}
+
+/**
+ * The top of the phone's Spending half: what has gone out, how that sits
+ * against a usual month, where it is heading, and the three figures worth
+ * knowing beside it — how much of what came in was kept, what a day costs,
+ * and how much of the month was spoken for before it began.
+ */
+function SpendPace({
+  expense, income, prevExpense, avgSpend, savingsRate, fixed, month, span,
+}: {
+  expense: number;
+  income: number;
+  prevExpense: number;
+  avgSpend: number;
+  savingsRate: number | null;
+  fixed: number;
+  month: string;
+  span: number;
+}) {
+  // Days the window has run: today's date in the current month, all of them
+  // in one that is over.
+  const [y, m] = month.split('-').map(Number);
+  const inMonth = new Date(y, m, 0).getDate();
+  const current = span === 1 && month === monthKey();
+  const elapsed = current ? new Date().getDate() : inMonth * span;
+  const perDay = Math.round(expense / Math.max(1, elapsed));
+  const projected = current ? Math.round((expense / Math.max(1, elapsed)) * inMonth) : null;
+  const usual = avgSpend * span;
+  const delta = percentDelta(expense, prevExpense);
+  // The bar runs to whichever is larger, the month or a usual one, so the
+  // marker for "usual" always lands on it.
+  const scale = Math.max(projected ?? expense, usual, 1);
+  const over = (projected ?? expense) > usual;
+  // What is left of a usual month, a day, for the days still to come.
+  const left = Math.max(1, inMonth - elapsed + 1);
+  const room = Math.round((usual - expense) / left);
+
+  return (
+    <section className="pace">
+      <div className="pace-top">
+        <span className="pace-label">Spent</span>
+        {delta !== null && isFinite(delta) && (
+          <span className={`pace-delta ${delta > 0 ? 'is-bad' : 'is-good'}`}>
+            <Icon name={delta > 0 ? 'trending-up' : 'trending-down'} size={13} />
+            {percent(Math.abs(delta))} vs last {span > 1 ? 'period' : 'month'}
+          </span>
+        )}
+      </div>
+      <BigMoney value={expense} className="pace-amount" />
+      <div className="pace-bar" aria-hidden>
+        {projected !== null && (
+          <i className="pace-fill is-projected" style={{ width: `${(projected / scale) * 100}%` }} />
+        )}
+        <i className={`pace-fill ${over ? 'is-over' : ''}`} style={{ width: `${(expense / scale) * 100}%` }} />
+        {usual > 0 && <b className="pace-mark" style={{ left: `${(usual / scale) * 100}%` }} />}
+      </div>
+      <p className="pace-note">
+        {projected !== null
+          ? <>On pace for <strong>{compactMoney(projected)}</strong> · usually {compactMoney(usual)}</>
+          : usual > 0
+            ? <>{compactMoney(Math.abs(expense - usual))} {expense > usual ? 'above' : 'below'} a usual {span > 1 ? 'stretch' : 'month'} of {compactMoney(usual)}</>
+            : <>Not enough months to compare against yet</>}
+      </p>
+      <div className={`pace-stats ${current && usual > 0 || fixed > 0 ? '' : 'is-two'}`}>
+        <div>
+          <span>Saved</span>
+          <strong className={savingsRate === null ? '' : savingsRate >= 20 ? 'is-good' : savingsRate < 0 ? 'is-bad' : ''}>
+            {savingsRate === null ? '—' : `${Math.round(savingsRate)}%`}
+          </strong>
+          <small>{savingsRate === null ? 'little came in' : `of ${compactMoney(income)}`}</small>
+        </div>
+        <div>
+          <span>Per day</span>
+          <strong>{compactMoney(perDay)}</strong>
+          <small>over {elapsed} {elapsed === 1 ? 'day' : 'days'}</small>
+        </div>
+        {current && usual > 0 ? (
+          <div>
+            <span>{room <= 0 ? 'Over usual' : 'Room left'}</span>
+            <strong className={room <= 0 ? 'is-bad' : ''}>{compactMoney(room <= 0 ? expense - usual : room)}</strong>
+            <small>{room <= 0 ? 'so far this month' : `a day for ${left} ${left === 1 ? 'day' : 'days'}`}</small>
+          </div>
+        ) : fixed > 0 ? (
+          <div>
+            <span>Fixed</span>
+            <strong>{compactMoney(fixed)}</strong>
+            <small>{expense > 0 ? `${Math.round((Math.min(fixed, expense) / expense) * 100)}% of spend` : 'planned'}</small>
+          </div>
+        ) : null}
+      </div>
+    </section>
   );
 }
