@@ -1940,3 +1940,64 @@
   .ov-range .month-nav { display: flex; width: 100%; }
   .ov-range .month-label { flex: 1; min-width: 0; }
 }
+
+/* ───────────────── Dashboard cards, evened out. One scale for figures —
+   a card's headline number, then the amount on a row — and one gap under
+   every heading, with nothing inside adding its own on top. */
+@media (max-width: 760px) {
+  .ov-screen .card .card-head { margin-bottom: 14px; }
+  .ov-screen .card .card-head + *,
+  .ov-screen .card .card-head + * > :first-child { margin-top: 0; padding-top: 0; }
+
+  /* The headline figure of a card. */
+  .ov-screen .figure-value,
+  .ov-screen .wealth-figure .figure-value,
+  .ov-screen .spend-strip strong,
+  .ov-screen .stat-value {
+    margin-top: 2px;
+    font-size: 22px;
+    font-weight: 650;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+  }
+  .ov-screen .figure-label + .figure-value { margin-top: 4px; }
+  .ov-screen .delta { font-size: 12.5px; }
+
+  /* The amount on a row, and the row's name beside it. */
+  .ov-screen .wallet-text > span,
+  .ov-screen .cat-amount,
+  .ov-screen .owing-amount,
+  .ov-screen .merchant-total,
+  .ov-screen .donut-card .breakdown-top strong {
+    font-size: 15px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+  }
+  .ov-screen .wallet-text strong,
+  .ov-screen .cat-name,
+  .ov-screen .owing-name,
+  .ov-screen .merchant-name,
+  .ov-screen .donut-card .breakdown-top span { font-size: 15px; font-weight: 500; }
+
+  /* Every list in a card is the same list: rows 10px top and bottom with a
+     hairline between, the first flush under the heading's rule. */
+  .ov-screen .wallet-tile,
+  .ov-screen .sleeve-list .cat-row,
+  .ov-screen .owing-row,
+  .ov-screen .merchant-list li,
+  .ov-screen .donut-card .breakdown-row { padding-block: 10px; }
+  .ov-screen .wallet-grid > :first-child,
+  .ov-screen .merchant-list > li:first-child,
+  .ov-screen .donut-card .breakdown > li:first-child .breakdown-row { padding-top: 0; }
+  .ov-screen .sleeve-list,
+  .ov-screen .owing-list { gap: 0; padding-top: 10px; }
+  .ov-screen .sleeve-list > li + li,
+  .ov-screen .owing-list > li + li { border-top: 1px solid var(--line-soft); }
+  .ov-screen .wealth-chart { margin-top: 12px; }
+  .ov-screen .flow-figures { gap: 12px; }
+}
+@media (max-width: 760px) {
+  .ov-screen .wallet-text > .is-owed { color: var(--red); }
+}
