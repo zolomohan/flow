@@ -1793,3 +1793,11 @@
   from { opacity: 0; }
   to { opacity: 1; }
 }
+
+/* Where it went has no subcategory caret on the phone, and the Dashboard no
+   Recent activity card: the Ledger is a tab away. */
+@media (max-width: 760px) {
+  .donut-card .breakdown-caret,
+  .donut-card .breakdown-children,
+  .ov-screen .recent-card { display: none; }
+}
