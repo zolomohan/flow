@@ -6926,8 +6926,35 @@ pub fn import_book(conn: &Connection, from: &Path, backup: &Path) -> Result<()> 
         for table in TABLES {
             conn.execute(&format!("DELETE FROM main.{table}"), [])
                 .map_err(oops)?;
+            // By name, not by position. A book that grew a column through an
+            // ALTER keeps it at the end, where a book made fresh has it in the
+            // middle, so `SELECT *` lines the columns up wrong: a created_at
+            // lands in a column that is allowed to be empty and the NOT NULL
+            // one gets nothing. Columns the incoming book doesn't have take
+            // their defaults.
+            let columns = |schema: &str| -> Result<Vec<String>> {
+                let mut stmt = conn
+                    .prepare(&format!("SELECT name FROM {schema}.pragma_table_info('{table}')"))
+                    .map_err(oops)?;
+                let names = stmt
+                    .query_map([], |r| r.get::<_, String>(0))
+                    .map_err(oops)?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .map_err(oops)?;
+                Ok(names)
+            };
+            let theirs = columns("incoming")?;
+            let shared: Vec<String> = columns("main")?
+                .into_iter()
+                .filter(|c| theirs.contains(c))
+                .map(|c| format!("\"{c}\""))
+                .collect();
+            if shared.is_empty() {
+                continue;
+            }
+            let list = shared.join(", ");
             conn.execute(
-                &format!("INSERT INTO main.{table} SELECT * FROM incoming.{table}"),
+                &format!("INSERT INTO main.{table} ({list}) SELECT {list} FROM incoming.{table}"),
                 [],
             )
             .map_err(oops)?;
@@ -9317,6 +9344,31 @@ mod tests {
         assert!(import_book(&conn, &junk, &dir.join("x.sqlite3")).is_err());
         assert_eq!(list_transactions(&conn, TransactionQuery::default()).unwrap().len(), 1);
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A book whose columns sit in another order, as one that grew them
+    /// through ALTERs does, still reads in with every value in its place.
+    #[test]
+    fn a_book_with_its_columns_in_another_order_reads_in() {
+        let dir = std::env::temp_dir().join(format!("midas-test-{}", new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let copy = dir.join("copy.sqlite3");
+        let conn = book();
+        set_setting(&conn, "owner_name", "Raj").unwrap();
+        export_book(&conn, &copy).unwrap();
+        Connection::open(&copy)
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE settings_moved (value TEXT NOT NULL, key TEXT PRIMARY KEY);
+                 INSERT INTO settings_moved (value, key) SELECT value, key FROM settings;
+                 DROP TABLE settings;
+                 ALTER TABLE settings_moved RENAME TO settings;",
+            )
+            .unwrap();
+        let fresh = book();
+        import_book(&fresh, &copy, &dir.join("kept.sqlite3")).unwrap();
+        assert_eq!(setting(&fresh, "owner_name").unwrap().as_deref(), Some("Raj"));
         std::fs::remove_dir_all(&dir).ok();
     }
 
