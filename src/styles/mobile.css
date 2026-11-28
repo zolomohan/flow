@@ -1294,3 +1294,95 @@
   .detail-head .detail-back:active { opacity: 0.5; }
   .detail-head .head-actions { flex-wrap: wrap; }
 }
+
+/* ==================================================================
+   Every page's head, the way iOS draws a large title: the title on
+   the left, its actions as glyphs on the right of the same line, the
+   one-line summary under it. Buttons that carry a glyph lose their
+   words here (kept for screen readers); the words were what pushed
+   the actions onto lines of their own under the title.
+   ================================================================== */
+
+@media (max-width: 760px) {
+  .screen-head:not(.phone-ledger-head):not(.detail-head) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    column-gap: 8px;
+    row-gap: 10px;
+  }
+  .screen-head:not(.phone-ledger-head) h1 { font-size: 30px; letter-spacing: -0.025em; }
+  .screen-head:not(.phone-ledger-head):not(.detail-head) > .head-actions,
+  .screen-head:not(.phone-ledger-head):not(.detail-head) > .btn {
+    grid-column: 2;
+    grid-row: 1;
+    flex-wrap: nowrap;
+    margin-top: 2px;
+  }
+  /* A switch in the head (the folders' sort) takes a line of its own. */
+  .screen-head > .head-actions:has(.segmented) { display: contents; }
+  .screen-head > .head-actions > .segmented {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: start;
+  }
+  .screen-head > .head-actions > .btn { grid-column: 2; grid-row: 1; }
+
+  .screen-head .btn:has(svg),
+  .card-head .btn-primary:has(svg),
+  .cat-head-actions .btn:has(svg) {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    justify-content: center;
+    border-radius: var(--r-full);
+  }
+  .screen-head .btn:has(svg) > span,
+  .card-head .btn-primary:has(svg) > span,
+  .cat-head-actions .btn:has(svg) > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .screen-head .btn:has(svg) svg,
+  .card-head .btn-primary:has(svg) svg,
+  .cat-head-actions .btn:has(svg) svg { width: 19px; height: 19px; }
+  /* Glyphs in the bar, not buttons on the page: no fill, iOS blue. The
+     primary one keeps a soft disc so the page's main action reads first. */
+  .screen-head .btn:has(svg):not(.btn-primary) {
+    background: none;
+    border-color: transparent;
+    box-shadow: none;
+    color: var(--blue);
+  }
+  .screen-head .btn-primary:has(svg),
+  .card-head .btn-primary:has(svg),
+  .cat-head-actions .btn-primary:has(svg) {
+    background: color-mix(in srgb, var(--blue) 14%, transparent);
+    border-color: transparent;
+    box-shadow: none;
+    color: var(--blue);
+  }
+
+  /* Debts keeps its two words: an arrow alone does not say lent from
+     borrowed. */
+  .debt-screen .screen-head .btn:has(svg) {
+    width: auto;
+    padding: 0 10px;
+    border-radius: var(--r-full);
+  }
+  .debt-screen .screen-head .btn:has(svg) > span {
+    position: static;
+    width: auto;
+    height: auto;
+    clip: auto;
+  }
+  .debt-screen .screen-head .btn:has(svg) svg { width: 15px; height: 15px; }
+
+  /* Categories' head inside its card: the kind switch on a line, the two
+     glyphs beside the card's title. */
+  .cat-head-actions { gap: 6px; }
+}
