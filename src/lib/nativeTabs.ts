@@ -61,6 +61,11 @@ export function onNativeAdd(handler: () => void) {
   return addPluginListener(PLUGIN, 'add', () => handler());
 }
 
+/** A long press on the add button: the manual form, skipping the chat. */
+export function onNativeAddLong(handler: () => void) {
+  return addPluginListener(PLUGIN, 'addLong', () => handler());
+}
+
 /** Lights a tab, or none when the page is one the drawer holds. */
 export function selectNativeTab(tab: NativeTab | 'none') {
   if (!active) return;

@@ -10,7 +10,7 @@ import {
   DRAWER_RADIUS, DRAWER_WIDTH, backFade, backProgress, drawerProgress, useDrawer, useDrawerMoving,
 } from './lib/drawer';
 import {
-  NATIVE_TAB_ROUTES, nativeTabsExpected, holdNativeTabs, onNativeAdd, onNativeTab, selectNativeTab,
+  NATIVE_TAB_ROUTES, nativeTabsExpected, holdNativeTabs, onNativeAdd, onNativeAddLong, onNativeTab, selectNativeTab,
   showNativeTabs,
   type NativeTab,
 } from './lib/nativeTabs';
@@ -40,7 +40,6 @@ import type { DebtPerson } from './lib/debts';
 import { Investments } from './screens/Investments';
 import { Portfolio } from './screens/Portfolio';
 import { AddChat } from './components/AddChat';
-import { isDeposit } from './lib/types';
 import { Categories } from './screens/Categories';
 import { Folders } from './screens/Folders';
 import { Labels } from './screens/Labels';
@@ -304,6 +303,9 @@ function Shell() {
   /* The phone's +: a chat panel rather than the form (see `AddChat`). The
      tab bar steps away while it is up, half or full. */
   const [addChat, setAddChat] = useState(false);
+  /* A long press on + is the manual form. A ref, because the listener is set
+     up once and `newTransaction` is declared further down. */
+  const newTransactionRef = useRef<() => void>(() => {});
   useEffect(() => {
     if (nativeTabsH === null || !addChat) return;
     holdNativeTabs(true);
@@ -330,6 +332,10 @@ function Shell() {
         setRoute(tab);
       }),
       onNativeAdd(() => setAddChat(true)),
+      onNativeAddLong(() => {
+        setAddChat(false);
+        newTransactionRef.current();
+      }),
     ];
     return () => {
       for (const l of listeners) l.then((x) => x.unregister()).catch(() => {});
@@ -420,6 +426,7 @@ function Shell() {
     setSplitFocus(null);
     setTxOpen(true);
   }, []);
+  newTransactionRef.current = () => newTransaction();
 
   // Opening whatever a debt or a repayment names: the sheet asking gives way
   // to the posting itself, since one modal over another is nobody's idea of
@@ -520,20 +527,6 @@ function Shell() {
     setLabelFocus((f) => ({ ids: [labelId], token: f.token + 1 }));
     setRoute('transactions');
   }, [setRoute]);
-
-  /* A holding opened from the Investments page: its sleeve's screen opens
-     straight onto it, and its back goes back to the page it came from. */
-  const [holdingFocus, setHoldingFocus] = useState<string | null>(null);
-  const openHolding = useCallback(
-    (holding: Holding) => {
-      setHoldingFocus(holding.id);
-      setRoute(holding.kind === 'gold' ? 'gold' : isDeposit(holding.kind) ? 'deposits' : 'funds');
-    },
-    [setRoute],
-  );
-  useEffect(() => {
-    if (!isInvestmentRoute(route)) setHoldingFocus(null);
-  }, [route]);
 
   // Each sleeve is a route of its own, so arriving from a gold card lands on
   // gold and the sidebar says so.
@@ -856,17 +849,14 @@ function Shell() {
               />
             ) : isInvestmentRoute(route) ? (
               <Investments
-                key={`${route}:${holdingFocus ?? ''}`}
                 tab={INVESTMENT_TABS[route]}
-                focusId={holdingFocus}
-                onFocusBack={() => (canBack ? back() : setRoute('investments'))}
                 onNewHolding={newHolding}
                 onEditHolding={editHolding}
                 onAddLot={(holding) => setLotTarget({ holding, lot: null })}
                 onEditLot={(holding, lot) => setLotTarget({ holding, lot })}
               />
             ) : route === 'investments' ? (
-              <Portfolio onOpenHolding={openHolding} onNewHolding={() => newHolding('fund')} />
+              <Portfolio onOpenSleeve={openInvestments} onNewHolding={() => newHolding('fund')} />
             ) : route === 'ask' ? (
               <Ask onOpenSettings={() => setRoute('settings')} />
             ) : route === 'siri' ? (
@@ -956,6 +946,7 @@ function Shell() {
               setRoute(next);
             }}
             onAdd={() => setAddChat(true)}
+            onAddLong={() => newTransaction()}
             moreOpen={moreOpen}
           />}
           {addChat && (

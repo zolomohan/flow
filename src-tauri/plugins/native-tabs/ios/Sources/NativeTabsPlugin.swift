@@ -89,6 +89,10 @@ class NativeTabsPlugin: Plugin, UITabBarControllerDelegate {
     let controller = UITabBarController(tabs: makeTabs())
     markProminent(controller)
     controller.delegate = self
+    // A long press on the add circle is the manual form, straight away.
+    let hold = UILongPressGestureRecognizer(target: self, action: #selector(held(_:)))
+    hold.minimumPressDuration = 0.45
+    controller.view.addGestureRecognizer(hold)
     controller.view.backgroundColor = .clear
     controller.view.tintColor = tint
     controller.tabBar.tintColor = tint
@@ -152,11 +156,40 @@ class NativeTabsPlugin: Plugin, UITabBarControllerDelegate {
     }
   }
 
+  /// When the last long press on the add circle began. The tap UIKit may
+  /// still deliver when it lifts is that press's, not a tap of its own.
+  private var heldAt: Date?
+
+  /// Whether a point in the controller's view is on the add circle. iOS draws
+  /// it at the trailing end of the bar's row, about as wide as the bar is
+  /// tall, so that end of the row is where it is.
+  private func onAdd(_ point: CGPoint) -> Bool {
+    guard let controller = controller else { return false }
+    let bar = controller.tabBar
+    let local = controller.view.convert(point, to: bar)
+    guard bar.bounds.insetBy(dx: 0, dy: -12).contains(local) else { return false }
+    let rtl = bar.effectiveUserInterfaceLayoutDirection == .rightToLeft
+    let reach: CGFloat = 96
+    return rtl ? local.x <= reach : local.x >= bar.bounds.width - reach
+  }
+
+  @objc private func held(_ gesture: UILongPressGestureRecognizer) {
+    guard gesture.state == .began, let view = gesture.view else { return }
+    guard onAdd(gesture.location(in: view)) else { return }
+    heldAt = Date()
+    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    trigger("addLong", data: [:])
+  }
+
   // MARK: - UITabBarControllerDelegate
 
   @available(iOS 18.0, *)
   func tabBarController(_ tabBarController: UITabBarController, shouldSelectTab tab: UITab) -> Bool {
     if tab is UISearchTab {
+      if let at = heldAt, Date().timeIntervalSince(at) < 3 {
+        heldAt = nil
+        return false
+      }
       trigger("add", data: [:])
       return false
     }

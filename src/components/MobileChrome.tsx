@@ -14,6 +14,7 @@
  * taken out of it, in the sidebar's own order.
  */
 
+import { useRef } from 'react';
 import { motion, useTransform } from 'motion/react';
 import { DRAWER_WIDTH, drawerProgress } from '../lib/drawer';
 import { Icon, SiriMark } from './Icon';
@@ -44,13 +45,18 @@ const DRAWER_HIDES = new Set<string>([...NATIVE_TAB_ROUTES, ...Object.keys(INVES
  * since it goes somewhere no back button returns from.
  */
 export function TabBar({
-  route, onNavigate, onAdd, moreOpen,
+  route, onNavigate, onAdd, onAddLong, moreOpen,
 }: {
+  /** A long press on +: the manual form rather than the chat. */
+  onAddLong: () => void;
   route: Route;
   onNavigate: (route: Route) => void;
   onAdd: () => void;
   moreOpen: boolean;
 }) {
+
+  const timer = useRef<number | null>(null);
+  const held = useRef(false);
 
   return (
     <nav className="tab-bar" aria-label="Sections">
@@ -67,7 +73,22 @@ export function TabBar({
         whileTap={press}
         transition={spring}
         className="tab-add"
-        onClick={onAdd}
+        onPointerDown={() => {
+          held.current = false;
+          if (timer.current) window.clearTimeout(timer.current);
+          timer.current = window.setTimeout(() => {
+            held.current = true;
+            onAddLong();
+          }, 450);
+        }}
+        onPointerUp={() => timer.current && window.clearTimeout(timer.current)}
+        onPointerLeave={() => timer.current && window.clearTimeout(timer.current)}
+        onPointerCancel={() => timer.current && window.clearTimeout(timer.current)}
+        onContextMenu={(e) => e.preventDefault()}
+        onClick={() => {
+          if (held.current) held.current = false;
+          else onAdd();
+        }}
         aria-label="Add transaction"
       >
         <Icon name="plus" size={23} strokeWidth={2.5} />

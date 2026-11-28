@@ -3,8 +3,8 @@
  *
  * The three sleeves each have a screen of their own, priced their own way.
  * This is the page above them — what it is all worth now, how that has moved,
- * and one card per holding with its own line drawn small on the right, each
- * of which opens that holding.
+ * and one card per sleeve summing it up, with its own line drawn small on the
+ * right, each of which opens that sleeve's screen.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -16,9 +16,8 @@ import { api } from '../lib/api';
 import { useStore } from '../lib/store';
 import { money, percent } from '../lib/format';
 import { itemVariants, listVariants, spring } from '../lib/motion';
-import { splitName } from './HoldingDetail';
 import { isDeposit } from '../lib/types';
-import type { Holding, HoldingKind, InvestmentTab, ValuePoint } from '../lib/types';
+import type { HoldingKind, InvestmentTab, ValuePoint } from '../lib/types';
 
 type Range = '30' | '90' | '366' | 'all';
 const RANGES: SegmentOption<Range>[] = [
@@ -40,9 +39,9 @@ const SLEEVES: { tab: InvestmentTab; name: string; icon: string; color: string }
 const sleeveOf = (kind: HoldingKind): InvestmentTab => (isDeposit(kind) ? 'deposit' : kind);
 
 export function Portfolio({
-  onOpenHolding, onNewHolding,
+  onOpenSleeve, onNewHolding,
 }: {
-  onOpenHolding: (holding: Holding) => void;
+  onOpenSleeve: (tab: InvestmentTab) => void;
   onNewHolding: () => void;
 }) {
   const { holdings, revision } = useStore();
@@ -64,10 +63,11 @@ export function Portfolio({
 
   useEffect(() => {
     let live = true;
-    api
-      .holdingValueSeriesAll(CARD_DAYS)
-      .then((all) => live && setLines(all))
-      .catch(() => live && setLines({}));
+    Promise.all(
+      SLEEVES.map((s) =>
+        api.sleeveValueSeries(s.tab, CARD_DAYS).then((points) => [s.tab, points] as const).catch(() => [s.tab, []] as const),
+      ),
+    ).then((all) => live && setLines(Object.fromEntries(all)));
     return () => {
       live = false;
     };
@@ -89,7 +89,15 @@ export function Portfolio({
   const groups = SLEEVES.flatMap((sleeve) => {
     const mine = open.filter((h) => sleeveOf(h.kind) === sleeve.tab);
     if (!mine.length) return [];
-    return [{ ...sleeve, holdings: mine, worth: mine.reduce((s, h) => s + h.marketValue, 0) }];
+    const base = mine.reduce((s, h) => s + h.invested - h.realised, 0);
+    const ret = mine.reduce((s, h) => s + h.totalReturn, 0);
+    return [{
+      ...sleeve,
+      count: mine.length,
+      worth: mine.reduce((s, h) => s + h.marketValue, 0),
+      ret,
+      pct: base > 0 ? (ret / base) * 100 : null,
+    }];
   });
 
   return (
@@ -151,57 +159,50 @@ export function Portfolio({
             </div>
           </motion.section>
 
-          {groups.map((group) => (
-            <section key={group.tab} className="portfolio-group">
-              <div className="portfolio-group-head">
-                <span className="portfolio-group-icon" style={{ color: group.color }}>
-                  <Icon name={group.icon} size={14} />
-                </span>
-                <h2>{group.name}</h2>
-                <span className="portfolio-group-worth">{money(group.worth)}</span>
-              </div>
-              <motion.div className="portfolio-list" variants={listVariants} initial="hidden" animate="show">
-                {group.holdings.map((h) => {
-                  const { title, detail } = splitName(h);
-                  const values = (lines?.[h.id] ?? []).map((p) => p.value);
-                  const base = h.invested - h.realised;
-                  const pct = base > 0 ? (h.totalReturn / base) * 100 : null;
-                  const up = h.totalReturn >= 0;
-                  const tone = values.length > 1
-                    ? values[values.length - 1] >= values[0] ? 'var(--green)' : 'var(--red)'
-                    : group.color;
-                  return (
-                    <motion.button
-                      key={h.id}
-                      type="button"
-                      variants={itemVariants}
-                      className="portfolio-card"
-                      onClick={() => onOpenHolding(h)}
-                    >
-                      <span className="portfolio-card-text">
-                        <span className="portfolio-card-name">{title}</span>
-                        {detail && <span className="portfolio-card-detail">{detail}</span>}
-                        <span className="portfolio-card-figures">
-                          <strong>{money(h.marketValue)}</strong>
-                          {pct !== null && (
-                            <span className={up ? 'is-up' : 'is-down'}>{percent(pct, { sign: true })}</span>
-                          )}
-                        </span>
+          <motion.div className="portfolio-list" variants={listVariants} initial="hidden" animate="show">
+            {groups.map((group) => {
+              const values = (lines?.[group.tab] ?? []).map((p) => p.value);
+              const tone = values.length > 1
+                ? values[values.length - 1] >= values[0] ? 'var(--green)' : 'var(--red)'
+                : group.color;
+              return (
+                <motion.button
+                  key={group.tab}
+                  type="button"
+                  variants={itemVariants}
+                  className="portfolio-card"
+                  onClick={() => onOpenSleeve(group.tab)}
+                >
+                  <span className="portfolio-card-text">
+                    <span className="portfolio-card-name">
+                      <span className="portfolio-group-icon" style={{ color: group.color }}>
+                        <Icon name={group.icon} size={14} />
                       </span>
-                      <span className="portfolio-card-chart">
-                        {lines !== null && values.length < 2 ? (
-                          // No prices behind it yet: a level rule, not a gap.
-                          <span className="portfolio-card-flat" />
-                        ) : (
-                          <Sparkline values={values} height={44} stroke={tone} loading={lines === null} />
-                        )}
-                      </span>
-                    </motion.button>
-                  );
-                })}
-              </motion.div>
-            </section>
-          ))}
+                      {group.name}
+                    </span>
+                    <span className="portfolio-card-detail">
+                      {group.count} {group.count === 1 ? 'holding' : 'holdings'}
+                      {worth > 0 && ` · ${percent((group.worth / worth) * 100)} of it`}
+                    </span>
+                    <span className="portfolio-card-figures">
+                      <strong>{money(group.worth)}</strong>
+                      {group.pct !== null && (
+                        <span className={group.ret >= 0 ? 'is-up' : 'is-down'}>{percent(group.pct, { sign: true })}</span>
+                      )}
+                    </span>
+                  </span>
+                  <span className="portfolio-card-chart">
+                    {lines !== null && values.length < 2 ? (
+                      // No prices behind it yet: a level rule, not a gap.
+                      <span className="portfolio-card-flat" />
+                    ) : (
+                      <Sparkline values={values} height={44} stroke={tone} loading={lines === null} />
+                    )}
+                  </span>
+                </motion.button>
+              );
+            })}
+          </motion.div>
         </>
       )}
     </div>

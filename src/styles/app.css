@@ -9767,3 +9767,8 @@ kbd {
   background: linear-gradient(var(--line), var(--line)) center / 100% 1.5px no-repeat;
   opacity: 0.8;
 }
+.portfolio-list { margin-top: 14px; }
+.portfolio-card-name { display: flex; align-items: center; gap: 8px; }
+.portfolio-card-name .portfolio-group-icon { width: 22px; height: 22px; flex-shrink: 0; }
+.portfolio-card-detail { margin-left: 30px; }
+.portfolio-card-figures { margin-left: 30px; }

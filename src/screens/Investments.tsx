@@ -50,12 +50,8 @@ const TINTS: Record<InvestmentTab, string> = {
 };
 
 export function Investments({
-  tab, onNewHolding, onEditHolding, onAddLot, onEditLot, focusId, onFocusBack,
+  tab, onNewHolding, onEditHolding, onAddLot, onEditLot,
 }: {
-  /** A holding to open straight onto, from the Investments page. */
-  focusId?: string | null;
-  /** Where that holding's back goes: the page it was opened from. */
-  onFocusBack?: () => void;
   /** Which sleeve this is: the route says, and the sidebar shows which. */
   tab: InvestmentTab;
   onNewHolding: (kind: HoldingKind) => void;
@@ -83,7 +79,7 @@ export function Investments({
   const [rateOpen, setRateOpen] = useState(false);
   // Held by id rather than by object: the store hands back fresh holdings
   // after every write, and the open page should follow them.
-  const [openId, setOpenId] = useState<string | null>(focusId ?? null);
+  const [openId, setOpenId] = useState<string | null>(null);
 
   // A book that predates the price history — or one whose prices were last
   // fetched before it existed — has holdings but no lines to draw. Ask for
@@ -208,7 +204,7 @@ export function Investments({
       <HoldingDetail
         holding={viewing}
         share={portfolio > 0 ? viewing.marketValue / portfolio : 0}
-        onBack={() => (focusId && openId === focusId && onFocusBack ? onFocusBack() : setOpenId(null))}
+        onBack={() => setOpenId(null)}
         onEdit={() => onEditHolding(viewing)}
         onAddLot={() => onAddLot(viewing)}
         onEditLot={(lot) => onEditLot(viewing, lot)}
