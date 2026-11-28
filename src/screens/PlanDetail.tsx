@@ -115,7 +115,7 @@ export function PlanDetail({
     <div className="screen">
       <header className="screen-head detail-head">
         <div className="detail-id">
-          <button className="detail-back" onClick={onBack} aria-label="Back to planned payments">
+          <button className="detail-back" data-label="Planned" onClick={onBack} aria-label="Back to planned payments">
             <Icon name="chevron-left" size={17} />
           </button>
           <MerchantLogo

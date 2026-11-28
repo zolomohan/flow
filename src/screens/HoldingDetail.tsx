@@ -121,7 +121,7 @@ export function HoldingDetail({
     <div className="screen">
       <header className="screen-head detail-head">
         <div className="detail-id">
-          <button className="detail-back" onClick={onBack} aria-label="Back to investments">
+          <button className="detail-back" data-label="Investments" onClick={onBack} aria-label="Back to investments">
             <Icon name="chevron-left" size={17} />
           </button>
           <span

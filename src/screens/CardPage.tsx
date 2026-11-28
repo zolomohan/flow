@@ -489,7 +489,7 @@ export function CardPage({
     <div className="screen cards-screen">
       <header className="screen-head detail-head">
         <div className="detail-id">
-          <button className="detail-back" onClick={onBack} aria-label="Back to cards">
+          <button className="detail-back" data-label="Cards" onClick={onBack} aria-label="Back to cards">
             <Icon name="chevron-left" size={17} />
           </button>
           {/* The card itself is drawn below, institution, cycle and all —

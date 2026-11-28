@@ -194,7 +194,7 @@ export function DebtDetail({
 
       <header className="screen-head detail-head">
         <div className="detail-id">
-          <button className="detail-back" onClick={onBack} aria-label="Back to debts">
+          <button className="detail-back" data-label="Debts" onClick={onBack} aria-label="Back to debts">
             <Icon name="chevron-left" size={17} />
           </button>
           <span className="debt-avatar">{initials(debt.counterparty)}</span>

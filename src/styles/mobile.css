@@ -1259,3 +1259,38 @@
    is asked of the wrapper instead. */
 .swipe-row .tx-bill:last-child .tx-row::after { display: block; }
 .swipe-row:last-child .tx-bill:last-child .tx-row::after { display: none; }
+
+/* ==================================================================
+   Pages one level in (a folder, a card, a holding, a person, a plan):
+   iOS's back button, a blue chevron and the name of the page behind it,
+   on a line of its own above the title.
+   ================================================================== */
+
+@media (max-width: 760px) {
+  .detail-head {
+    position: relative;
+    flex-direction: column;
+    align-items: stretch;
+    padding-top: 36px;
+  }
+  .detail-head .detail-back {
+    position: absolute;
+    top: 0;
+    left: -8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
+    width: auto;
+    height: 32px;
+    padding: 0 8px 0 2px;
+    border: 0;
+    background: none;
+    color: var(--blue);
+    font-size: 16px;
+    font-weight: 500;
+  }
+  .detail-head .detail-back svg { width: 22px; height: 22px; stroke-width: 2.4; }
+  .detail-head .detail-back::after { content: attr(data-label); }
+  .detail-head .detail-back:active { opacity: 0.5; }
+  .detail-head .head-actions { flex-wrap: wrap; }
+}

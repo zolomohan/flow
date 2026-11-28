@@ -146,7 +146,7 @@ export function FolderDetail({
     <div className="screen folder-screen">
       <header className="screen-head detail-head">
         <div className="detail-id">
-          <button className="detail-back" onClick={onBack} aria-label="Back to folders">
+          <button className="detail-back" data-label="Folders" onClick={onBack} aria-label="Back to folders">
             <Icon name="chevron-left" size={17} />
           </button>
           <span className="folder-glyph is-large" style={{ ['--tint' as any]: folder.color }}>
