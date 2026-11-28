@@ -136,10 +136,9 @@
   .phone-drawer .brand { justify-content: flex-start; padding-inline: 8px; }
 
   /* The screen: above the panel, and opaque, since it is what hides the
-     panel when shut. The paper is the shell's own, drifted the same way. */
+     panel when shut. Its paper is on the page inside it (below). */
   .app.is-phone .main {
-    background: var(--grain) var(--bg);
-    background-position: 0 var(--ground-y, 0px);
+    background: var(--bg);
     /* Cast onto the panel by the edge the screen leaves by. Always on — at
        rest the screen covers the whole width and this falls off-screen. A
        close layer to hold the edge and a wide faint one behind it, which is
@@ -176,6 +175,14 @@
      taking a sideways drag as a pan of its own and cancelling the pointer
      before the drawer has had a chance to claim it. */
   .app.is-phone .main-scroll { touch-action: pan-y; }
+
+  /* The grain rides on the page and scrolls with it, one to one. The Mac's
+     slower drift is moved from JavaScript, which on iOS trails the
+     compositor's scroll and is seen catching up after the page has stopped. */
+  .app.is-phone .main-scroll {
+    background: var(--grain) var(--bg);
+    background-attachment: local;
+  }
 
   /* ------------------------------------------------------------- tab bar */
 

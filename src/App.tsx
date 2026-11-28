@@ -195,10 +195,15 @@ function ScrollPane({
      reads as a layer further back. Written straight to a custom property on
      the shell, once a frame at most: a re-render per scroll event would be
      the whole page redrawn to move a texture. */
+  /* Not on a phone. iOS scrolls on the compositor, a frame or more ahead of
+     anything JavaScript hears about it, so a texture moved from here trails
+     the page and is still settling after the thumb has stopped. There the
+     grain is painted on the page itself and scrolls with it (`mobile.css`). */
+  const phone = usePhone();
   useEffect(() => {
     const node = pane.current;
     const shell = node?.closest<HTMLElement>('.app');
-    if (!node || !shell) return;
+    if (!node || !shell || phone) return;
     let raf = 0;
     const paint = () => {
       raf = 0;
@@ -213,7 +218,7 @@ function ScrollPane({
       node.removeEventListener('scroll', onScroll);
       cancelAnimationFrame(raf);
     };
-  }, []);
+  }, [phone]);
 
   return (
     <motion.div
