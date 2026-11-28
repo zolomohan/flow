@@ -19,6 +19,10 @@ export const NATIVE_TAB_ROUTES = new Set<string>(['overview', 'transactions', 's
 
 const onIOS = isDesktop && /iPhone|iPad|iPod/.test(navigator.userAgent);
 
+/** Known before the bar is up: on iOS the page never draws a bar of its own,
+ *  not even for the moment before UIKit's arrives. */
+export const nativeTabsExpected = onIOS;
+
 let shown: Promise<number | null> | null = null;
 let active = false;
 

@@ -10,7 +10,7 @@ import {
   DRAWER_RADIUS, DRAWER_WIDTH, backFade, backProgress, drawerProgress, useDrawer, useDrawerMoving,
 } from './lib/drawer';
 import {
-  NATIVE_TAB_ROUTES, badgeNativeTab, holdNativeTabs, onNativeAdd, onNativeTab, selectNativeTab,
+  NATIVE_TAB_ROUTES, nativeTabsExpected, badgeNativeTab, holdNativeTabs, onNativeAdd, onNativeTab, selectNativeTab,
   showNativeTabs,
   type NativeTab,
 } from './lib/nativeTabs';
@@ -254,7 +254,6 @@ function Shell() {
   const shellRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   const { open: drawerOpen, setOpen: setDrawer } = useDrawer({
-    root: shellRef,
     page: mainRef,
     enabled: phone,
     canBack,
@@ -647,7 +646,7 @@ function Shell() {
   return (
     <div
       ref={shellRef}
-      className={`app ${phone ? 'is-phone' : ''} ${nativeTabsH !== null ? 'has-native-tabs' : ''} ${drawerOpen ? 'is-nav-open' : ''}`}
+      className={`app ${phone ? 'is-phone' : ''} ${nativeTabsH !== null || nativeTabsExpected ? 'has-native-tabs' : ''} ${drawerOpen ? 'is-nav-open' : ''}`}
       style={nativeTabsH !== null ? ({ '--tabs-h': `${nativeTabsH}px` } as CSSProperties) : undefined}
     >
       {/* A phone has no bar across the top: the page starts under the
@@ -885,7 +884,7 @@ function Shell() {
       />
       {phone && (
         <>
-          {nativeTabsH === null && <TabBar
+          {nativeTabsH === null && !nativeTabsExpected && <TabBar
             route={route}
             onNavigate={(next) => {
               setMoreOpen(false);

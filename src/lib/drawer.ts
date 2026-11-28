@@ -73,14 +73,11 @@ export const backFade: MotionValue<number> = motionValue(1);
 const IGNORE = 'input, textarea, select, [contenteditable], .sheet, .scrim, .palette';
 
 export function useDrawer({
-  root,
   page,
   enabled,
   canBack,
   onBack,
 }: {
-  /** What the gestures are read from — the whole shell, panel included. */
-  root: RefObject<HTMLElement | null>;
   /** The page, whose width the back swipe travels. */
   page: RefObject<HTMLElement | null>;
   enabled: boolean;
@@ -105,9 +102,12 @@ export function useDrawer({
     if (!enabled && openNow.current) setOpen(false);
   }, [enabled, setOpen]);
 
+  /* Read from the window rather than the shell: the shell is not there on
+     the first render (the boot screen is), and a listener bound to a ref that
+     was still empty when the effect ran is never bound at all. */
   useEffect(() => {
-    const node = root.current;
-    if (!enabled || !node) return;
+    if (!enabled) return;
+    const node = window;
 
     type Mode = 'drawer' | 'back';
     let pointer: number | null = null;
@@ -242,7 +242,7 @@ export function useDrawer({
       node.removeEventListener('pointercancel', onUp);
       if (claimed && mode === 'back') animate(backProgress, 0, BACK_SPRING);
     };
-  }, [enabled, root, page, setOpen]);
+  }, [enabled, page, setOpen]);
 
   // Escape shuts it, on a keyboard paired to a phone or a narrowed window.
   useEffect(() => {
