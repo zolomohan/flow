@@ -225,6 +225,9 @@ export function Folders({
                     {section.year && (
                       <header className="folder-section-head">
                         <h2>{section.year}</h2>
+                        <span>
+                          {section.folders.length} {section.folders.length === 1 ? 'folder' : 'folders'}
+                        </span>
                       </header>
                     )}
                     <motion.div

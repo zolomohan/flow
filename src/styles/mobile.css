@@ -1841,3 +1841,28 @@
   }
   .debt-screen .screen-head > .debt-adds .btn svg { width: 17px; height: 17px; }
 }
+
+/* Folders' year headings on the phone: a band across the whole width, the
+   year large on the left and how many folders on the right, held at the top
+   while its folders scroll under it. */
+@media (max-width: 760px) {
+  .folder-sections { gap: 22px; }
+  .folder-section-head {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    justify-content: space-between;
+    margin: 0 -16px 12px;
+    padding: 10px 16px;
+    background: color-mix(in srgb, var(--bg) 78%, transparent);
+    -webkit-backdrop-filter: blur(16px) saturate(1.6);
+    backdrop-filter: blur(16px) saturate(1.6);
+    border-top: 1px solid var(--line-soft);
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .folder-section-head h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; }
+  .folder-section-head span { font-size: 13px; }
+}
+@media (max-width: 400px) {
+  .folder-section-head { margin-inline: -13px; padding-inline: 13px; }
+}
