@@ -165,6 +165,7 @@ export function Debts({
       {debts.length === 0 ? (
         <Empty
           screen
+          art="debts"
           title="No debts tracked"
           body="Money you have lent or borrowed, tracked until it is settled."
         />
@@ -186,6 +187,8 @@ export function Debts({
               {showing.length === 0 ? (
                 <Empty
                   screen
+                  art="debts"
+                  tone="green"
                   title={
                     tab === 'lent'
                       ? 'Nobody owes you anything'

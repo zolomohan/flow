@@ -117,6 +117,12 @@ export const emptyStack: Variants = {
   animate: { transition: { staggerChildren: 0.055, delayChildren: 0.04 } },
 };
 
+/** The drawing comes up a touch larger than the words, and settles. */
+export const emptyArt: Variants = {
+  initial: { opacity: 0, y: 10, scale: 0.94 },
+  animate: { opacity: 1, y: 0, scale: 1, transition: spring },
+};
+
 export const emptyLine: Variants = {
   initial: { opacity: 0, y: 7 },
   animate: { opacity: 1, y: 0, transition: spring },

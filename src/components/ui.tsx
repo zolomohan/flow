@@ -7,9 +7,10 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion, useDragControls } from 'motion/react';
+import { EmptyArt, type EmptyArtName } from './EmptyArt';
 import { Icon } from './Icon';
 import {
-  emptyLine, emptyStack, popover, press, sheetBackdrop, sheetPanel, sheetPhone,
+  emptyArt, emptyLine, emptyStack, popover, press, sheetBackdrop, sheetPanel, sheetPhone,
   spring, springSoft,
 } from '../lib/motion';
 import { usePhone } from '../lib/media';
@@ -977,17 +978,29 @@ export function Chip({
   );
 }
 
+/** The colour a drawing is done in: one of the book's own accents. */
+export type EmptyTone = 'blue' | 'green' | 'amber' | 'red' | 'violet' | 'ink';
+
+/**
+ * What a page shows when there is nothing on it: a small drawing of the
+ * thing that will be there, a title, and only rarely a line under it — the
+ * way drivea heads its empty pages. The drawing is in the state's tone, so
+ * a cleared inbox is green, a page that went wrong red, and a list that has
+ * not started yet the book's blue.
+ *
+ * - `art` names the scene (see `EmptyArt.tsx`).
+ * - `body` is for what the title cannot say on its own.
+ * - `action` is only for a way out the screen does not already offer.
+ * - `screen` takes the height the list would have had; leave it off inside
+ *   a card that has its own heading, where the drawing is drawn smaller.
+ */
 export function Empty({
-  title, body, action, screen, glyph = '😔',
+  title, body, action, screen, art = 'inbox', tone = 'blue',
 }: {
   title: string;
   body?: string;
-  /**
-   * The face over the words. Sad by default because an empty state is a
-   * small disappointment — you came looking for something and there is
-   * nothing there. A screen with a happier sort of nothing can say so.
-   */
-  glyph?: string;
+  art?: EmptyArtName;
+  tone?: EmptyTone;
   /**
    * Only where the screen's own header doesn't already carry the same
    * button. An empty state that repeats the header is the same button
@@ -1003,14 +1016,14 @@ export function Empty({
 }) {
   return (
     <motion.div
-      className={`empty ${screen ? 'is-screen' : ''}`}
+      className={`empty tone-${tone} ${screen ? 'is-screen' : ''}`}
       initial="initial"
       animate="animate"
       variants={emptyStack}
     >
-      <motion.span className="empty-glyph" variants={emptyLine} aria-hidden>
-        {glyph}
-      </motion.span>
+      <motion.div className="empty-art-wrap" variants={emptyArt}>
+        <EmptyArt name={art} />
+      </motion.div>
       <motion.h4 variants={emptyLine}>{title}</motion.h4>
       {body && <motion.p variants={emptyLine}>{body}</motion.p>}
       {action && (

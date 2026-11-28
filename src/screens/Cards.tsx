@@ -114,6 +114,7 @@ export function Cards({
         </header>
         <Empty
           screen
+          art="card"
           title="No credit cards yet"
           body="What is billed, what is due, and how much of your limit is left."
           action={

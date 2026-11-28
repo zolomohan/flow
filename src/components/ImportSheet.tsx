@@ -546,6 +546,8 @@ export function ImportSheet({ open: isOpen, onClose }: { open: boolean; onClose:
 
           {fresh.length === 0 ? (
             <Empty
+              art="inbox"
+              tone="green"
               title="Nothing new here"
               body="Every row of this statement is already in the book."
             />

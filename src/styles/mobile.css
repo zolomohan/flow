@@ -77,7 +77,7 @@
     gap: 2px;
     height: calc(var(--bar-h) + var(--safe-t));
     padding: var(--safe-t) 10px 0;
-    background: var(--bg);
+    background: var(--grain) var(--bg);
     border-bottom: 1px solid var(--line-soft);
   }
 

@@ -68,6 +68,7 @@ export function Accounts({
       {live.length === 0 ? (
         <Empty
           screen
+          art="wallet"
           title="No accounts yet"
           body="A bank, a card, a wallet, a fund: wherever your money sits."
         />

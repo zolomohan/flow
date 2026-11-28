@@ -212,6 +212,31 @@ export function Investments({
     );
   }
 
+  /* The same empty page whether the book holds nothing at all or only
+     nothing of this kind: each sleeve has its own line in the sidebar now,
+     so each says what it would hold. */
+  const sleeveEmpty = (
+    <Empty
+      screen
+      art={tab === 'gold' ? 'gold' : tab === 'deposit' ? 'bank' : 'growth'}
+      tone={tab === 'gold' ? 'amber' : tab === 'deposit' ? 'blue' : 'green'}
+      title={
+        tab === 'gold'
+          ? 'No gold tracked'
+          : tab === 'deposit'
+            ? 'No deposits tracked'
+            : 'No funds tracked'
+      }
+      body={
+        tab === 'gold'
+          ? 'Coins, a chain, bangles: weighed, and valued at the day’s rate.'
+          : tab === 'deposit'
+            ? 'A fixed or recurring deposit: its rate and dates, and what it earns until it matures.'
+            : 'Add a scheme and what you bought. Its NAV is fetched daily.'
+      }
+    />
+  );
+
   return (
     <div className="screen">
       <header className="screen-head">
@@ -240,11 +265,7 @@ export function Investments({
       </header>
 
       {holdings.length === 0 ? (
-        <Empty
-          screen
-          title="Nothing tracked yet"
-          body="Gold by the gram, or a mutual fund by its scheme. Both priced daily."
-        />
+        sleeveEmpty
       ) : (
         <AnimatePresence mode="wait" initial={false}>
           <motion.div
@@ -387,23 +408,7 @@ export function Investments({
             )}
 
             {open.length === 0 ? (
-              <Empty
-                screen
-                title={
-                  tab === 'gold'
-                    ? 'No gold tracked'
-                    : tab === 'deposit'
-                      ? 'No deposits tracked'
-                      : 'No funds tracked'
-                }
-                body={
-                  tab === 'gold'
-                    ? 'Coins, a chain, bangles: weighed, and valued at the day’s rate.'
-                    : tab === 'deposit'
-                      ? 'A fixed or recurring deposit: its rate and dates, and what it earns until it matures.'
-                      : 'Add a scheme and what you bought. Its NAV is fetched daily.'
-                }
-              />
+              sleeveEmpty
             ) : (
               <motion.div
                 className="holding-cards"

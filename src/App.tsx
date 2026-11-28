@@ -561,7 +561,7 @@ function Shell() {
     return (
       <div className="boot boot-failed">
         <div className="boot-error">
-          <Empty title="flow could not open your book" body={fatal} />
+          <Empty art="fail" tone="red" title="flow could not open your book" body={fatal} />
         </div>
       </div>
     );
@@ -601,6 +601,7 @@ function Shell() {
               <div className="screen">
                 <div className="welcome">
                   <Empty
+                    art="wallet"
                     title="Welcome to flow"
                     body="A bank, a card, a wallet: wherever your money sits."
                     action={

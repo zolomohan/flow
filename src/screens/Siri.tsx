@@ -69,6 +69,8 @@ export function Siri({ onOpenTransaction }: { onOpenTransaction?: (id: string) =
       {captures.length === 0 ? (
         <Empty
           screen
+          art="inbox"
+          tone="green"
           title="Nothing waiting"
           body={
             lastCaptureSync

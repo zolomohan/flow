@@ -118,6 +118,7 @@ export function Planned({
       {plans.length === 0 ? (
         <Empty
           screen
+          art="calendar"
           title="Nothing planned yet"
           body="Rent, a subscription, an EMI: the money that comes round again."
         />
@@ -194,6 +195,8 @@ function Upcoming({
     return (
       <Empty
         screen
+        art="calendar-done"
+        tone="green"
         title="Nothing coming"
         body="Every plan you keep is either finished or put away."
       />

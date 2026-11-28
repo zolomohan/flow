@@ -33,7 +33,7 @@ html, body, #root { height: 100%; }
    ground behind it. `overscroll-behavior` stops the rubber band, and the
    background on `html` means even a stray pixel of it is the page's grey. */
 html {
-  background: var(--bg);
+  background: var(--grain) var(--bg);
   overscroll-behavior: none;
 }
 
@@ -52,7 +52,7 @@ body {
   font-size: 14px;
   line-height: 1.45;
   color: var(--ink);
-  background: var(--bg);
+  background: var(--grain) var(--bg);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   font-variant-numeric: tabular-nums;
@@ -150,7 +150,9 @@ kbd {
   grid-template-rows: minmax(0, 1fr);
   height: 100%;
   overflow: hidden;
-  background: var(--bg);
+  /* drivea's paper: the grain tile over the ground. It sits on the shell
+     rather than the page, so it holds still while the page scrolls past. */
+  background: var(--grain) var(--bg);
 }
 
 .titlebar-drag {
@@ -230,7 +232,7 @@ kbd {
 }
 
 /* The failure case is read, not admired: put it back on the page ground. */
-.boot.boot-failed { background: var(--bg); }
+.boot.boot-failed { background: var(--grain) var(--bg); }
 .boot-error { max-width: 420px; }
 
 .welcome {
@@ -251,21 +253,93 @@ kbd {
   flex-direction: column;
   gap: 6px;
   padding: calc(var(--titlebar-h) + 12px) 14px 16px;
-  background: var(--bg);
+  background: var(--grain) var(--bg);
   border-right: 1px solid var(--line-soft);
-  /* A window shorter than the list scrolls the list, not the app. */
+  /* Nothing scrolls at this level: `.side-scroll` is the part that does. */
   min-height: 0;
-  overflow-y: auto;
-  scrollbar-width: none;
+  overflow: hidden;
 }
 .sidebar > * { flex-shrink: 0; }
+
+/* The lists, and only the lists. A window short enough to run out of room
+   takes it out of these rather than out of the foot, so Settings and Add are
+   reachable at any height. No scrollbar: a grey bar down the side is window
+   furniture on something meant to read as part of the app. */
+.sidebar > .side-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-inline: -14px;
+  padding-inline: 14px;
+  overflow: hidden auto;
+  scrollbar-width: none;
+  /* Faded at an edge it has scrolled past — `--fade-top` and `--fade-bottom`
+     are 0 or 1, set by the sidebar as it scrolls — so the list dissolves
+     under the search box and the Add button instead of being sliced off. */
+  --fade-top: 0;
+  --fade-bottom: 0;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    rgb(0 0 0 / calc(1 - var(--fade-top))) 0,
+    #000 40px,
+    #000 calc(100% - 40px),
+    rgb(0 0 0 / calc(1 - var(--fade-bottom))) 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    rgb(0 0 0 / calc(1 - var(--fade-top))) 0,
+    #000 40px,
+    #000 calc(100% - 40px),
+    rgb(0 0 0 / calc(1 - var(--fade-bottom))) 100%
+  );
+}
+.side-scroll::-webkit-scrollbar { width: 0; height: 0; }
+/* A short window scrolls the list rather than squashing a heading. */
+.side-scroll > * { flex: none; }
+
+/* The headings between the runs of rows: small capitals in the faintest ink,
+   on the labels' own left edge. */
+.nav-group-label {
+  position: relative;
+  margin: 0;
+  padding: 14px 10px 5px;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: var(--wide);
+  text-transform: uppercase;
+  color: var(--ink-4);
+}
 
 /* 10px of padding puts the name on the same left edge as the nav labels
    below it, which carry 10px of their own inside the sidebar's 14px. */
 .brand {
   display: flex;
   align-items: center;
-  padding: 4px 10px 14px;
+  gap: 10px;
+  padding: 4px 8px 14px;
+}
+
+/* Whose book: their initial on the brand's navy, lit from the top like the
+   badges on drivea's empty pages. */
+.brand-mark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  background: linear-gradient(160deg, color-mix(in srgb, var(--brand-bg) 78%, #fff), var(--brand-bg));
+  color: var(--green-bright);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: var(--tight);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.16),
+    var(--shadow-sm);
 }
 
 .brand-text { display: flex; flex-direction: column; min-width: 0; }
@@ -1066,56 +1140,132 @@ kbd {
 }
 .meter-fill { display: block; height: 100%; border-radius: 99px; }
 
-/* Nothing here yet. Type alone, centred — no panel and no picture — so an
-   empty screen reads as a pause rather than as a thing to look at. */
+/* Nothing here yet — see `Empty` in `ui.tsx` and the drawings in
+   `EmptyArt.tsx`. One small scene in the middle of the room the list would
+   have had, a title set the way the screen headings are, and only rarely a
+   line under it. Inside a card, the same thing smaller. */
 
 .empty {
+  --e-accent: var(--blue);
   display: grid;
   justify-items: center;
   align-content: center;
-  gap: 9px;
-  padding: 44px 24px;
+  gap: 6px;
+  padding: 28px 24px 32px;
   text-align: center;
 }
+.empty.tone-blue { --e-accent: var(--blue); }
+.empty.tone-green { --e-accent: var(--green); }
+.empty.tone-amber { --e-accent: var(--amber); }
+.empty.tone-red { --e-accent: var(--red); }
+.empty.tone-violet { --e-accent: var(--violet); }
+.empty.tone-ink { --e-accent: var(--ink-2); }
 
-/* The whole space the list would have filled, so the words land in the middle
-   of the screen instead of sitting at the top of it. */
+/* The whole space the list would have filled, so the drawing lands in the
+   middle of the screen instead of sitting at the top of it. */
 .empty.is-screen {
   flex: 1;
-  min-height: min(56vh, 440px);
+  min-height: min(60vh, 480px);
   padding: 32px 24px;
 }
 
-/* Big enough to read as a face rather than as punctuation, and held back
-   from the title so the two do not crowd. */
-.empty-glyph {
-  font-size: 38px;
-  line-height: 1;
-  margin-bottom: 3px;
-  opacity: 0.85;
+/* A soft pool of the tone sits behind each drawing, so it reads as placed
+   rather than pasted. */
+.empty-art-wrap { display: grid; place-items: center; margin-bottom: 8px; }
+.empty-art {
+  width: 132px;
+  height: auto;
+  aspect-ratio: 120 / 86;
+  overflow: visible;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--e-accent) 13%, transparent), transparent);
 }
+.empty.is-screen .empty-art { width: 184px; }
+.empty.is-screen .empty-art-wrap { margin-bottom: 14px; }
+
+/* The palette every scene is drawn from: the tone, mixed with the surface
+   for its lighter parts and with black for its deeper ones, so a drawing
+   follows its tone into every theme. */
+.empty-art .ea-shadow { fill: color-mix(in srgb, var(--e-accent) 16%, transparent); }
+.empty-art .ea-fill { fill: var(--e-accent); }
+.empty-art .ea-deep { fill: color-mix(in srgb, var(--e-accent) 62%, #000); }
+.empty-art .ea-mid { fill: color-mix(in srgb, var(--e-accent) 45%, var(--surface)); }
+.empty-art .ea-soft { fill: color-mix(in srgb, var(--e-accent) 20%, var(--surface)); }
+.empty-art .ea-glass { fill: color-mix(in srgb, var(--e-accent) 12%, var(--surface)); }
+.empty-art .ea-page { fill: var(--surface); }
+.empty-art .ea-on { fill: #fff; }
+.empty-art .ea-edge { stroke: color-mix(in srgb, var(--e-accent) 30%, transparent); stroke-width: 1.2; }
+.empty-art .ea-spark { fill: color-mix(in srgb, var(--e-accent) 70%, var(--surface)); }
+.empty-art .ea-stroke-on { fill: none; stroke: #fff; stroke-linecap: round; stroke-linejoin: round; }
+.empty-art .ea-stroke,
+.empty-art .ea-line {
+  fill: none;
+  stroke: var(--e-accent);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.empty-art .ea-line { stroke: color-mix(in srgb, var(--e-accent) 70%, #000); stroke-width: 3; }
+.empty-art .ea-trail {
+  fill: none;
+  stroke: color-mix(in srgb, var(--e-accent) 45%, var(--surface));
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.empty-art .ea-dash {
+  fill: none;
+  stroke: color-mix(in srgb, var(--e-accent) 35%, var(--surface));
+  stroke-width: 1.6;
+  stroke-dasharray: 3 3;
+}
+.empty-art .ea-ring { fill: none; stroke: color-mix(in srgb, var(--e-accent) 16%, var(--surface)); stroke-width: 12; }
+.empty-art .ea-ring-fill { stroke: var(--e-accent); stroke-linecap: round; }
+.empty-art .ea-ring-on { fill: none; stroke: rgba(255, 255, 255, 0.45); stroke-width: 1.4; }
+.empty-art .ea-lens {
+  fill: color-mix(in srgb, var(--e-accent) 8%, var(--surface));
+  stroke: var(--e-accent);
+  stroke-width: 5;
+}
+.empty-art .ea-handle {
+  fill: none;
+  stroke: color-mix(in srgb, var(--e-accent) 70%, #000);
+  stroke-width: 8;
+  stroke-linecap: round;
+}
+.empty-art .ea-glyph {
+  fill: #fff;
+  font-family: var(--font);
+  font-size: 19px;
+  font-weight: 700;
+  text-anchor: middle;
+}
+.empty-art .ea-glyph-deep { fill: color-mix(in srgb, var(--e-accent) 70%, #000); }
+.empty-art .ea-glyph-accent { fill: var(--e-accent); }
+.empty-art .ea-glyph-small { font-size: 13px; }
 
 .empty h4 {
   margin: 0;
-  font-size: 17px;
+  max-width: 32ch;
+  font-size: 16.5px;
   font-weight: 600;
+  line-height: 1.25;
   letter-spacing: var(--tight);
   color: var(--ink);
   text-wrap: balance;
 }
 
 .empty p {
-  max-width: 33ch;
+  max-width: 36ch;
   margin: 0;
   font-size: 13.5px;
   font-weight: 500;
-  line-height: 1.65;
+  line-height: 1.55;
   color: var(--ink-3);
   text-wrap: pretty;
 }
 
-.empty.is-screen h4 { font-size: 20px; }
-.empty.is-screen p { max-width: 36ch; font-size: 14.5px; }
+.empty.is-screen h4 { font-size: 21px; }
+.empty.is-screen p { max-width: 38ch; font-size: 14.5px; color: var(--ink-2); }
 
 .empty-action { margin-top: 14px; }
 
@@ -4818,6 +4968,19 @@ kbd {
   .side-search, .side-add { padding-inline: 0; }
   .nav-count { position: absolute; top: -7px; right: -9px; margin: 0; }
   .side-foot { flex-direction: column; }
+  /* The rail has no room for a heading's word; the run is marked by a
+     hairline with a little air either side instead. */
+  .nav-group-label { height: 13px; padding: 0; color: transparent; }
+  .nav-group-label::after {
+    content: '';
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    top: 6px;
+    height: 1px;
+    background: var(--line);
+  }
+  .brand { justify-content: center; padding-inline: 0; }
   .tx-meta { grid-template-columns: 1fr; }
 }
 
@@ -9306,7 +9469,12 @@ kbd {
   padding-top: var(--ask-top);
   padding-bottom: 12px;
   margin-bottom: -12px;
-  background: linear-gradient(var(--bg) calc(100% - 12px), color-mix(in srgb, var(--bg) 0%, transparent));
+  /* The page's paper, faded out over its last 12px. The grain is pinned to
+     the window, so its specks land on the shell's own and the seam between
+     the head and the page underneath does not show. */
+  background:
+    var(--grain) fixed,
+    linear-gradient(var(--bg) calc(100% - 12px), color-mix(in srgb, var(--bg) 0%, transparent));
 }
 .ask-unsaved {
   display: block;

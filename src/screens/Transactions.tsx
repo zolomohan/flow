@@ -1038,6 +1038,8 @@ export function Transactions({
       ) : days.length === 0 ? (
         <Empty
           screen
+          art="search"
+          tone="ink"
           title="Nothing matches"
           body={
             months

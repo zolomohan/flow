@@ -367,6 +367,8 @@ export function HoldingDetail({
           {holding.lots.length === 0 ? (
             <div className="card-pad">
               <Empty
+                art="growth"
+                tone="green"
                 title="Nothing recorded yet"
                 body="Add what you bought and when."
               />
