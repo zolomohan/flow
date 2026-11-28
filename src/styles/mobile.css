@@ -1420,3 +1420,59 @@
   .holding-summary > .holding-total:nth-child(3) { border-left: 1px solid var(--line-soft); }
   .holding-summary > .holding-total:not(:first-child) strong { font-size: 19px; }
 }
+
+/* ==================================================================
+   Settings on a phone: a list of its three sections, each a row that
+   opens a page, and a switch on the right of its own row rather than
+   under the words.
+   ================================================================== */
+
+@media (max-width: 760px) {
+  .settings-list {
+    display: flex;
+    flex-direction: column;
+    border-radius: var(--r-xl);
+    background: var(--surface);
+    border: 1px solid var(--line-soft);
+    overflow: hidden;
+  }
+  .settings-list-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    text-align: left;
+    color: var(--ink-4);
+  }
+  .settings-list-row + .settings-list-row { border-top: 1px solid var(--line-soft); }
+  .settings-list-row:active { background: var(--surface-2); }
+  .settings-list-icon {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    flex: none;
+    border-radius: 8px;
+    color: #fff;
+    background: #8e8e93;
+  }
+  .settings-list-icon.is-claude { background: #d97757; }
+  .settings-list-icon.is-data { background: #0a84ff; }
+  .settings-list-text { flex: 1; min-width: 0; display: grid; gap: 1px; }
+  .settings-list-text strong { font-size: 16px; font-weight: 600; color: var(--ink); }
+  .settings-list-text small {
+    font-size: 12.5px;
+    color: var(--ink-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .data-row:has(> .switch) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: 14px;
+  }
+  .data-row:has(> .switch) > .switch { align-self: center; }
+}

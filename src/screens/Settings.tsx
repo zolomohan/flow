@@ -12,6 +12,7 @@ import {
   HIDE_AMOUNTS, OWNER_FALLBACK, OWNER_NAME, REQUIRE_NOTE, THEMES, useStore,
 } from '../lib/store';
 import { spring } from '../lib/motion';
+import { PHONE, useMediaQuery } from '../lib/media';
 
 type Tab = 'preferences' | 'claude' | 'data';
 
@@ -30,6 +31,68 @@ const BLURBS: Record<Tab, string> = {
 
 export function Settings() {
   const [tab, setTab] = useState<Tab>('preferences');
+  const phone = useMediaQuery(PHONE);
+  /* On a phone the three sections are a list, the way iOS's Settings is,
+     and each opens as a page of its own with a way back to the list. */
+  const [page, setPage] = useState<Tab | null>(null);
+
+  if (phone) {
+    const here = page ? TABS.find((t) => t.value === page) : null;
+    return (
+      <div className="screen">
+        {here ? (
+          <header className="screen-head detail-head">
+            <div className="detail-id">
+              <button className="detail-back" data-label="Settings" onClick={() => setPage(null)}>
+                <Icon name="chevron-left" size={17} />
+              </button>
+              <div>
+                <h1>{here.label}</h1>
+                <p>{BLURBS[here.value]}</p>
+              </div>
+            </div>
+          </header>
+        ) : (
+          <header className="screen-head">
+            <div>
+              <h1>Settings</h1>
+            </div>
+          </header>
+        )}
+
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={page ?? 'list'}
+            className="settings-panel"
+            initial={{ opacity: 0, x: page ? 24 : -24 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: page ? -24 : 24 }}
+            transition={{ duration: 0.18 }}
+          >
+            {page === null && (
+              <div className="settings-list">
+                {TABS.map((t) => (
+                  <button key={t.value} className="settings-list-row" onClick={() => setPage(t.value)}>
+                    <span className={`settings-list-icon is-${t.value}`}>
+                      <Icon name={t.icon ?? 'settings'} size={17} />
+                    </span>
+                    <span className="settings-list-text">
+                      <strong>{t.label}</strong>
+                      <small>{BLURBS[t.value]}</small>
+                    </span>
+                    <Icon name="chevron-right" size={17} />
+                  </button>
+                ))}
+              </div>
+            )}
+            {page === 'preferences' && <PreferencesPanel />}
+            {page === 'claude' && <ClaudePanel />}
+            {page === 'data' && <DataPanel />}
+          </motion.div>
+        </AnimatePresence>
+      </div>
+    );
+  }
 
   return (
     <div className="screen">
