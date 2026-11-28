@@ -2,9 +2,9 @@
  * What the phone's + opens: a chat with Claude for the errand at hand —
  * "450 on lunch at Toit", "how much on cabs this month" — rather than a form.
  *
- * It comes up as a panel over the bottom half, above the tab bar, with a
- * Manual button for the times a form is quicker. Dragged up by its head it
- * takes the whole screen, and the tab bar steps out of the way; dragged down
+ * It comes up as a panel over the bottom half, with the tab bar put away and
+ * a Manual button for the times a form is quicker. Dragged up by its head it
+ * takes the whole screen; dragged down
  * it goes back to half, and from half, away. Nothing of it is saved.
  */
 
@@ -20,13 +20,11 @@ const SETTLE = { type: 'spring', stiffness: 380, damping: 38, mass: 0.8 } as con
 const COMPACT = 0.52;
 
 export function AddChat({
-  onClose, onManual, onFull,
+  onClose, onManual,
 }: {
   onClose: () => void;
   /** The form instead: the panel closes and the manual sheet opens. */
   onManual: () => void;
-  /** Told when the panel takes the whole screen, and when it gives it back. */
-  onFull: (full: boolean) => void;
 }) {
   const session = useRef<ChatSession | null>(null);
   if (!session.current) session.current = createChat(false);
@@ -52,8 +50,6 @@ export function AddChat({
     return () => chat.dispose();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chat]);
-  useEffect(() => onFull(full), [full, onFull]);
-  useEffect(() => () => onFull(false), [onFull]);
 
   useEffect(() => {
     if (state.returned === null) return;

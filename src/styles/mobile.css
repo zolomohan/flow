@@ -1489,8 +1489,8 @@
 }
 
 /* ───────────────────────── The + panel: a chat that drags up to full screen.
-   `--p` runs 0 (half, above the tab bar) to 1 (the whole screen); the height,
-   the corners and the gap below are all read from it, so a drag moves one
+   `--p` runs 0 (half) to 1 (the whole screen); the tab bar is put away for
+   both. The height and the corners are read from it, so a drag moves one
    number. The keyboard, when it is up, lifts the panel over it. */
 .add-chat-shade {
   position: fixed;
@@ -1500,7 +1500,7 @@
 }
 .add-chat {
   --compact: 52dvh;
-  --lift: max(calc(var(--tabs-h, 0px) * (1 - var(--p))), var(--kb, 0px));
+  --lift: var(--kb, 0px);
   position: fixed;
   left: 0;
   right: 0;
@@ -1594,7 +1594,7 @@
   flex-shrink: 0;
   margin: 0 12px;
   padding: 6px 6px 6px 8px;
-  margin-bottom: calc(10px + var(--safe-b, env(safe-area-inset-bottom, 0px)) * var(--p));
+  margin-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
   border: 1px solid var(--line);
   border-radius: 22px;
   background: var(--surface);

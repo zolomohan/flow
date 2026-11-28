@@ -301,16 +301,14 @@ function Shell() {
   const screenX = useTransform(drawerProgress, [0, 1], [0, DRAWER_WIDTH]);
   const screenRadius = useTransform(drawerProgress, [0, 1], [0, DRAWER_RADIUS]);
   const pageX = useTransform(backProgress, (v) => v * (mainRef.current?.clientWidth || window.innerWidth));
-  /* The phone's +: a chat panel rather than the form (see `AddChat`), and
-     whether it has been dragged up to the whole screen, which puts the tab
-     bar away. */
+  /* The phone's +: a chat panel rather than the form (see `AddChat`). The
+     tab bar steps away while it is up, half or full. */
   const [addChat, setAddChat] = useState(false);
-  const [addChatFull, setAddChatFull] = useState(false);
   useEffect(() => {
-    if (nativeTabsH === null || !addChatFull) return;
+    if (nativeTabsH === null || !addChat) return;
     holdNativeTabs(true);
     return () => holdNativeTabs(false);
-  }, [nativeTabsH, addChatFull]);
+  }, [nativeTabsH, addChat]);
   /* Whether index.html's splash is still on screen. UIKit draws the bar over
      the web view, splash and all, so it is not put up until the splash has
      gone. False from the start when there is none — a live reload. */
@@ -950,7 +948,7 @@ function Shell() {
       />
       {phone && (
         <>
-          {nativeTabsH === null && !nativeTabsExpected && !tabless && !addChatFull && <TabBar
+          {nativeTabsH === null && !nativeTabsExpected && !tabless && !addChat && <TabBar
             route={route}
             onNavigate={(next) => {
               setMoreOpen(false);
@@ -967,7 +965,6 @@ function Shell() {
                 setAddChat(false);
                 newTransaction();
               }}
-              onFull={setAddChatFull}
             />
           )}
           <MoreSheet
