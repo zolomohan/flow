@@ -275,10 +275,20 @@ function Shell() {
   const { open: drawerOpen, setOpen: setDrawer } = useDrawer({
     page: mainRef,
     enabled: phone,
-    canBack,
-    onBack: back,
+    // A page opened from the drawer has no tab bar, so back is the only way
+    // out of it; with nothing behind it (reopened there), back is the
+    // Dashboard the drawer lives on.
+    canBack: canBack || (phone && !NATIVE_TAB_ROUTES.has(route)),
+    onBack: canBack ? back : () => setRoute('overview'),
+    // The drawer is the Dashboard's: everywhere else a swipe from the left
+    // edge is back, and nothing else.
+    canOpen: route === 'overview',
   });
   const drawerMoving = useDrawerMoving();
+  /* Pages reached through the drawer are a step aside from the tabs, not a
+     tab of their own: they take the whole screen, and back (the edge swipe)
+     is the way out. */
+  const tabless = phone && !NATIVE_TAB_ROUTES.has(route);
   /* The screen rides right off the panel, rounding the edge it leaves by;
      the page inside follows a back swipe off the right edge. */
   const screenX = useTransform(drawerProgress, [0, 1], [0, DRAWER_WIDTH]);
@@ -325,6 +335,12 @@ function Shell() {
     holdNativeTabs(true);
     return () => holdNativeTabs(false);
   }, [drawerMoving]);
+  // UIKit's bar steps down on a drawer page the same way it does for a sheet.
+  useEffect(() => {
+    if (nativeTabsH === null || !tabless) return;
+    holdNativeTabs(true);
+    return () => holdNativeTabs(false);
+  }, [nativeTabsH, tabless]);
   useEffect(() => {
     if (nativeTabsH === null) return;
     badgeNativeTab('siri', captures.length);
@@ -665,7 +681,7 @@ function Shell() {
   return (
     <div
       ref={shellRef}
-      className={`app ${phone ? 'is-phone' : ''} ${nativeTabsH !== null || nativeTabsExpected ? 'has-native-tabs' : ''} ${drawerOpen ? 'is-nav-open' : ''}`}
+      className={`app ${phone ? 'is-phone' : ''} ${nativeTabsH !== null || nativeTabsExpected ? 'has-native-tabs' : ''} ${drawerOpen ? 'is-nav-open' : ''} ${tabless ? 'is-tabless' : ''}`}
       style={nativeTabsH !== null ? ({ '--tabs-h': `${nativeTabsH}px` } as CSSProperties) : undefined}
     >
       {/* A phone has no bar across the top: the page starts under the
@@ -903,7 +919,7 @@ function Shell() {
       />
       {phone && (
         <>
-          {nativeTabsH === null && !nativeTabsExpected && <TabBar
+          {nativeTabsH === null && !nativeTabsExpected && !tabless && <TabBar
             route={route}
             onNavigate={(next) => {
               setMoreOpen(false);

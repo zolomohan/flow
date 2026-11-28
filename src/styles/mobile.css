@@ -1476,3 +1476,14 @@
   }
   .data-row:has(> .switch) > .switch { align-self: center; }
 }
+
+/* A page opened from the drawer has no tab bar under it: what floats over
+   the bottom (toasts, the selection bar) and the page's own end clear the
+   home indicator alone. Important because the shell sets the bar's height
+   inline once UIKit reports it. */
+@media (max-width: 760px) {
+  .app.is-phone.is-tabless {
+    --tabs-h: env(safe-area-inset-bottom, 0px) !important;
+    grid-template-rows: minmax(0, 1fr);
+  }
+}

@@ -77,12 +77,16 @@ export function useDrawer({
   enabled,
   canBack,
   onBack,
+  canOpen,
 }: {
   /** The page, whose width the back swipe travels. */
   page: RefObject<HTMLElement | null>;
   enabled: boolean;
   canBack: boolean;
   onBack: () => void;
+  /** Whether a swipe may open the drawer from where the screen is. Closing
+   *  an open one, and the back swipe, do not ask. */
+  canOpen?: boolean;
 }) {
   const [open, setOpenState] = useState(false);
   const openNow = useRef(false);
@@ -94,8 +98,8 @@ export function useDrawer({
   }, []);
 
   // Read from listeners bound once.
-  const back = useRef({ canBack, onBack });
-  back.current = { canBack, onBack };
+  const back = useRef({ canBack, onBack, canOpen });
+  back.current = { canBack, onBack, canOpen };
 
   // The drawer belongs to the phone layout: widening past it shuts it.
   useEffect(() => {
@@ -142,6 +146,8 @@ export function useDrawer({
         // Something with sideways gestures of its own keeps them — except at
         // the very edge, which stays the drawer's so it can always be reached.
         if (e.clientX > EDGE_CLAIM && target?.closest('[data-no-swipe]')) return;
+        // Shut, and on a screen that does not offer it: nothing to open.
+        if (shut && back.current.canOpen === false) return;
         mode = 'drawer';
       }
       pointer = e.pointerId;
