@@ -20,8 +20,11 @@ const SETTLE = { type: 'spring', stiffness: 380, damping: 38, mass: 0.8 } as con
 const COMPACT = 0.52;
 
 export function AddChat({
-  onClose, onManual,
+  onClose, onManual, onLeaving,
 }: {
+  /** Told the moment it starts to go, before the slide out has finished, so
+   *  the tab bar can come back with it rather than after it. */
+  onLeaving: () => void;
   onClose: () => void;
   /** The form instead: the panel closes and the manual sheet opens. */
   onManual: () => void;
@@ -76,7 +79,14 @@ export function AddChat({
 
   const settle = (to: 'compact' | 'full' | 'close') => {
     if (to === 'close') {
-      animate(drop, window.innerHeight * COMPACT + 40, { ...SETTLE, onComplete: onClose });
+      onLeaving();
+      // Out on a short ease rather than the spring: a spring's last
+      // millimetres take as long as the rest of it, and nothing waits on them.
+      animate(drop, window.innerHeight * COMPACT + 40, {
+        duration: 0.24,
+        ease: [0.32, 0, 0.67, 0],
+        onComplete: onClose,
+      });
       return;
     }
     setFull(to === 'full');

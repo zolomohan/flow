@@ -303,14 +303,20 @@ function Shell() {
   /* The phone's +: a chat panel rather than the form (see `AddChat`). The
      tab bar steps away while it is up, half or full. */
   const [addChat, setAddChat] = useState(false);
+  // Whether it is on its way out, which gives the tab bar back at once.
+  const [addChatLeaving, setAddChatLeaving] = useState(false);
+  const addChatUp = addChat && !addChatLeaving;
+  useEffect(() => {
+    if (!addChat) setAddChatLeaving(false);
+  }, [addChat]);
   /* A long press on + is the manual form. A ref, because the listener is set
      up once and `newTransaction` is declared further down. */
   const newTransactionRef = useRef<() => void>(() => {});
   useEffect(() => {
-    if (nativeTabsH === null || !addChat) return;
+    if (nativeTabsH === null || !addChatUp) return;
     holdNativeTabs(true);
     return () => holdNativeTabs(false);
-  }, [nativeTabsH, addChat]);
+  }, [nativeTabsH, addChatUp]);
   /* Whether index.html's splash is still on screen. UIKit draws the bar over
      the web view, splash and all, so it is not put up until the splash has
      gone. False from the start when there is none — a live reload. */
@@ -938,7 +944,7 @@ function Shell() {
       />
       {phone && (
         <>
-          {nativeTabsH === null && !nativeTabsExpected && !tabless && !addChat && <TabBar
+          {nativeTabsH === null && !nativeTabsExpected && !tabless && !addChatUp && <TabBar
             route={route}
             onNavigate={(next) => {
               setMoreOpen(false);
@@ -952,6 +958,7 @@ function Shell() {
           {addChat && (
             <AddChat
               onClose={() => setAddChat(false)}
+              onLeaving={() => setAddChatLeaving(true)}
               onManual={() => {
                 setAddChat(false);
                 newTransaction();
