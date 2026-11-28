@@ -3,7 +3,10 @@ import {
   type MutableRefObject, type ReactNode,
 } from 'react';
 import type { CSSProperties } from 'react';
-import { AnimatePresence, motion, useTransform } from 'motion/react';
+import {
+  AnimatePresence, animate, motion, useMotionValue, useTransform,
+  type MotionValue, type Transition, type Variants,
+} from 'motion/react';
 import { INVESTMENT_TABS, Sidebar, isInvestmentRoute, type Route } from './components/Sidebar';
 import { MoreSheet, PhoneDrawer, TabBar } from './components/MobileChrome';
 import {
@@ -101,6 +104,8 @@ interface Stop {
  * you were halfway through and being handed the top of it is the app losing
  * your place, not you.
  */
+type Move = 'push' | 'back' | 'swipe';
+
 function useHistory(initial: Route) {
   const seq = useRef(0);
   const [trail, setTrail] = useState<{ stack: Stop[]; at: number }>(() => ({
@@ -111,8 +116,13 @@ function useHistory(initial: Route) {
   // changes as you scroll away from a screen, and nothing on screen depends
   // on it until you come back to one.
   const marks = useRef(new Map<number, number>());
+  /* How the last move was made, which is how the phone animates it: a page
+     pushed comes in from the right, one gone back to is uncovered from
+     under it, and one already dragged off by the back swipe just goes. */
+  const move = useRef<Move>('push');
 
   const navigate = useCallback((next: Route) => {
+    move.current = 'push';
     setTrail((t) => {
       if (t.stack[t.at].route === next) return t;
       const stack = [...t.stack.slice(0, t.at + 1), { id: ++seq.current, route: next }];
@@ -128,10 +138,18 @@ function useHistory(initial: Route) {
   }, []);
 
   const back = useCallback(() => {
+    move.current = 'back';
+    setTrail((t) => (t.at > 0 ? { ...t, at: t.at - 1 } : t));
+  }, []);
+
+  /** Back, by the edge swipe: the page is already off the screen. */
+  const swipedBack = useCallback(() => {
+    move.current = 'swipe';
     setTrail((t) => (t.at > 0 ? { ...t, at: t.at - 1 } : t));
   }, []);
 
   const forward = useCallback(() => {
+    move.current = 'push';
     setTrail((t) => (t.at < t.stack.length - 1 ? { ...t, at: t.at + 1 } : t));
   }, []);
 
@@ -142,7 +160,9 @@ function useHistory(initial: Route) {
     marks,
     navigate,
     back,
+    swipedBack,
     forward,
+    move: move.current,
     canBack: trail.at > 0,
     canForward: trail.at < trail.stack.length - 1,
   };
@@ -165,11 +185,13 @@ const RESTORE_FRAMES = 60;
 const GROUND_DRIFT = 0.35;
 
 function ScrollPane({
-  stop, marks, children,
+  stop, marks, children, still,
 }: {
   stop: number;
   marks: MutableRefObject<Map<number, number>>;
   children: ReactNode;
+  /** Moved by whatever holds it rather than animating in on its own. */
+  still?: boolean;
 }) {
   const pane = useRef<HTMLDivElement>(null);
 
@@ -212,8 +234,11 @@ function ScrollPane({
     const node = pane.current;
     const shell = node?.closest<HTMLElement>('.app');
     if (!node || !shell || !phone) return;
-    const measure = () =>
+    const measure = () => {
+      // A tab that is not on show has no size, and is not the page.
+      if (!node.clientHeight) return;
       shell.style.setProperty('--ground-max', `${Math.max(0, node.scrollHeight - node.clientHeight)}px`);
+    };
     const watch = new ResizeObserver(measure);
     watch.observe(node);
     for (const child of Array.from(node.children)) watch.observe(child);
@@ -243,10 +268,10 @@ function ScrollPane({
   return (
     <motion.div
       ref={pane}
-      variants={screenVariants}
-      initial="initial"
-      animate="animate"
-      exit="exit"
+      variants={still ? undefined : screenVariants}
+      initial={still ? undefined : 'initial'}
+      animate={still ? undefined : 'animate'}
+      exit={still ? undefined : 'exit'}
       className="main-scroll"
     >
       {children}
@@ -262,7 +287,7 @@ const SPLASH_EXIT_MS = 420;
 function Shell() {
   const { ready, fatal, accounts } = useStore();
   const {
-    route, stop, marks, navigate: setRoute, back, forward, canBack, canForward,
+    route, stop, marks, move, navigate: setRoute, back, swipedBack, forward, canBack, canForward,
   } = useHistory('overview');
   // Which shell is drawing: a sidebar down the side, or a bar top and bottom.
   const phone = usePhone();
@@ -281,11 +306,13 @@ function Shell() {
   const { open: drawerOpen, setOpen: setDrawer } = useDrawer({
     page: mainRef,
     enabled: phone,
-    // A page opened from the drawer has no tab bar, so back is the only way
-    // out of it; with nothing behind it (reopened there), back is the
-    // Dashboard the drawer lives on.
-    canBack: canBack || (phone && !tabRoute(route)),
-    onBack: canBack ? back : () => setRoute('overview'),
+    // Every page stacked over a tab can be swiped back off it; a tab's own
+    // page is the bottom of its stack and has nothing to go back to. With
+    // nothing behind it in the trail, back is where it would have come from.
+    canBack: !NATIVE_TAB_ROUTES.has(route),
+    onBack: canBack
+      ? swipedBack
+      : () => setRoute(isInvestmentRoute(route) ? 'investments' : 'overview'),
     // The drawer is the Dashboard's: everywhere else a swipe from the left
     // edge is back, and nothing else.
     canOpen: route === 'overview',
@@ -701,6 +728,125 @@ function Shell() {
     );
   }
 
+  /** The screen for a route. One place, so the phone can keep its tabs
+      mounted side by side and stack the rest, and the Mac can show one. */
+  const pageFor = (route: Route) =>
+    accounts.length === 0 && route !== 'settings' ? (
+      <div className="screen">
+        <div className="welcome">
+          <Empty
+            art="wallet"
+            title="Welcome to flow"
+            body="A bank, a card, a wallet: wherever your money sits."
+            action={
+              <div className="welcome-actions">
+                <Button tone="primary" icon="plus" onClick={newAccount}>
+                  Create an account
+                </Button>
+              </div>
+            }
+          />
+        </div>
+      </div>
+    ) : route === 'overview' ? (
+      <Overview
+        onOpenTransaction={openTransaction}
+        onAddTransaction={() => newTransaction()}
+        onGoTransactions={() => setRoute('transactions')}
+        onOpenAccount={openAccountTransactions}
+        onOpenCategory={openCategoryTransactions}
+        onGoInvestments={openInvestments}
+        onGoDebts={() => setRoute('debts')}
+        onGoAccounts={() => setRoute('accounts')}
+        onGoPlanned={() => setRoute('planned')}
+      />
+    ) : route === 'transactions' ? (
+      <Transactions
+        onOpenTransaction={openTransaction}
+        onSplitTransaction={splitTransaction}
+        onOweTransaction={oweTransaction}
+        onRefundTransaction={refundTransaction}
+        onAddTransaction={() => newTransaction()}
+        accountFocus={accountFocus}
+        categoryFocus={categoryFocus}
+        labelFocus={labelFocus}
+        onFocusUsed={forgetFocus}
+        onAskAbout={() => setRoute('ask')}
+      />
+    ) : route === 'planned' ? (
+      <Planned
+        onNewPlan={newPlan}
+        onEditPlan={editPlan}
+        onLinkPlan={setLinkingPlan}
+        onPayPlan={payPlan}
+        onOpenTransaction={openTransactionById}
+      />
+    ) : route === 'accounts' ? (
+      <Accounts onEditAccount={editAccount} onAddAccount={newAccount} />
+    ) : route === 'cards' ? (
+      <Cards
+        onOpenAccount={openAccountTransactions}
+        onEditAccount={editAccount}
+        onAddAccount={newAccount}
+        onOpenCategory={openCategoryTransactions}
+        onOpenTransaction={openTransaction}
+      />
+    ) : route === 'taxes' ? (
+      <Taxes onOpenTransaction={openTransaction} />
+    ) : route === 'debts' ? (
+      <Debts
+        onNewDebt={newDebt}
+        onEditDebt={editDebt}
+        onRecordPayment={(debt) => setPaying({ debt, kind: 'repayment', payment: null })}
+        onEditPayment={(debt, payment) => setPaying({ debt, kind: 'repayment', payment })}
+        onAddMore={(debt) => setPaying({ debt, kind: 'addition', payment: null })}
+        onEditAddition={(debt, addition) =>
+          setPaying({ debt, kind: 'addition', payment: addition })
+        }
+        onRepayPerson={(person, payment) =>
+          setPaying({
+            debt: person.debts[person.debts.length - 1],
+            kind: 'repayment',
+            payment,
+            person,
+          })
+        }
+        onOpenTransaction={openTransaction}
+      />
+    ) : isInvestmentRoute(route) ? (
+      <Investments
+        tab={INVESTMENT_TABS[route]}
+        onNewHolding={newHolding}
+        onEditHolding={editHolding}
+        onAddLot={(holding) => setLotTarget({ holding, lot: null })}
+        onEditLot={(holding, lot) => setLotTarget({ holding, lot })}
+      />
+    ) : route === 'investments' ? (
+      <Portfolio onOpenSleeve={openInvestments} />
+    ) : route === 'ask' ? (
+      <Ask onOpenSettings={() => setRoute('settings')} />
+    ) : route === 'siri' ? (
+      <Siri onOpenTransaction={openTransactionById} />
+    ) : route === 'categories' ? (
+      <Categories onOpenCategory={openCategoryTransactions} />
+    ) : route === 'labels' ? (
+      <Labels onOpenLabel={openLabelTransactions} />
+    ) : route === 'folders' ? (
+      <Folders
+        onOpenTransaction={openTransaction}
+        onSplitTransaction={splitTransaction}
+        onOweTransaction={oweTransaction}
+        onRefundTransaction={refundTransaction}
+      />
+    ) : route === 'templates' ? (
+      <Templates
+        onUseTemplate={useTemplate}
+        onAddTransaction={() => newTransaction()}
+      />
+    ) : (
+      <Settings />
+    );
+
   return (
     <div
       ref={shellRef}
@@ -765,130 +911,24 @@ function Shell() {
             onClick={() => setDrawer(false)}
           />
         )}
-        <motion.div
-          className="page-track"
-          style={phone ? { x: pageX, opacity: backFade } : undefined}
-        >
-        <AnimatePresence mode="wait">
-          <ScrollPane key={stop} stop={stop} marks={marks}>
-            {accounts.length === 0 && route !== 'settings' ? (
-              <div className="screen">
-                <div className="welcome">
-                  <Empty
-                    art="wallet"
-                    title="Welcome to flow"
-                    body="A bank, a card, a wallet: wherever your money sits."
-                    action={
-                      <div className="welcome-actions">
-                        <Button tone="primary" icon="plus" onClick={newAccount}>
-                          Create an account
-                        </Button>
-                      </div>
-                    }
-                  />
-                </div>
-              </div>
-            ) : route === 'overview' ? (
-              <Overview
-                onOpenTransaction={openTransaction}
-                onAddTransaction={() => newTransaction()}
-                onGoTransactions={() => setRoute('transactions')}
-                onOpenAccount={openAccountTransactions}
-                onOpenCategory={openCategoryTransactions}
-                onGoInvestments={openInvestments}
-                onGoDebts={() => setRoute('debts')}
-                onGoAccounts={() => setRoute('accounts')}
-                onGoPlanned={() => setRoute('planned')}
-              />
-            ) : route === 'transactions' ? (
-              <Transactions
-                onOpenTransaction={openTransaction}
-                onSplitTransaction={splitTransaction}
-                onOweTransaction={oweTransaction}
-                onRefundTransaction={refundTransaction}
-                onAddTransaction={() => newTransaction()}
-                accountFocus={accountFocus}
-                categoryFocus={categoryFocus}
-                labelFocus={labelFocus}
-                onFocusUsed={forgetFocus}
-                onAskAbout={() => setRoute('ask')}
-              />
-            ) : route === 'planned' ? (
-              <Planned
-                onNewPlan={newPlan}
-                onEditPlan={editPlan}
-                onLinkPlan={setLinkingPlan}
-                onPayPlan={payPlan}
-                onOpenTransaction={openTransactionById}
-              />
-            ) : route === 'accounts' ? (
-              <Accounts onEditAccount={editAccount} onAddAccount={newAccount} />
-            ) : route === 'cards' ? (
-              <Cards
-                onOpenAccount={openAccountTransactions}
-                onEditAccount={editAccount}
-                onAddAccount={newAccount}
-                onOpenCategory={openCategoryTransactions}
-                onOpenTransaction={openTransaction}
-              />
-            ) : route === 'taxes' ? (
-              <Taxes onOpenTransaction={openTransaction} />
-            ) : route === 'debts' ? (
-              <Debts
-                onNewDebt={newDebt}
-                onEditDebt={editDebt}
-                onRecordPayment={(debt) => setPaying({ debt, kind: 'repayment', payment: null })}
-                onEditPayment={(debt, payment) => setPaying({ debt, kind: 'repayment', payment })}
-                onAddMore={(debt) => setPaying({ debt, kind: 'addition', payment: null })}
-                onEditAddition={(debt, addition) =>
-                  setPaying({ debt, kind: 'addition', payment: addition })
-                }
-                onRepayPerson={(person, payment) =>
-                  setPaying({
-                    debt: person.debts[person.debts.length - 1],
-                    kind: 'repayment',
-                    payment,
-                    person,
-                  })
-                }
-                onOpenTransaction={openTransaction}
-              />
-            ) : isInvestmentRoute(route) ? (
-              <Investments
-                tab={INVESTMENT_TABS[route]}
-                onNewHolding={newHolding}
-                onEditHolding={editHolding}
-                onAddLot={(holding) => setLotTarget({ holding, lot: null })}
-                onEditLot={(holding, lot) => setLotTarget({ holding, lot })}
-              />
-            ) : route === 'investments' ? (
-              <Portfolio onOpenSleeve={openInvestments} />
-            ) : route === 'ask' ? (
-              <Ask onOpenSettings={() => setRoute('settings')} />
-            ) : route === 'siri' ? (
-              <Siri onOpenTransaction={openTransactionById} />
-            ) : route === 'categories' ? (
-              <Categories onOpenCategory={openCategoryTransactions} />
-            ) : route === 'labels' ? (
-              <Labels onOpenLabel={openLabelTransactions} />
-            ) : route === 'folders' ? (
-              <Folders
-                onOpenTransaction={openTransaction}
-                onSplitTransaction={splitTransaction}
-                onOweTransaction={oweTransaction}
-                onRefundTransaction={refundTransaction}
-              />
-            ) : route === 'templates' ? (
-              <Templates
-                onUseTemplate={useTemplate}
-                onAddTransaction={() => newTransaction()}
-              />
-            ) : (
-              <Settings />
-            )}
-          </ScrollPane>
-        </AnimatePresence>
-        </motion.div>
+        {phone ? (
+          <PhoneStack
+            route={route}
+            stop={stop}
+            marks={marks}
+            move={move}
+            pageFor={pageFor}
+            pageX={pageX}
+          />
+        ) : (
+          <div className="page-track">
+            <AnimatePresence mode="wait">
+              <ScrollPane key={stop} stop={stop} marks={marks}>
+                {pageFor(route)}
+              </ScrollPane>
+            </AnimatePresence>
+          </div>
+        )}
       </motion.main>
 
       <TransactionSheet
@@ -992,5 +1032,99 @@ export default function App() {
     <StoreProvider>
       <Shell />
     </StoreProvider>
+  );
+}
+
+/** The tabs the phone keeps mounted, in the bar's order. */
+const PHONE_TABS: Route[] = ['overview', 'transactions', 'investments', 'cards'];
+
+/** How far the page underneath slides left while one is pushed over it. */
+const UNDER = '-28%';
+const UNDER_SHARE = -0.28;
+const PUSH: Transition = { type: 'spring', stiffness: 340, damping: 38, mass: 0.9 };
+const NONE: Transition = { duration: 0 };
+
+/* A pushed page's way in and out, by how the move was made. The page going
+   back is the one on top, so it is lifted over the one it uncovers. */
+const cardVariants: Variants = {
+  initial: (move: Move) =>
+    move === 'push' ? { x: '100%', zIndex: 2 } : move === 'back' ? { x: UNDER, zIndex: 1 } : { x: 0, zIndex: 1 },
+  animate: (move: Move) => ({ x: 0, zIndex: 2, transition: move === 'swipe' ? NONE : PUSH }),
+  exit: (move: Move) =>
+    move === 'back'
+      ? { x: '100%', zIndex: 3, transition: PUSH }
+      : move === 'swipe'
+        ? { x: 0, opacity: 0, transition: NONE }
+        : { x: UNDER, zIndex: 1, transition: PUSH },
+};
+
+/**
+ * The phone's pages, the way iOS keeps them. The four tabs stay mounted side
+ * by side — switching between them shows one already drawn, with its data and
+ * its place, under a quick fade. Everything else is a card pushed over them:
+ * in from the right, the page beneath easing left under it, and off to the
+ * right again on the way back. The back swipe drags the top card itself.
+ */
+function PhoneStack({
+  route, stop, marks, move, pageFor, pageX,
+}: {
+  route: Route;
+  stop: number;
+  marks: MutableRefObject<Map<number, number>>;
+  move: Move;
+  pageFor: (route: Route) => ReactNode;
+  pageX: MotionValue<number>;
+}) {
+  const root = NATIVE_TAB_ROUTES.has(route);
+  // The tab beneath a stacked page: the last one shown.
+  const lastTab = useRef<Route>('overview');
+  if (root) lastTab.current = route;
+  const tab = lastTab.current;
+  const stacked = !root;
+
+  /* Where the tabs sit: eased a little left while a page is over them, and
+     drawn back along with the back swipe — `pageX` is how far the top page
+     has been dragged, and the tabs travel the same distance scaled to theirs. */
+  const under = useMotionValue(0);
+  useEffect(() => {
+    const to = stacked ? UNDER_SHARE * window.innerWidth : 0;
+    if (move === 'swipe') under.set(to);
+    else animate(under, to, PUSH);
+  }, [stacked, move, under]);
+  const tabsX = useTransform([under, pageX], ([u, p]: number[]) => u - UNDER_SHARE * p);
+  const shade = useTransform(tabsX, (x) => Math.min(1, Math.max(0, x / (UNDER_SHARE * window.innerWidth))));
+
+  return (
+    <motion.div className="page-track phone-stack" style={{ opacity: backFade }}>
+      <motion.div className="tab-layer" style={{ x: tabsX }}>
+        {PHONE_TABS.map((t) => (
+          <div key={t} className={`tab-pane ${t === tab ? 'is-active' : ''}`} aria-hidden={t !== tab}>
+            <ScrollPane stop={-1 - PHONE_TABS.indexOf(t)} marks={marks} still>
+              {pageFor(t)}
+            </ScrollPane>
+          </div>
+        ))}
+        <motion.div className="tab-shade" style={{ opacity: shade }} />
+      </motion.div>
+      <AnimatePresence initial={false} custom={move}>
+        {stacked && (
+          <motion.div
+            key={stop}
+            className="stack-card"
+            custom={move}
+            variants={cardVariants}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+          >
+            <motion.div className="stack-card-inner" style={{ x: pageX }}>
+              <ScrollPane stop={stop} marks={marks} still>
+                {pageFor(route)}
+              </ScrollPane>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
   );
 }

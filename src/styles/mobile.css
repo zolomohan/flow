@@ -501,9 +501,12 @@
     font-size: 0;
     color: #fff;
   }
-  .sheet-head-action .btn-primary svg { display: none; }
+  .sheet-head-action .btn-primary > * { display: none; }
   .sheet-head-action .btn-primary::after {
     content: '';
+    position: absolute;
+    inset: 0;
+    margin: auto;
     width: 19px;
     height: 19px;
     background: currentColor;
@@ -1718,4 +1721,75 @@
   .recent-card .empty-art-wrap { display: none; }
   .planned-card .empty,
   .recent-card .empty { padding: 4px 0 8px; min-height: 0; }
+}
+
+/* ───────────────── Where it went, on the phone: the total, one bar split
+   by category, and a plain list — name, amount, share — with no ring, no
+   meter under every row and no column of percentages off to the side. */
+@media (max-width: 760px) {
+  .donut-card .donut-layout { display: block; }
+  .donut-card .donut { display: none; }
+  .spend-strip { display: grid; gap: 10px; width: 100%; margin-bottom: 8px; }
+  .spend-strip-bar { width: 100%; }
+  .spend-strip strong { font-size: 26px; font-weight: 650; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .spend-strip-bar { display: flex; gap: 2px; height: 10px; border-radius: 99px; overflow: hidden; }
+  .spend-strip-bar i { flex-basis: 0; min-width: 3px; }
+  .donut-card .breakdown { gap: 0; width: 100%; }
+  .donut-card .breakdown > li { border-bottom: 1px solid var(--line-soft); }
+  .donut-card .breakdown > li:last-child { border-bottom: 0; }
+  .donut-card .breakdown-row { padding: 10px 0; margin: 0; gap: 12px; border-radius: 0; }
+  .donut-card .cat-swatch { width: 28px; height: 28px; border-radius: 9px; }
+  .donut-card .cat-swatch svg { width: 15px; height: 15px; }
+  .donut-card .breakdown-main .meter,
+  .donut-card .breakdown-pct { display: none; }
+  .donut-card .breakdown-top { align-items: center; }
+  .donut-card .breakdown-top span { font-size: 15px; }
+  .donut-card .breakdown-top strong {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    font-size: 15px;
+    font-variant-numeric: tabular-nums;
+  }
+  .breakdown-share { display: block; font-size: 12px; font-weight: 500; color: var(--ink-3); }
+}
+
+/* Dashboard cards: the heading is a bar of its own, ruled off from what is
+   under it, edge to edge. */
+@media (max-width: 760px) {
+  .ov-screen .card .card-head {
+    align-items: center;
+    margin: -3px -16px 14px;
+    padding: 0 12px 11px 16px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .ov-screen .card .card-head-only { padding-bottom: 0; }
+  .ov-screen .card .card-head-only .card-head { margin-bottom: 0; }
+}
+
+/* ───────────────── The phone's page stack (`PhoneStack` in App). The four
+   tabs are mounted side by side and only the shown one is drawn; a page
+   pushed over them is a card of its own, opaque, with a shadow down the
+   edge it slides in by. */
+@media (max-width: 760px) {
+  .phone-stack { position: relative; height: 100%; overflow: hidden; }
+  .tab-layer { position: absolute; inset: 0; }
+  .tab-pane { position: absolute; inset: 0; display: none; }
+  .tab-pane.is-active { display: block; animation: tab-in 160ms ease-out; }
+  .tab-shade {
+    position: absolute;
+    inset: 0;
+    background: rgba(10, 14, 30, 0.16);
+    pointer-events: none;
+  }
+  .stack-card { position: absolute; inset: 0; }
+  .stack-card-inner {
+    height: 100%;
+    background: var(--grain) var(--bg);
+    box-shadow: -14px 0 32px -12px rgba(10, 14, 30, 0.28);
+  }
+}
+@keyframes tab-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }

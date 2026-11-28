@@ -242,7 +242,7 @@ export function Overview({
     : overview.dailyFlow;
 
   return (
-    <div className="screen">
+    <div className="screen ov-screen">
       <header className="screen-head ov-head">
         <h1>Dashboard</h1>
         <MonthNav month={month} onChange={setMonth} span={span} onSpanChange={setSpan} />
@@ -572,6 +572,20 @@ export function Overview({
             />
             {categories.length ? (
               <div className="donut-layout">
+                {/* The phone's read of the same split: one bar, each
+                    category its share of it, over the total. The ring is
+                    the Mac's; at a phone's width it was a poster. */}
+                <div className="spend-strip">
+                  <strong>{money(overview.expense)}</strong>
+                  <div className="spend-strip-bar">
+                    {categories.map((c) => (
+                      <i
+                        key={c.categoryId}
+                        style={{ flexGrow: c.total, background: c.color }}
+                      />
+                    ))}
+                  </div>
+                </div>
                 <Donut
                   slices={categories.map((c) => ({
                     id: c.categoryId,
@@ -762,7 +776,10 @@ function BreakdownRow({
           <div className="breakdown-main">
             <div className="breakdown-top">
               <span>{slice.name}</span>
-              <strong>{money(slice.total)}</strong>
+              <strong>
+                {money(slice.total)}
+                <small className="breakdown-share">{Math.round((slice.total / total) * 100)}%</small>
+              </strong>
             </div>
             <Meter value={slice.total / total} color={slice.color} />
           </div>
