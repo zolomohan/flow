@@ -239,6 +239,7 @@ export function Overview({
 
   if (!overview || !stats) return null;
 
+
   const net = overview.income - overview.expense;
   const spendDelta = percentDelta(overview.expense, overview.prevExpense);
   const incomeDelta = percentDelta(overview.income, overview.prevIncome);
@@ -247,6 +248,23 @@ export function Overview({
   const categories = overview.topCategories;
   const categoryTotal = categories.reduce((sum, c) => sum + c.total, 0) || 1;
   const label = periodLabel(month, span);
+  // Month by month, so on the phone it belongs with the balance sheet in
+  // Wealth rather than with the one period Spending is about.
+  const cashFlow = (
+    <Card className="chart-card">
+      <CardHead
+        title="Cash flow"
+        hint="Income against spending, month by month"
+        action={
+          <div className="legend">
+            <span><i style={{ background: 'var(--green)' }} /> In</span>
+            <span><i style={{ background: 'var(--ink-3)' }} /> Out</span>
+          </div>
+        }
+      />
+      <FlowBars points={overview.monthlyFlow} labelOf={shortMonthLabel} height={210} />
+    </Card>
+  );
   // The heat-map is a calendar, so it shows the last month of the window
   // rather than trying to lay a whole year out as one.
   const rhythmDays = span > 1
@@ -477,6 +495,7 @@ export function Overview({
             )}
           </div>
         )}
+        {phone && cashFlow}
       </div>
       )}
 
@@ -580,19 +599,7 @@ export function Overview({
           {/* ------------------------------------------------- cash flow */}
           {/* The window put back among the months either side of it, which
               is the only way a single month means anything. */}
-          <Card className="chart-card">
-            <CardHead
-              title="Cash flow"
-              hint="Income against spending, month by month"
-              action={
-                <div className="legend">
-                  <span><i style={{ background: 'var(--green)' }} /> In</span>
-                  <span><i style={{ background: 'var(--ink-3)' }} /> Out</span>
-                </div>
-              }
-            />
-            <FlowBars points={overview.monthlyFlow} labelOf={shortMonthLabel} height={210} />
-          </Card>
+          {!phone && cashFlow}
 
           {/* ----------------------------------------------------- category */}
           <Card className="donut-card">
