@@ -647,6 +647,129 @@
     white-space: nowrap;
   }
 
+  /* The ledger's three figures as one strip rather than three cards: the
+     same numbers in a third of the height, so the first posting is on the
+     first screen. */
+  .phone-ledger-head ~ .totals-strip {
+    display: flex;
+    gap: 0;
+    padding: 8px 4px;
+    border-radius: var(--r-lg);
+    background: var(--surface);
+    border: 1px solid var(--line-soft);
+  }
+  .phone-ledger-head ~ .totals-strip .total {
+    flex: 1 1 0;
+    padding: 0 10px;
+    gap: 0;
+    background: none;
+    border: 0;
+    border-radius: 0;
+  }
+  .phone-ledger-head ~ .totals-strip .total + .total { border-left: 1px solid var(--line-soft); }
+  .phone-ledger-head ~ .totals-strip .total strong { font-size: 14px; }
+
+  /* ---------------------------------------------------- the ledger's head */
+
+  .phone-ledger-head { flex-direction: column; align-items: stretch; gap: 6px; }
+  .phone-head-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .phone-head-row h1 { font-size: 30px; letter-spacing: -0.025em; }
+  .phone-head-tools { display: flex; align-items: center; gap: 4px; }
+  .head-text-btn {
+    padding: 6px 10px;
+    border-radius: var(--r-full);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--blue);
+  }
+  .head-text-btn:active { opacity: 0.5; }
+  .head-filter { position: relative; display: inline-flex; }
+  .head-filter .icon-btn { color: var(--blue); }
+  .head-filter-count {
+    position: absolute;
+    top: 0;
+    right: -2px;
+    min-width: 17px;
+    height: 17px;
+    padding: 0 4px;
+    display: grid;
+    place-items: center;
+    border-radius: var(--r-full);
+    background: var(--blue);
+    color: #fff;
+    font-size: 10.5px;
+    font-weight: 700;
+    pointer-events: none;
+  }
+  /* The period, as one pill that opens the sheet; a sideways swipe across
+     the bar steps it. */
+  .period-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    touch-action: pan-y;
+  }
+  .period-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 12px;
+    border-radius: var(--r-full);
+    background: var(--surface);
+    border: 1px solid var(--line-soft);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .period-pill svg { color: var(--ink-3); }
+  .period-count { font-size: 13px; color: var(--ink-3); font-weight: 500; }
+
+  /* Search is the whole toolbar now. */
+  .phone-ledger-head ~ .tx-toolbar .search-box { flex: 1 1 100%; }
+
+  /* What the list is narrowed by, in one line that scrolls sideways rather
+     than a block of wrapped chips. */
+  .phone-ledger-head ~ .filter-summary {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    margin: -4px -16px 0;
+    padding: 2px 16px;
+    scrollbar-width: none;
+    touch-action: pan-x;
+  }
+  .phone-ledger-head ~ .filter-summary::-webkit-scrollbar { display: none; }
+  .phone-ledger-head ~ .filter-summary > * { flex: none; }
+
+  /* The filter sheet: one group under another, each with its own heading. */
+  .filter-sheet .filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .filter-sheet .filter-group:last-child { border-bottom: 0; }
+  .filter-sheet .filter-group > span,
+  .filter-sheet .filter-head > span {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink-3);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .filter-sheet .filter-head { flex-wrap: wrap; gap: 8px; }
+  .filter-sheet .filter-head-tools { flex-wrap: wrap; gap: 8px; width: 100%; }
+  .filter-sheet .filter-search { flex: 1; }
+  .filter-sheet .segmented { align-self: flex-start; max-width: 100%; overflow-x: auto; }
+  .filter-sheet .month-nav { align-self: flex-start; }
+  .filter-sheet .filter-clear { display: none; }
+
   .ledger-more { padding-top: 2px; }
 
   /* ------------------------------------------------------------- overview */

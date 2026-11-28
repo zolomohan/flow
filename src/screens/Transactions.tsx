@@ -5,13 +5,14 @@ import { TransactionRow } from '../components/TransactionRow';
 import { bringTransactions, refreshChats, useChat } from '../lib/chat';
 import { QuickChat } from '../components/QuickChat';
 import {
-  Button, Card, Chip, Confirm, Empty, IconButton, Segmented, Select, TextInput,
+  Button, Card, Chip, Confirm, Empty, IconButton, Segmented, Select, Sheet, TextInput,
   type SegmentOption, type SelectOption,
 } from '../components/ui';
 import { MonthNav, periodLabel } from '../components/MonthNav';
 import { useStore } from '../lib/store';
+import { PHONE, useMediaQuery } from '../lib/media';
 import {
-  dayKey, dayLabel, effectiveAmount, isCashbackCredit, money, monthWindowBounds,
+  dayKey, dayLabel, effectiveAmount, isCashbackCredit, money, monthWindowBounds, shiftMonth,
 } from '../lib/format';
 import { itemVariants, listVariants, popover, spring } from '../lib/motion';
 import type {
@@ -157,6 +158,10 @@ export function Transactions({
   const [labelIds, setLabelIds] = useState<string[]>([]);
   const [catQuery, setCatQuery] = useState('');
   const [showFilters, setShowFilters] = useState(false);
+  const phone = useMediaQuery(PHONE);
+  /* On a phone the tick boxes stand only while choosing: Select in the head,
+     or a long press on a row, puts them up, and Done takes them away. */
+  const [selecting, setSelecting] = useState(false);
   const [rows, setRows] = useState<Transaction[]>([]);
   const [summary, setSummary] = useState<TransactionSummary | null>(null);
   const [shown, setShown] = useState(PAGE);
@@ -651,8 +656,282 @@ export function Transactions({
   const live = accounts.filter((a) => !a.archived && !a.system);
   const closed = accounts.filter((a) => a.archived);
 
+  const phoneLedger = phone && !picking;
+  const selectable = !(picking && !pickMany) && (!phoneLedger || selecting || pickedSet.size > 0);
+  // The kind strip lives in the sheet on a phone, so it counts as a filter.
+  const phoneFilterCount = activeFilters + (kind === 'all' ? 0 : 1);
+  /* Sideways on the period bar steps the month: the rows keep their own
+     swipes, and the screen's left edge is the drawer's. */
+  const swipeFrom = useRef<{ x: number; y: number } | null>(null);
+  const periodSwipe = {
+    onTouchStart: (e: React.TouchEvent) => {
+      const t = e.touches[0];
+      swipeFrom.current = { x: t.clientX, y: t.clientY };
+    },
+    onTouchEnd: (e: React.TouchEvent) => {
+      const from = swipeFrom.current;
+      swipeFrom.current = null;
+      if (!from || months === 0) return;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - from.x;
+      if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(t.clientY - from.y) * 1.5) return;
+      setMonth(shiftMonth(month, dx < 0 ? months : -months));
+    },
+  };
+
+  // The same groups, hung off the button on a window and in a sheet on a
+  // phone, where a popup over the list has nowhere to sit.
+  const filterGroups = (
+    <>
+      <div className="filter-group">
+        <div className="filter-head">
+          <span>Accounts</span>
+          {accountIds.length > 0 && (
+            <Segmented
+              options={SIDES}
+              value={side}
+              onChange={setSide}
+              name="tx-side"
+              size="sm"
+            />
+          )}
+        </div>
+        <div className="chip-row">
+          {live.map((a) => (
+            <Chip
+              key={a.id}
+              color={a.color}
+              active={accountIds.includes(a.id)}
+              onClick={() => setAccountIds((l) => toggle(l, a.id))}
+            >
+              {a.name}
+            </Chip>
+          ))}
+          {closed.length > 0 && (
+            <span className="chip-closed">
+              {closed.map((a) => (
+                <Chip
+                  key={a.id}
+                  color={a.color}
+                  active={accountIds.includes(a.id)}
+                  onClick={() => setAccountIds((l) => toggle(l, a.id))}
+                >
+                  {a.name}
+                  <em>closed</em>
+                </Chip>
+              ))}
+            </span>
+          )}
+        </div>
+        {accountIds.length > 0 && side !== 'either' && (
+          <p className="filter-note">
+            {side === 'from' ? 'Money leaving' : 'Money arriving in'}{' '}
+            {accountIds.length === 1 ? 'that account' : 'those accounts'}, which only
+            narrows transfers, since income and expenses touch one side.
+          </p>
+        )}
+      </div>
+
+      <div className="filter-group">
+        <div className="filter-head">
+          <span>Paid by</span>
+          <Segmented
+            options={PAID_BY}
+            value={paidBy}
+            onChange={setPaidBy}
+            name="tx-paid-by"
+            size="sm"
+          />
+        </div>
+        {paidBy !== 'anyone' && (
+          <p className="filter-note">
+            {paidBy === 'others'
+              ? 'Bills a friend paid, where your share is what you owe them. None of your accounts moved for them.'
+              : 'Everything that went through an account of yours, leaving out the bills a friend paid.'}
+          </p>
+        )}
+      </div>
+
+      {kind === 'transfer' ? (
+        <div className="filter-group">
+          <span>Categories</span>
+          <p className="filter-note">
+            Transfers move money between your own accounts, so they are never
+            categorised. Filter them by account instead.
+          </p>
+        </div>
+      ) : (
+        <div className="filter-group">
+          <div className="filter-head">
+            <span>Categories</span>
+            <div className="filter-head-tools">
+              <Segmented
+                options={CATEGORY_MODES}
+                value={categoryMode}
+                onChange={setCategoryMode}
+                name="tx-category-mode"
+                size="sm"
+              />
+              <div className="filter-search">
+                <Icon name="search" size={13} />
+                <TextInput
+                  value={catQuery}
+                  placeholder="Find a category"
+                  onChange={(e) => setCatQuery(e.target.value)}
+                />
+                {catQuery && (
+                  <button onClick={() => setCatQuery('')} aria-label="Clear">
+                    <Icon name="x" size={12} />
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+          {categoryMode === 'hide' && (
+            <p className="filter-note">
+              {categoryIds.length
+                ? 'Entries filed under the ones picked are left out, along with any bill split across them.'
+                : 'Pick the categories to leave out of the list.'}
+            </p>
+          )}
+          <div className="chip-tree">
+            {visibleGroups.length === 0 && (
+              <p className="filter-note">Nothing matches “{catQuery}”.</p>
+            )}
+            {/* Categories with nothing under them — income is a
+                flat list — share one row rather than a line each. */}
+            {visibleGroups.some(({ children }) => children.length === 0) && (
+              <div className="chip-row">
+                {visibleGroups
+                  .filter(({ children }) => children.length === 0)
+                  .map(({ group }) => (
+                    <Chip
+                      key={group.id}
+                      color={group.color}
+                      active={categoryIds.includes(group.id)}
+                      onClick={() => setCategoryIds((l) => toggle(l, group.id))}
+                    >
+                      {group.name}
+                    </Chip>
+                  ))}
+              </div>
+            )}
+            {visibleGroups.filter(({ children }) => children.length > 0).map(({ group, children }) => {
+              const groupOn = categoryIds.includes(group.id);
+              return (
+                <div key={group.id} className="cat-branch">
+                  <Chip
+                    color={group.color}
+                    active={groupOn}
+                    onClick={() => setCategoryIds((l) => toggle(l, group.id))}
+                  >
+                    {group.name}
+                  </Chip>
+                  {children.length > 0 && (
+                    <div className="cat-children">
+                      {children.map((child) => (
+                        <Chip
+                          key={child.id}
+                          color={child.color}
+                          active={groupOn || categoryIds.includes(child.id)}
+                          onClick={() =>
+                            // Picking one out of a selected group narrows
+                            // to it, rather than adding a redundant filter.
+                            setCategoryIds((l) =>
+                              groupOn
+                                ? [...l.filter((id) => id !== group.id), child.id]
+                                : toggle(l, child.id),
+                            )
+                          }
+                        >
+                          {child.name}
+                        </Chip>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {labels.length > 0 && (
+        <div className="filter-group">
+          <span>Labels</span>
+          <div className="chip-row">
+            {labels.map((label) => (
+              <Chip
+                key={label.id}
+                color={label.color}
+                count={label.count}
+                active={labelIds.includes(label.id)}
+                onClick={() => setLabelIds((l) => toggle(l, label.id))}
+              >
+                {/* A silent label is offered here and drawn nowhere
+                    else, so the glyph says which is which. */}
+                {label.silent && (
+                  <Icon name="eye-off" size={10.5} strokeWidth={2.2} className="chip-quiet" />
+                )}
+                {label.name}
+              </Chip>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {activeFilters > 0 && (
+        <button className="filter-clear" onClick={clearFilters}>
+          <Icon name="x" size={13} /> Clear filters
+        </button>
+      )}
+    </>
+  );
+
   return (
     <div className={`screen ${picking ? 'is-picking' : ''}`}>
+      {phoneLedger ? (
+        /* A phone's head: the title with Select and Filters beside it, then
+           the period as one pill. The steppers, the kind and range strips
+           and the Add button were five rows of controls before the first
+           posting; the period and filters now live in one sheet, and adding
+           is the + beside the tab bar. */
+        <header className="screen-head phone-ledger-head">
+          <div className="phone-head-row">
+            <h1>Transactions</h1>
+            <div className="phone-head-tools">
+              <button
+                type="button"
+                className="head-text-btn"
+                onClick={() => {
+                  if (selecting) setPicked([]);
+                  setSelecting((v) => !v);
+                }}
+              >
+                {selecting ? 'Done' : 'Select'}
+              </button>
+              <span className="head-filter">
+                <IconButton
+                  icon="list-filter"
+                  label="Filters"
+                  size={36}
+                  onClick={() => setShowFilters(true)}
+                />
+                {phoneFilterCount > 0 && <span className="head-filter-count">{phoneFilterCount}</span>}
+              </span>
+            </div>
+          </div>
+          <div className="period-bar" {...periodSwipe}>
+            <button type="button" className="period-pill" onClick={() => setShowFilters(true)}>
+              {months ? periodLabel(month, months) : 'All time'}
+              <Icon name="chevron-down" size={14} strokeWidth={2.4} />
+            </button>
+            <span className="period-count">
+              {total} {total === 1 ? 'entry' : 'entries'}
+            </span>
+          </div>
+        </header>
+      ) : (
       <header className="screen-head">
         {picking ? (
           <p className="picking-count">
@@ -679,6 +958,7 @@ export function Transactions({
           )}
         </div>
       </header>
+      )}
 
       <div className="tx-toolbar">
         <div className="search-box">
@@ -694,6 +974,7 @@ export function Transactions({
             </button>
           )}
         </div>
+        {!phoneLedger && <>
         <Segmented options={KIND_FILTERS} value={kind} onChange={setKind} name="tx-filter" size="sm" />
         <Segmented options={ranges} value={range} onChange={setRange} name="tx-range" size="sm" />
         <div className="filter-anchor" ref={filterAnchor}>
@@ -717,218 +998,62 @@ export function Transactions({
                 animate="animate"
                 exit="exit"
               >
-                <div className="filter-group">
-                  <div className="filter-head">
-                    <span>Accounts</span>
-                    {accountIds.length > 0 && (
-                      <Segmented
-                        options={SIDES}
-                        value={side}
-                        onChange={setSide}
-                        name="tx-side"
-                        size="sm"
-                      />
-                    )}
-                  </div>
-                  <div className="chip-row">
-                    {live.map((a) => (
-                      <Chip
-                        key={a.id}
-                        color={a.color}
-                        active={accountIds.includes(a.id)}
-                        onClick={() => setAccountIds((l) => toggle(l, a.id))}
-                      >
-                        {a.name}
-                      </Chip>
-                    ))}
-                    {closed.length > 0 && (
-                      <span className="chip-closed">
-                        {closed.map((a) => (
-                          <Chip
-                            key={a.id}
-                            color={a.color}
-                            active={accountIds.includes(a.id)}
-                            onClick={() => setAccountIds((l) => toggle(l, a.id))}
-                          >
-                            {a.name}
-                            <em>closed</em>
-                          </Chip>
-                        ))}
-                      </span>
-                    )}
-                  </div>
-                  {accountIds.length > 0 && side !== 'either' && (
-                    <p className="filter-note">
-                      {side === 'from' ? 'Money leaving' : 'Money arriving in'}{' '}
-                      {accountIds.length === 1 ? 'that account' : 'those accounts'}, which only
-                      narrows transfers, since income and expenses touch one side.
-                    </p>
-                  )}
-                </div>
-
-                <div className="filter-group">
-                  <div className="filter-head">
-                    <span>Paid by</span>
-                    <Segmented
-                      options={PAID_BY}
-                      value={paidBy}
-                      onChange={setPaidBy}
-                      name="tx-paid-by"
-                      size="sm"
-                    />
-                  </div>
-                  {paidBy !== 'anyone' && (
-                    <p className="filter-note">
-                      {paidBy === 'others'
-                        ? 'Bills a friend paid, where your share is what you owe them. None of your accounts moved for them.'
-                        : 'Everything that went through an account of yours, leaving out the bills a friend paid.'}
-                    </p>
-                  )}
-                </div>
-
-                {kind === 'transfer' ? (
-                  <div className="filter-group">
-                    <span>Categories</span>
-                    <p className="filter-note">
-                      Transfers move money between your own accounts, so they are never
-                      categorised. Filter them by account instead.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="filter-group">
-                    <div className="filter-head">
-                      <span>Categories</span>
-                      <div className="filter-head-tools">
-                        <Segmented
-                          options={CATEGORY_MODES}
-                          value={categoryMode}
-                          onChange={setCategoryMode}
-                          name="tx-category-mode"
-                          size="sm"
-                        />
-                        <div className="filter-search">
-                          <Icon name="search" size={13} />
-                          <TextInput
-                            value={catQuery}
-                            placeholder="Find a category"
-                            onChange={(e) => setCatQuery(e.target.value)}
-                          />
-                          {catQuery && (
-                            <button onClick={() => setCatQuery('')} aria-label="Clear">
-                              <Icon name="x" size={12} />
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                    {categoryMode === 'hide' && (
-                      <p className="filter-note">
-                        {categoryIds.length
-                          ? 'Entries filed under the ones picked are left out, along with any bill split across them.'
-                          : 'Pick the categories to leave out of the list.'}
-                      </p>
-                    )}
-                    <div className="chip-tree">
-                      {visibleGroups.length === 0 && (
-                        <p className="filter-note">Nothing matches “{catQuery}”.</p>
-                      )}
-                      {/* Categories with nothing under them — income is a
-                          flat list — share one row rather than a line each. */}
-                      {visibleGroups.some(({ children }) => children.length === 0) && (
-                        <div className="chip-row">
-                          {visibleGroups
-                            .filter(({ children }) => children.length === 0)
-                            .map(({ group }) => (
-                              <Chip
-                                key={group.id}
-                                color={group.color}
-                                active={categoryIds.includes(group.id)}
-                                onClick={() => setCategoryIds((l) => toggle(l, group.id))}
-                              >
-                                {group.name}
-                              </Chip>
-                            ))}
-                        </div>
-                      )}
-                      {visibleGroups.filter(({ children }) => children.length > 0).map(({ group, children }) => {
-                        const groupOn = categoryIds.includes(group.id);
-                        return (
-                          <div key={group.id} className="cat-branch">
-                            <Chip
-                              color={group.color}
-                              active={groupOn}
-                              onClick={() => setCategoryIds((l) => toggle(l, group.id))}
-                            >
-                              {group.name}
-                            </Chip>
-                            {children.length > 0 && (
-                              <div className="cat-children">
-                                {children.map((child) => (
-                                  <Chip
-                                    key={child.id}
-                                    color={child.color}
-                                    active={groupOn || categoryIds.includes(child.id)}
-                                    onClick={() =>
-                                      // Picking one out of a selected group narrows
-                                      // to it, rather than adding a redundant filter.
-                                      setCategoryIds((l) =>
-                                        groupOn
-                                          ? [...l.filter((id) => id !== group.id), child.id]
-                                          : toggle(l, child.id),
-                                      )
-                                    }
-                                  >
-                                    {child.name}
-                                  </Chip>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {labels.length > 0 && (
-                  <div className="filter-group">
-                    <span>Labels</span>
-                    <div className="chip-row">
-                      {labels.map((label) => (
-                        <Chip
-                          key={label.id}
-                          color={label.color}
-                          count={label.count}
-                          active={labelIds.includes(label.id)}
-                          onClick={() => setLabelIds((l) => toggle(l, label.id))}
-                        >
-                          {/* A silent label is offered here and drawn nowhere
-                              else, so the glyph says which is which. */}
-                          {label.silent && (
-                            <Icon name="eye-off" size={10.5} strokeWidth={2.2} className="chip-quiet" />
-                          )}
-                          {label.name}
-                        </Chip>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {activeFilters > 0 && (
-                  <button className="filter-clear" onClick={clearFilters}>
-                    <Icon name="x" size={13} /> Clear filters
-                  </button>
-                )}
+                {filterGroups}
               </motion.div>
             )}
           </AnimatePresence>
         </div>
+        </>}
       </div>
+
+      {phoneLedger && (
+        <Sheet
+          open={showFilters}
+          onClose={() => setShowFilters(false)}
+          title="Filters"
+          footer={
+            <>
+              <Button
+                tone="ghost"
+                onClick={() => {
+                  clearFilters();
+                  setKind('all');
+                }}
+                disabled={phoneFilterCount === 0}
+              >
+                Reset
+              </Button>
+              <Button tone="primary" onClick={() => setShowFilters(false)}>
+                {loading ? 'Show' : `Show ${total.toLocaleString('en-IN')}`}
+              </Button>
+            </>
+          }
+        >
+          <div className="filter-sheet">
+            <div className="filter-group">
+              <span>Type</span>
+              <Segmented options={KIND_FILTERS} value={kind} onChange={setKind} name="tx-filter-m" size="sm" />
+            </div>
+            <div className="filter-group">
+              <span>Period</span>
+              <Segmented options={ranges} value={range} onChange={setRange} name="tx-range-m" size="sm" />
+              {months > 0 && <MonthNav month={month} onChange={setMonth} span={months} />}
+            </div>
+            {filterGroups}
+          </div>
+        </Sheet>
+      )}
 
       {/* With the popup closed, what the list is narrowed by stays in view —
           one chip per filter, and any of them a click to lift off. */}
-      {!showFilters && activeFilters > 0 && (
+      {(phoneLedger || !showFilters) && (activeFilters > 0 || (phoneLedger && kind !== 'all')) && (
         <div className="filter-summary">
+          {phoneLedger && kind !== 'all' && (
+            <Chip active onClick={() => setKind('all')}>
+              {KIND_FILTERS.find((k) => k.value === kind)?.label}
+              <Icon name="x" size={11} />
+            </Chip>
+          )}
           {side !== 'either' && (
             <Chip active onClick={() => setSide('either')}>
               <Icon name={side === 'from' ? 'arrow-up-right' : 'arrow-down-left'} size={12} />
@@ -1070,7 +1195,7 @@ export function Transactions({
           <motion.div
             // Rows that can be ticked get a column for their boxes, which the
             // day heads and the split strips line up with.
-            className={`ledger-days ${picking && !pickMany ? '' : 'is-selectable'}`}
+            className={`ledger-days ${selectable ? 'is-selectable' : ''}`}
             variants={listing}
             initial="initial"
             animate="animate"
@@ -1117,9 +1242,7 @@ export function Transactions({
                           ? 0
                           : (orderOf.get(tx.id) ?? 0) * 0.028
                       }
-                      onSelect={
-                        picking && !pickMany ? undefined : (range) => pick(tx, range)
-                      }
+                      onSelect={selectable ? (range) => pick(tx, range) : undefined}
                     />
                   ))}
                 </motion.div>
