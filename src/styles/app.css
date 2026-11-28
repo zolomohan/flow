@@ -217,6 +217,10 @@ kbd {
   overscroll-behavior: none;
 }
 
+/* What a back swipe on a phone drags off the right edge; at rest, and on
+   the Mac, nothing but the page's own height. */
+.page-track { height: 100%; }
+
 .boot {
   display: grid;
   place-items: center;

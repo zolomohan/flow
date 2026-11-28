@@ -14,8 +14,8 @@
  * taken out of it, in the sidebar's own order.
  */
 
-import { AnimatePresence, motion } from 'motion/react';
-import { useEffect } from 'react';
+import { motion, useTransform } from 'motion/react';
+import { DRAWER_WIDTH, drawerProgress } from '../lib/drawer';
 import { Icon, SiriMark } from './Icon';
 import { NAV, Sidebar, type Route } from './Sidebar';
 import { NATIVE_TAB_ROUTES } from '../lib/nativeTabs';
@@ -166,92 +166,35 @@ export function MoreSheet({
 }
 
 /**
- * The button at the top left of every screen that brings the drawer out. It
- * floats rather than sitting in a header, because there is no header: each
- * screen's own title starts beside it.
- */
-export function DrawerButton({ onClick }: { onClick: () => void }) {
-  return (
-    <motion.button
-      whileTap={press}
-      transition={spring}
-      className="drawer-btn"
-      onClick={onClick}
-      aria-label="Open sidebar"
-    >
-      <Icon name="panel-left" size={19} />
-    </motion.button>
-  );
-}
-
-/**
- * The phone's sidebar: the Mac's own grouped column, slid in from the left
- * over a scrim, holding every destination the tab bar does not. Tapping
- * outside, dragging it back, or going anywhere puts it away.
+ * The phone's sidebar: the Mac's own grouped column, lying *under* the
+ * screen. It never moves in over anything — the screen slides off it to the
+ * right (see `lib/drawer` and `App`), and the panel eases in from a third of
+ * its width behind as it is uncovered, the parallax that keeps it reading as
+ * a layer below rather than a second thing sliding in beside.
  */
 export function PhoneDrawer({
-  open, onClose, route, onNavigate,
+  route, onNavigate,
 }: {
-  open: boolean;
-  onClose: () => void;
   route: Route;
   onNavigate: (route: Route) => void;
 }) {
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
-
-  const go = (next: Route) => {
-    onNavigate(next);
-    onClose();
-  };
+  const panelX = useTransform(drawerProgress, [0, 1], [-DRAWER_WIDTH / 3, 0]);
   const none = () => {};
 
   return (
-    <AnimatePresence>
-      {open && (
-        <>
-          <motion.div
-            key="scrim"
-            className="drawer-scrim"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            onClick={onClose}
-          />
-          <motion.div
-            key="panel"
-            className="phone-drawer"
-            initial={{ x: '-100%' }}
-            animate={{ x: 0 }}
-            exit={{ x: '-100%' }}
-            transition={spring}
-            drag="x"
-            dragConstraints={{ left: 0, right: 0 }}
-            dragElastic={{ left: 0.6, right: 0 }}
-            onDragEnd={(_, info) => {
-              if (info.offset.x < -60 || info.velocity.x < -400) onClose();
-            }}
-          >
-            <Sidebar
-              drawer
-              hide={NATIVE_TAB_ROUTES}
-              route={route}
-              onNavigate={go}
-              onAdd={none}
-              onSearch={none}
-              onBack={none}
-              onForward={none}
-              canBack={false}
-              canForward={false}
-            />
-          </motion.div>
-        </>
-      )}
-    </AnimatePresence>
+    <motion.div className="phone-drawer" style={{ x: panelX, opacity: drawerProgress }}>
+      <Sidebar
+        drawer
+        hide={NATIVE_TAB_ROUTES}
+        route={route}
+        onNavigate={onNavigate}
+        onAdd={none}
+        onSearch={none}
+        onBack={none}
+        onForward={none}
+        canBack={false}
+        canForward={false}
+      />
+    </motion.div>
   );
 }

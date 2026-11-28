@@ -82,46 +82,31 @@
 
   /* ------------------------------------------------------------- drawer */
 
-  /* The way to the drawer, at the top left of every screen. It floats over
-     the page, so each screen's head is pushed over to start beside it. */
-  .drawer-btn {
-    position: fixed;
-    z-index: 20;
-    top: calc(var(--safe-t) + 12px);
-    left: 12px;
-    display: grid;
-    place-items: center;
-    width: 36px;
-    height: 36px;
-    padding: 0;
-    border-radius: var(--r-full);
-    color: var(--ink);
-    background: color-mix(in srgb, var(--surface) 78%, transparent);
-    backdrop-filter: blur(14px) saturate(1.3);
-    -webkit-backdrop-filter: blur(14px) saturate(1.3);
-    border: 1px solid var(--line-soft);
-    box-shadow: var(--shadow-sm);
-  }
-  .app.is-phone .screen-head { padding-left: 46px; min-height: 36px; }
+  /* An under-drawer, the shape drivea settles on: the panel is the layer
+     *below*, and the screen slides off it to the right rather than the panel
+     sliding over the screen. Nothing dims — the screen's edge and the shadow
+     it casts are what separate the two.
 
-  .drawer-scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 80;
-    background: color-mix(in srgb, #000 32%, transparent);
-  }
+     Both transforms are driven from `lib/drawer`, not from here, so that they
+     track a finger mid-drag instead of running a transition of their own
+     against the gesture. What is left here is only what does not move. */
 
   /* The Mac's column, as a panel: the same grouped lists and faded scroll
-     edges, on the same paper, with the status bar kept clear above it. */
+     edges, on the shell's paper, with the status bar kept clear above it. */
   .phone-drawer {
     position: fixed;
-    z-index: 81;
-    top: 0;
-    bottom: 0;
-    left: 0;
-    width: min(300px, 82vw);
+    inset: 0 auto 0 0;
+    /* Below the screen, which is the whole difference — by order rather than
+       by z-index: both are positioned with no z-index of their own, so the
+       screen, coming later, paints over the panel without becoming a
+       stacking context that would trap the sheets a screen opens inside it. */
+    /* Must agree with DRAWER_WIDTH in `lib/drawer`, which is what the screen
+       is moved by — narrower shows the page behind it, wider never fully
+       arrives. */
+    width: min(320px, 80vw);
     display: flex;
-    box-shadow: var(--shadow-lg);
+    /* Swiped left to shut, by hand from pointer events: up and down is all
+       the panel scrolls, and all it needs to keep. */
     touch-action: pan-y;
   }
   .phone-drawer .sidebar {
@@ -129,8 +114,46 @@
     flex: 1;
     min-width: 0;
     padding: calc(var(--safe-t) + 14px) 14px calc(env(safe-area-inset-bottom, 0px) + 12px);
-    border-right: 1px solid var(--line-soft);
+    border-right: 0;
+    background: transparent;
   }
+
+  /* The screen: above the panel, and opaque, since it is what hides the
+     panel when shut. The paper is the shell's own, drifted the same way. */
+  .app.is-phone .main {
+    background: var(--grain) var(--bg);
+    background-position: 0 var(--ground-y, 0px);
+    /* Cast onto the panel by the edge the screen leaves by. Always on — at
+       rest the screen covers the whole width and this falls off-screen. A
+       close layer to hold the edge and a wide faint one behind it, which is
+       what reads as depth rather than as a drawn line. */
+    box-shadow: -6px 0 20px rgba(0, 0, 0, 0.07), -24px 0 64px rgba(0, 0, 0, 0.13);
+  }
+
+  /* The screen's corners round its background, but do not reliably clip
+     what is composited inside it, which WebKit paints square past the
+     curve. Those round themselves from the same radius. */
+  .app.is-phone .page-track,
+  .app.is-phone .main-scroll {
+    border-top-left-radius: var(--screen-radius, 0px);
+    border-bottom-left-radius: var(--screen-radius, 0px);
+  }
+
+  /* While the screen is out it stops taking taps and becomes one big close
+     button — which is why there is no dimming layer to click through. */
+  .nav-scrim {
+    position: absolute;
+    inset: 0;
+    z-index: 60;
+    display: none;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    /* The screen's edge is the other place a swipe shuts the drawer from. */
+    touch-action: pan-y;
+  }
+  .app.is-nav-open .nav-scrim { display: block; }
 
   /* ------------------------------------------------------------- tab bar */
 

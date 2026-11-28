@@ -3,9 +3,12 @@ import {
   type MutableRefObject, type ReactNode,
 } from 'react';
 import type { CSSProperties } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence, motion, useTransform } from 'motion/react';
 import { INVESTMENT_TABS, Sidebar, isInvestmentRoute, type Route } from './components/Sidebar';
-import { DrawerButton, MoreSheet, PhoneDrawer, TabBar } from './components/MobileChrome';
+import { MoreSheet, PhoneDrawer, TabBar } from './components/MobileChrome';
+import {
+  DRAWER_RADIUS, DRAWER_WIDTH, backFade, backProgress, drawerProgress, useDrawer, useDrawerMoving,
+} from './lib/drawer';
 import {
   NATIVE_TAB_ROUTES, badgeNativeTab, holdNativeTabs, onNativeAdd, onNativeTab, selectNativeTab,
   showNativeTabs,
@@ -244,25 +247,45 @@ function Shell() {
      height it covers once it is up; null while it is not, and always on the
      Mac or in a browser, where the page draws its own. */
   const [nativeTabsH, setNativeTabsH] = useState<number | null>(null);
-  /* The phone's sidebar: every destination without a tab, slid in from the
-     left by the edge swipe or the button at the top of each screen. */
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  /* The phone's sidebar: every destination without a tab, lying under the
+     screen. A swipe right from anywhere slides the screen off it; a swipe
+     from the very edge is back instead, when there is somewhere to go back
+     to. See `lib/drawer`. */
+  const shellRef = useRef<HTMLDivElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
+  const { open: drawerOpen, setOpen: setDrawer } = useDrawer({
+    root: shellRef,
+    page: mainRef,
+    enabled: phone,
+    canBack,
+    onBack: back,
+  });
+  const drawerMoving = useDrawerMoving();
+  /* The screen rides right off the panel, rounding the edge it leaves by;
+     the page inside follows a back swipe off the right edge. */
+  const screenX = useTransform(drawerProgress, [0, 1], [0, DRAWER_WIDTH]);
+  const screenRadius = useTransform(drawerProgress, [0, 1], [0, DRAWER_RADIUS]);
+  const pageX = useTransform(backProgress, (v) => v * (mainRef.current?.clientWidth || window.innerWidth));
   /* What the add button beside the native bar runs. A ref, because the
      listener is set up once and `newTransaction` is declared further down. */
   const newTransactionRef = useRef<() => void>(() => {});
+  /* Whether index.html's splash is still on screen. UIKit draws the bar over
+     the web view, splash and all, so it is not put up until the splash has
+     gone. False from the start when there is none — a live reload. */
+  const [splashUp, setSplashUp] = useState(() => !!document.getElementById('splash'));
   useEffect(() => {
-    if (!phone) return;
+    if (!phone || splashUp) return;
     let live = true;
     showNativeTabs().then((h) => live && setNativeTabsH(h));
     return () => {
       live = false;
     };
-  }, [phone]);
+  }, [phone, splashUp]);
   useEffect(() => {
     if (nativeTabsH === null) return;
     const listeners = [
       onNativeTab((tab) => {
-        setDrawerOpen(false);
+        setDrawer(false);
         setRoute(tab);
       }),
       onNativeAdd(() => newTransactionRef.current()),
@@ -276,13 +299,14 @@ function Shell() {
     if (nativeTabsH === null) return;
     selectNativeTab(NATIVE_TAB_ROUTES.has(route) ? (route as NativeTab) : 'none');
   }, [nativeTabsH, route]);
-  // The drawer covers the bar's corner of the screen, so the bar steps down
-  // while it is out, as it does for a sheet.
+  /* The bar rides with the screen in spirit: UIKit cannot follow a finger
+     frame by frame, so it steps down the moment the screen starts to move
+     and comes back once the screen is home. */
   useEffect(() => {
-    if (!drawerOpen) return;
+    if (!drawerMoving) return;
     holdNativeTabs(true);
     return () => holdNativeTabs(false);
-  }, [drawerOpen]);
+  }, [drawerMoving]);
   useEffect(() => {
     if (nativeTabsH === null) return;
     badgeNativeTab('siri', captures.length);
@@ -548,42 +572,6 @@ function Shell() {
     return () => window.removeEventListener('keydown', onKey);
   }, [newTransaction, setRoute, back, forward]);
 
-  /* The drawer, by dragging in from the left edge — where the sidebar is on
-     the Mac, and where a thumb looks for it. It used to be back; the drawer
-     is the only way to half the destinations now, so it has the gesture. It
-     is deliberately narrow-minded:
-     the drag has to start within 22pt of the edge, travel mostly sideways,
-     and finish before the thumb has had time to mean something else. A screen
-     with its own horizontal scrolling — a rail of chips, a wide table — sits
-     past that 22pt strip and is never in the running. */
-  useEffect(() => {
-    if (!phone) return;
-    let from: { x: number; y: number; at: number } | null = null;
-
-    const onStart = (e: TouchEvent) => {
-      const touch = e.touches[0];
-      from = touch && touch.clientX <= 22
-        ? { x: touch.clientX, y: touch.clientY, at: performance.now() }
-        : null;
-    };
-    const onEnd = (e: TouchEvent) => {
-      const start = from;
-      from = null;
-      const touch = e.changedTouches[0];
-      if (!start || !touch) return;
-      const dx = touch.clientX - start.x;
-      const dy = Math.abs(touch.clientY - start.y);
-      if (dx > 68 && dy < 46 && performance.now() - start.at < 700) setDrawerOpen(true);
-    };
-
-    window.addEventListener('touchstart', onStart, { passive: true });
-    window.addEventListener('touchend', onEnd, { passive: true });
-    return () => {
-      window.removeEventListener('touchstart', onStart);
-      window.removeEventListener('touchend', onEnd);
-    };
-  }, [phone]);
-
   /* How much of the window the keyboard is sitting on, published as `--kb`.
      WKWebView does not resize the viewport when the keyboard comes up — the
      page keeps its full height and the bottom of it is simply covered — so a
@@ -621,7 +609,10 @@ function Shell() {
        splash first painted — so it is the elapsed time without a global. */
     const wait = Math.max(0, SPLASH_MS - performance.now());
     let bail = 0;
-    const done = () => splash.remove();
+    const done = () => {
+      splash.remove();
+      setSplashUp(false);
+    };
 
     const leave = window.setTimeout(() => {
       splash.classList.add('is-gone');
@@ -655,7 +646,8 @@ function Shell() {
 
   return (
     <div
-      className={`app ${phone ? 'is-phone' : ''} ${nativeTabsH !== null ? 'has-native-tabs' : ''}`}
+      ref={shellRef}
+      className={`app ${phone ? 'is-phone' : ''} ${nativeTabsH !== null ? 'has-native-tabs' : ''} ${drawerOpen ? 'is-nav-open' : ''}`}
       style={nativeTabsH !== null ? ({ '--tabs-h': `${nativeTabsH}px` } as CSSProperties) : undefined}
     >
       {/* A phone has no bar across the top: the page starts under the
@@ -673,11 +665,53 @@ function Shell() {
         />
       )}
 
-      <main className="main">
+      {phone && (
+        <PhoneDrawer
+          route={route}
+          onNavigate={(next) => {
+            setRoute(next);
+            setDrawer(false);
+          }}
+        />
+      )}
+
+      {/* On a phone this is the screen itself: it sits above the drawer and
+          slides off it, so the panel is revealed rather than covered. On a
+          window the transforms stay off — any transform would make this the
+          containing block for the fixed things inside a screen. */}
+      <motion.main
+        ref={mainRef}
+        className="main"
+        style={
+          phone
+            ? ({
+                x: screenX,
+                borderTopLeftRadius: screenRadius,
+                borderBottomLeftRadius: screenRadius,
+                '--screen-radius': screenRadius,
+              } as never)
+            : undefined
+        }
+      >
         {/* A strip the window is dragged by, which a phone has no use for —
             and which would otherwise sit over the top of every screen
             swallowing the taps meant for it. */}
         {!phone && <div className="titlebar-drag main-drag" data-tauri-drag-region />}
+        {/* While the screen is out it stops taking taps and becomes the way
+            back to it. */}
+        {phone && (
+          <button
+            type="button"
+            className="nav-scrim"
+            aria-label="Close sidebar"
+            tabIndex={drawerOpen ? 0 : -1}
+            onClick={() => setDrawer(false)}
+          />
+        )}
+        <motion.div
+          className="page-track"
+          style={phone ? { x: pageX, opacity: backFade } : undefined}
+        >
         <AnimatePresence mode="wait">
           <ScrollPane key={stop} stop={stop} marks={marks}>
             {accounts.length === 0 && route !== 'settings' ? (
@@ -795,7 +829,8 @@ function Shell() {
             )}
           </ScrollPane>
         </AnimatePresence>
-      </main>
+        </motion.div>
+      </motion.main>
 
       <TransactionSheet
         open={txOpen}
@@ -863,13 +898,6 @@ function Shell() {
           <MoreSheet
             open={moreOpen}
             onClose={() => setMoreOpen(false)}
-            route={route}
-            onNavigate={setRoute}
-          />
-          <DrawerButton onClick={() => setDrawerOpen(true)} />
-          <PhoneDrawer
-            open={drawerOpen}
-            onClose={() => setDrawerOpen(false)}
             route={route}
             onNavigate={setRoute}
           />
