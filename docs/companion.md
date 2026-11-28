@@ -4,6 +4,13 @@ How the phone and the Mac keep one book between them. This replaces the
 "companion or peer" question in `PLAN.md`. The answer is a companion, with
 writes going both ways.
 
+> **Update (Nov 2026): the book moves to the phone.** Flow is going
+> phone-first. Which device holds the book is now a setting (`book_role`:
+> `owner` or `companion`), not a fixed fact. Everything below still holds
+> with "Mac" read as *the owner* and "phone" as *the companion*: once the
+> book has moved, the phone publishes and applies, and the Mac works on a
+> copy and queues its changes. See "Moving the book" at the end.
+
 ## The shape of it
 
 ```
@@ -128,3 +135,23 @@ phone.
   them through its own checks.
 - Nothing on the Mac regresses: the existing Rust tests keep passing, and the
   new ones cover publish, apply, id pinning and conflicts.
+
+## Moving the book
+
+Settings › Your data › Shared book, on both devices, with the shared folder
+set on each:
+
+1. **On the device that holds the book now, Hand over.** Every queued change
+   is applied, a last snapshot is published, and the device becomes a
+   companion.
+2. **On the other device, Take over.** The snapshot becomes its book of
+   record and it applies whatever is still queued, its own included.
+
+From then on the companion's edits to transactions, debts and plans go
+through the queue; anything else it changes stays on its own copy until the
+next snapshot replaces it (more of the app moves onto the queue later). Each
+device keeps its own role, name and folder across snapshots. On the phone the
+book lives in the App Group container (`group.com.mohanraj.midas`) once that
+entitlement is signed in, so the share extension, widgets and the Log
+transaction intent can open it; until then it stays in the app's data folder,
+and a book there is copied across the first time the group folder appears.

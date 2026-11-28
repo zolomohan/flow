@@ -1260,8 +1260,15 @@ export interface TaxYear {
 
 /* ------------------------------------------------------------ companion */
 
-/** Where the phone's half of the book stands, as the Mac sees it. */
+/** Which device holds the book. The owner applies everyone's changes and
+ *  publishes; a companion works on a copy and queues its changes. */
+export type CompanionRole = 'owner' | 'companion';
+
+/** Where the shared book stands, as this device sees it. */
 export interface CompanionStatus {
+  role: CompanionRole;
+  /** This device's name in the shared folder, once it has one. */
+  device: string | null;
   /** The folder the two devices share; null is off. */
   dir: string | null;
   /** How many snapshots have been published. */
@@ -1270,6 +1277,20 @@ export interface CompanionStatus {
   applied: Record<string, number>;
   /** Changes held for a person. */
   conflicts: number;
+}
+
+/** What taking in the owner's snapshot did. */
+export interface CompanionCaughtUp {
+  version: number;
+  /** This device's own changes laid back over it, or on a take-over, the
+   *  queued changes applied. */
+  replayed: number;
+}
+
+export interface CompanionSnapshot {
+  version: number;
+  takenAt: string;
+  applied: Record<string, number>;
 }
 
 export interface CompanionApplied {

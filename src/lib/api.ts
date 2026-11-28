@@ -11,7 +11,9 @@ import type {
   Capture,
   CaptureSync,
   CompanionApplied,
+  CompanionCaughtUp,
   CompanionConflict,
+  CompanionSnapshot,
   CompanionStatus,
   CardsOverview,
   CardTerm,
@@ -208,6 +210,13 @@ export const api = {
   /** Takes in the phone's changes now and publishes the book. Null when no
    *  companion folder is set. */
   companionSync: () => call<CompanionApplied | null>('companion_sync'),
+  /** On a companion: takes in the owner's newer snapshot. Null when there
+   *  is nothing newer. */
+  companionCatchUp: () => call<CompanionCaughtUp | null>('companion_catch_up'),
+  /** On the owner: publishes a last snapshot and becomes a companion. */
+  companionHandOver: () => call<CompanionSnapshot>('companion_hand_over'),
+  /** Makes the shared folder's snapshot this device's book of record. */
+  companionTakeOver: () => call<CompanionCaughtUp>('companion_take_over'),
   /** The phone's changes that were held rather than applied. */
   companionConflicts: () => call<CompanionConflict[]>('companion_conflicts'),
   /** Applies a held change over the row as it is now, or drops it. */

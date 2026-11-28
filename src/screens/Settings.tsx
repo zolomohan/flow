@@ -7,7 +7,7 @@ import {
 } from '../components/ui';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { api } from '../lib/api';
-import type { AiStatus } from '../lib/types';
+import type { AiStatus, CompanionStatus } from '../lib/types';
 import {
   HIDE_AMOUNTS, OWNER_FALLBACK, OWNER_NAME, REQUIRE_NOTE, THEMES, useStore,
 } from '../lib/store';
@@ -141,6 +141,117 @@ function PreferencesPanel() {
  * down once it is done: a book should not take a trip through SQLite for
  * every letter.
  */
+/** Where the companion folder is kept. */
+const COMPANION_DIR = 'companion_dir';
+
+/**
+ * The book shared between the iPhone and the Mac: which one holds it, the
+ * folder they share, and moving it from one to the other. See
+ * docs/companion.md.
+ */
+function ShareCard() {
+  const { toast, saveSetting } = useStore();
+  const [status, setStatus] = useState<CompanionStatus | null>(null);
+  const [busy, setBusy] = useState<'hand' | 'take' | null>(null);
+  const [confirm, setConfirm] = useState<'hand' | 'take' | null>(null);
+
+  const refresh = () => api.companionStatus().then(setStatus).catch(() => setStatus(null));
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  const pickFolder = async () => {
+    const picked = await open({ directory: true, multiple: false });
+    if (typeof picked !== 'string') return;
+    await saveSetting(COMPANION_DIR, picked);
+    refresh();
+  };
+
+  const run = async (which: 'hand' | 'take') => {
+    setBusy(which);
+    try {
+      if (which === 'hand') {
+        await api.companionHandOver();
+        toast('Book handed over. This device now reads the other one\'s copy.');
+      } else {
+        await api.companionTakeOver();
+      }
+      // Everything on screen may be from the book that was just replaced.
+      window.location.reload();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err), 'error');
+      setBusy(null);
+    }
+  };
+
+  if (!status) return null;
+  const owner = status.role === 'owner';
+  return (
+    <Card>
+      <CardHead
+        title="Shared book"
+        hint={owner ? 'This device holds the book' : 'This device works on a copy'}
+      />
+      <div className="data-actions">
+        <div className="data-row">
+          <div>
+            <strong>Shared folder</strong>
+            <p>{status.dir ?? 'Not set. The book stays on this device only.'}</p>
+          </div>
+          <Button icon="folder" onClick={pickFolder} disabled={busy !== null}>
+            {status.dir ? 'Change' : 'Choose folder'}
+          </Button>
+        </div>
+        {status.dir && owner && (
+          <div className="data-row">
+            <div>
+              <strong>Hand the book over</strong>
+              <p>
+                Publishes a last copy for your other device to take. After that,
+                this one keeps working on a copy and sends its changes across.
+              </p>
+            </div>
+            <Button icon="smartphone" onClick={() => setConfirm('hand')} disabled={busy !== null}>
+              {busy === 'hand' ? 'Handing over…' : 'Hand over'}
+            </Button>
+          </div>
+        )}
+        {status.dir && (
+          <div className="data-row">
+            <div>
+              <strong>Hold the book here</strong>
+              <p>
+                {owner
+                  ? 'Replaces what is on this device with the copy in the shared folder.'
+                  : 'Takes the copy in the shared folder as this device\'s book, once the other device has handed it over.'}
+              </p>
+            </div>
+            <Button icon="download" onClick={() => setConfirm('take')} disabled={busy !== null}>
+              {busy === 'take' ? 'Taking over…' : 'Take over'}
+            </Button>
+          </div>
+        )}
+      </div>
+
+      <Confirm
+        open={confirm !== null}
+        title={confirm === 'hand' ? 'Hand the book to your other device?' : 'Hold the book on this device?'}
+        confirmLabel={confirm === 'hand' ? 'Hand over' : 'Take over'}
+        onConfirm={() => {
+          const which = confirm;
+          setConfirm(null);
+          if (which) run(which);
+        }}
+        onCancel={() => setConfirm(null)}
+      >
+        {confirm === 'hand'
+          ? 'Do this on the device that holds the book now, then take over on the other one. Your changes here keep working and are sent across.'
+          : 'The copy in the shared folder becomes the book of record here. What is on this device now is replaced.'}
+      </Confirm>
+    </Card>
+  );
+}
+
 function NameCard() {
   const { settings, saveSetting } = useStore();
   const saved = settings[OWNER_NAME] ?? '';
@@ -439,6 +550,7 @@ function DataPanel() {
   return (
     <>
     <NameCard />
+    <ShareCard />
 
     <Card>
       <CardHead title="Your data" hint="Everything stays on this device" />

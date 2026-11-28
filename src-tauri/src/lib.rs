@@ -38,15 +38,58 @@ fn with_db<T>(db: &State<Db>, f: impl FnOnce(&rusqlite::Connection) -> R<T>) -> 
         if let Err(e) = cashback::settle(&conn) {
             eprintln!("cashback could not be settled: {e}");
         }
-        // The phone's copy follows every change. Nothing when no companion
-        // folder is set.
-        if let Ok(Some(dir)) = companion::dir(&conn) {
+        // The companion's copy follows every change the owner makes. Nothing
+        // on a companion, or when no folder is set.
+        if let Ok(Some(dir)) = companion::publishes(&conn) {
             if let Err(e) = companion::publish(&conn, &dir) {
                 eprintln!("the companion snapshot could not be published: {e}");
             }
         }
     }
     out
+}
+
+/// A change the companion queues for the owner, or the owner makes itself.
+///
+/// On the device that holds the book, `direct` runs as it always has. On a
+/// companion the same command is run through the queue: applied to the copy
+/// at once, and written down for the owner to apply to the book of record.
+/// `args` are named as `companion::run` reads them.
+fn write<T: serde::de::DeserializeOwned>(
+    db: &State<Db>,
+    cmd: &str,
+    args: serde_json::Value,
+    direct: impl FnOnce(&rusqlite::Connection) -> R<T>,
+) -> R<T> {
+    with_db(db, |c| match companion::queue(c)? {
+        Some((dir, device)) => serde_json::from_value(companion::record(c, &dir, &device, cmd, args)?)
+            .map_err(|e| e.to_string()),
+        None => direct(c),
+    })
+}
+
+/// Swaps the open book for another, as taking in a snapshot does. The
+/// connection is handed to `f` to close and replace; if `f` fails, the book
+/// on disk is opened again so the app is never left without one.
+fn swap_book<T>(
+    db: &State<Db>,
+    book: &State<chat::BookPath>,
+    f: impl FnOnce(rusqlite::Connection, &std::path::Path) -> R<(rusqlite::Connection, T)>,
+) -> R<T> {
+    let mut guard = db.0.lock().map_err(|e| e.to_string())?;
+    let stand_in = rusqlite::Connection::open_in_memory().map_err(|e| e.to_string())?;
+    let conn = std::mem::replace(&mut *guard, stand_in);
+    match f(conn, &book.0) {
+        Ok((conn, out)) => {
+            let _ = capture::write_book(&conn);
+            *guard = conn;
+            Ok(out)
+        }
+        Err(e) => {
+            *guard = db::open(&book.0)?;
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
@@ -170,7 +213,7 @@ fn transaction(db: State<Db>, id: String) -> R<Transaction> {
 
 #[tauri::command]
 fn save_transaction(db: State<Db>, input: TransactionInput) -> R<Transaction> {
-    with_db(&db, |c| db::save_transaction(c, input))
+    write(&db, "save_transaction", serde_json::json!({ "input": input }), |c| db::save_transaction(c, input))
 }
 
 /// One change over many postings — the ledger's own bulk edit.
@@ -180,17 +223,17 @@ fn update_transactions(
     ids: Vec<String>,
     patch: TransactionPatch,
 ) -> R<BulkResult> {
-    with_db(&db, |c| db::update_transactions(c, &ids, patch))
+    write(&db, "update_transactions", serde_json::json!({ "ids": ids, "patch": patch }), |c| db::update_transactions(c, &ids, patch))
 }
 
 #[tauri::command]
 fn delete_transactions(db: State<Db>, ids: Vec<String>) -> R<i64> {
-    with_db(&db, |c| db::delete_transactions(c, &ids))
+    write(&db, "delete_transactions", serde_json::json!({ "ids": ids }), |c| db::delete_transactions(c, &ids))
 }
 
 #[tauri::command]
 fn delete_transaction(db: State<Db>, id: String) -> R<()> {
-    with_db(&db, |c| db::delete_transaction(c, &id))
+    write(&db, "delete_transaction", serde_json::json!({ "id": id }), |c| db::delete_transaction(c, &id))
 }
 
 /// Reads a bank statement export into rows. Pure — nothing touches the book
@@ -472,7 +515,7 @@ fn label_transactions(
     label_id: String,
     on: bool,
 ) -> R<i64> {
-    with_db(&db, |c| db::label_transactions(c, &ids, &label_id, on))
+    write(&db, "label_transactions", serde_json::json!({ "ids": ids, "labelId": label_id, "on": on }), |c| db::label_transactions(c, &ids, &label_id, on))
 }
 
 /// Every folder, with what it holds already added up.
@@ -542,12 +585,27 @@ fn confirm_triage(db: State<Db>, ids: Vec<String>) -> R<i64> {
 /// can, and writes the word list back out. Safe to call as often as you like:
 /// a line already read is refused by its own digest.
 #[tauri::command]
-fn sync_captures(db: State<Db>) -> R<CaptureSync> {
+fn sync_captures(db: State<Db>, book: State<chat::BookPath>) -> R<CaptureSync> {
+    // A companion takes in the owner's newer snapshot, if there is one.
+    if let Err(e) = swap_book(&db, &book, companion::catch_up) {
+        eprintln!("the owner's snapshot could not be taken in: {e}");
+    }
     with_db(&db, |c| {
         // Polled when the window comes forward, which is also when the
         // phone's changes are worth taking in.
         if let Err(e) = companion::sync(c) {
             eprintln!("the companion queue could not be read: {e}");
+        }
+        // The drop is the owner's to read. A posting filed on a companion's
+        // copy would be gone with the next snapshot, so the lines wait.
+        if companion::role(c)? == companion::Role::Companion {
+            return Ok(CaptureSync {
+                found: 0,
+                posted: 0,
+                pending: 0,
+                inbox: capture::inbox_path(c).to_string_lossy().into_owned(),
+                book: capture::book_text_path(c).to_string_lossy().into_owned(),
+            });
         }
         capture::sync(c)
     })
@@ -564,6 +622,25 @@ fn companion_status(db: State<Db>) -> R<companion::Status> {
 #[tauri::command]
 fn companion_sync(db: State<Db>) -> R<Option<companion::Applied>> {
     with_db(&db, companion::sync)
+}
+
+/// On a companion: takes in the owner's newer snapshot now.
+#[tauri::command]
+fn companion_catch_up(db: State<Db>, book: State<chat::BookPath>) -> R<Option<companion::CaughtUp>> {
+    swap_book(&db, &book, companion::catch_up)
+}
+
+/// On the owner: publishes a last snapshot and becomes a companion.
+#[tauri::command]
+fn companion_hand_over(db: State<Db>) -> R<companion::Snapshot> {
+    with_db(&db, companion::hand_over)
+}
+
+/// On a companion, or a fresh install: makes the folder's snapshot this
+/// device's book of record.
+#[tauri::command]
+fn companion_take_over(db: State<Db>, book: State<chat::BookPath>) -> R<companion::CaughtUp> {
+    swap_book(&db, &book, companion::take_over)
 }
 
 /// The phone's changes that were not applied, waiting on a person.
@@ -646,13 +723,13 @@ fn set_plan_archived(db: State<Db>, id: String, archived: bool) -> R<()> {
 /// Lets the cycle now due go by unpaid — a waived bill, a month off.
 #[tauri::command]
 fn skip_plan(db: State<Db>, id: String) -> R<Plan> {
-    with_db(&db, |c| plans::skip_plan(c, &id))
+    write(&db, "skip_plan", serde_json::json!({ "id": id }), |c| plans::skip_plan(c, &id))
 }
 
 /// Writes the posting this cycle was reviewed into and points the plan at it.
 #[tauri::command]
 fn pay_plan(db: State<Db>, id: String, input: TransactionInput) -> R<Transaction> {
-    with_db(&db, |c| plans::pay_plan(c, &id, input))
+    write(&db, "pay_plan", serde_json::json!({ "id": id, "input": input }), |c| plans::pay_plan(c, &id, input))
 }
 
 /// Every turn of every live plan between two dates, paid ones included.
@@ -697,7 +774,7 @@ fn list_debts(db: State<Db>) -> R<Vec<Debt>> {
 
 #[tauri::command]
 fn save_debt(db: State<Db>, input: DebtInput) -> R<()> {
-    with_db(&db, |c| db::save_debt(c, input))
+    write(&db, "save_debt", serde_json::json!({ "input": input }), |c| db::save_debt(c, input))
 }
 
 /// The postings one debt is made of.
@@ -708,39 +785,39 @@ fn debt_entries(db: State<Db>, id: String) -> R<Vec<Transaction>> {
 
 #[tauri::command]
 fn delete_debt(db: State<Db>, id: String) -> R<()> {
-    with_db(&db, |c| db::delete_debt(c, &id))
+    write(&db, "delete_debt", serde_json::json!({ "id": id }), |c| db::delete_debt(c, &id))
 }
 
 #[tauri::command]
 fn save_debt_payment(db: State<Db>, input: DebtPaymentInput) -> R<()> {
-    with_db(&db, |c| db::save_debt_payment(c, input))
+    write(&db, "save_debt_payment", serde_json::json!({ "input": input }), |c| db::save_debt_payment(c, input))
 }
 
 #[tauri::command]
 fn delete_debt_payment(db: State<Db>, id: String) -> R<()> {
-    with_db(&db, |c| db::delete_debt_payment(c, &id))
+    write(&db, "delete_debt_payment", serde_json::json!({ "id": id }), |c| db::delete_debt_payment(c, &id))
 }
 
 /// One repayment laid over everything a person owes, oldest first.
 #[tauri::command]
 fn save_person_repayment(db: State<Db>, input: PersonRepaymentInput) -> R<String> {
-    with_db(&db, |c| db::save_person_repayment(c, input))
+    write(&db, "save_person_repayment", serde_json::json!({ "input": input }), |c| db::save_person_repayment(c, input))
 }
 
 #[tauri::command]
 fn delete_person_repayment(db: State<Db>, id: String) -> R<()> {
-    with_db(&db, |c| db::delete_person_repayment(c, &id))
+    write(&db, "delete_person_repayment", serde_json::json!({ "id": id }), |c| db::delete_person_repayment(c, &id))
 }
 
 /// More handed over against a debt already open.
 #[tauri::command]
 fn save_debt_addition(db: State<Db>, input: DebtAdditionInput) -> R<()> {
-    with_db(&db, |c| db::save_debt_addition(c, input))
+    write(&db, "save_debt_addition", serde_json::json!({ "input": input }), |c| db::save_debt_addition(c, input))
 }
 
 #[tauri::command]
 fn delete_debt_addition(db: State<Db>, id: String) -> R<()> {
-    with_db(&db, |c| db::delete_debt_addition(c, &id))
+    write(&db, "delete_debt_addition", serde_json::json!({ "id": id }), |c| db::delete_debt_addition(c, &id))
 }
 
 #[tauri::command]
@@ -933,6 +1010,32 @@ fn reset_all(db: State<Db>) -> R<()> {
     })
 }
 
+/// Where the book lives.
+///
+/// On the phone, the App Group container when the native shell found one
+/// (`FLOW_BOOK_DIR`, set in `main.mm`): the share extension, the widgets and
+/// the Log transaction intent open the book from there, and they can't see
+/// the app's own data folder. Everywhere else, and until the App Group is
+/// signed in, the app's data folder as before. A book already in the data
+/// folder is copied across the first time the group folder appears.
+fn book_path(app_data: std::path::PathBuf) -> std::io::Result<std::path::PathBuf> {
+    std::fs::create_dir_all(&app_data)?;
+    let legacy = app_data.join("midas.sqlite3");
+    let Some(group) = std::env::var_os("FLOW_BOOK_DIR").map(std::path::PathBuf::from) else {
+        return Ok(legacy);
+    };
+    std::fs::create_dir_all(&group)?;
+    let book = group.join("midas.sqlite3");
+    if !book.exists() && legacy.exists() {
+        // Folded into one file first, so the copy holds everything.
+        let old = db::open(&legacy).map_err(std::io::Error::other)?;
+        old.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);").map_err(std::io::Error::other)?;
+        drop(old);
+        std::fs::copy(&legacy, &book)?;
+    }
+    Ok(book)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -940,17 +1043,28 @@ pub fn run() {
         // Picking where a copy of the book goes, and which one to read back.
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let dir = app.path().app_data_dir()?;
-            std::fs::create_dir_all(&dir)?;
-            let book = dir.join("midas.sqlite3");
+            let book = book_path(app.path().app_data_dir()?)?;
             let conn = db::open(&book).map_err(std::io::Error::other)?;
+            // A companion starts from the owner's latest snapshot.
+            let conn = match companion::catch_up(conn, &book) {
+                Ok((conn, _)) => conn,
+                Err(e) => {
+                    eprintln!("the owner's snapshot could not be taken in: {e}");
+                    db::open(&book).map_err(std::io::Error::other)?
+                }
+            };
             // Cycles that closed while the app was shut are credited now.
             cashback::settle(&conn).map_err(std::io::Error::other)?;
 
             // A brand-new book gets sample data once, so the first launch has
             // something to show. Wiping from Settings sets the flag and sticks.
             let seeded = db::setting(&conn, "seeded").map_err(std::io::Error::other)?;
-            if seeded.is_none() && !db::has_any_data(&conn).map_err(std::io::Error::other)? {
+            // Not on the phone: its book arrives from the Mac with a hand-over,
+            // and thirteen months of sample data would only be in the way.
+            if !cfg!(target_os = "ios")
+                && seeded.is_none()
+                && !db::has_any_data(&conn).map_err(std::io::Error::other)?
+            {
                 demo::seed(&conn).map_err(std::io::Error::other)?;
                 db::set_setting(&conn, "seeded", "1").map_err(std::io::Error::other)?;
             }
@@ -1022,6 +1136,9 @@ pub fn run() {
             sync_captures,
             companion_status,
             companion_sync,
+            companion_catch_up,
+            companion_hand_over,
+            companion_take_over,
             companion_conflicts,
             companion_resolve,
             list_captures,

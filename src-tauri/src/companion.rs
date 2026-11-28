@@ -1,13 +1,15 @@
-//! The phone's half of the book, as the Mac sees it.
+//! One book on two devices: the owner and its companion.
 //!
-//! The Mac keeps the book of record. The phone keeps a copy and writes to it
+//! One device keeps the book of record (the owner; the phone, once the book
+//! has moved there, and the Mac before that). The other keeps a copy and writes to it
 //! freely, and every write it makes is also written down as an *op*: the
 //! command the screen called and the arguments it called it with, appended
 //! to a file of the phone's own in a folder both devices can see. The Mac
 //! reads those files, applies each op through the same functions its own
 //! screens use, and publishes a fresh copy of the book back to the folder.
-//! `docs/companion.md` has the whole shape; this is the Mac's side of it,
-//! plus the one piece both sides share, recording an op.
+//! `docs/companion.md` has the whole shape. The owner's side is `apply` and
+//! `publish`; the companion's is `record` and `catch_up`; `hand_over` and
+//! `take_over` move the book from one to the other.
 //!
 //! Three things make an op mean the same on both sides:
 //!
@@ -157,8 +159,6 @@ pub struct Op {
 
 /// The commands the phone can send. Anything else is refused on the phone
 /// before it is queued, and held for a person if one turns up anyway.
-// The phone's side; the Mac build only reads what it writes.
-#[allow(dead_code)]
 pub const COMMANDS: &[&str] = &[
     "save_transaction",
     "delete_transaction",
@@ -182,15 +182,11 @@ fn arg<T: serde::de::DeserializeOwned>(args: &Value, key: &str) -> Result<T> {
         .map_err(|e| format!("{key}: {e}"))
 }
 
-// The phone's side; the Mac build only reads what it writes.
-#[allow(dead_code)]
 fn input_id(args: &Value) -> Option<String> {
     args.get("input")?.get("id")?.as_str().filter(|s| !s.is_empty()).map(String::from)
 }
 
 /// The existing rows an op is about to change, by table and id.
-// The phone's side; the Mac build only reads what it writes.
-#[allow(dead_code)]
 fn targets(cmd: &str, args: &Value) -> Vec<(&'static str, String)> {
     let one = |table: &'static str, id: Option<String>| id.map(|id| vec![(table, id)]).unwrap_or_default();
     let many = |table: &'static str| -> Vec<(&'static str, String)> {
@@ -273,8 +269,6 @@ fn atomically<T>(conn: &Connection, f: impl FnOnce() -> Result<T>) -> Result<T> 
     }
 }
 
-// The phone's side; the Mac build only reads what it writes.
-#[allow(dead_code)]
 fn ops_file(dir: &Path, device: &str) -> PathBuf {
     dir.join(OPS_DIR).join(format!("{device}.jsonl"))
 }
@@ -297,10 +291,8 @@ fn read_ops(path: &Path) -> Result<Vec<Op>> {
     Ok(ops)
 }
 
-/// The phone's side: applies a command to its own copy and queues it for
-/// the Mac. Returns what the command returned, as the screen expects.
-// The phone's side; the Mac build only reads what it writes.
-#[allow(dead_code)]
+/// The companion's side: applies a command to its own copy and queues it
+/// for the owner. Returns what the command returned, as the screen expects.
 pub fn record(conn: &Connection, dir: &Path, device: &str, cmd: &str, args: Value) -> Result<Value> {
     if !COMMANDS.contains(&cmd) {
         return Err(format!("The phone can't do {cmd} yet."));
@@ -546,6 +538,8 @@ pub fn dir(conn: &Connection) -> Result<Option<PathBuf>> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
+    pub role: Role,
+    pub device: Option<String>,
     pub dir: Option<String>,
     pub version: u64,
     pub applied: BTreeMap<String, u64>,
@@ -560,6 +554,8 @@ pub fn status(conn: &Connection) -> Result<Status> {
         }
     }
     Ok(Status {
+        role: role(conn)?,
+        device: db::setting(conn, DEVICE_SETTING)?,
         dir: dir(conn)?.map(|d| d.to_string_lossy().into_owned()),
         version: db::setting(conn, VERSION_SETTING)?.and_then(|s| s.parse().ok()).unwrap_or(0),
         applied,
@@ -570,10 +566,197 @@ pub fn status(conn: &Connection) -> Result<Status> {
 /// One round: take in what the phone sent, then publish what the book now
 /// is. Nothing at all when no folder is set.
 pub fn sync(conn: &Connection) -> Result<Option<Applied>> {
-    let Some(dir) = dir(conn)? else { return Ok(None) };
+    let Some(dir) = publishes(conn)? else { return Ok(None) };
     let done = apply(conn, &dir)?;
     publish(conn, &dir)?;
     Ok(Some(done))
+}
+
+// -------------------------------------------------------------------- roles
+//
+// Which device holds the book is a setting, not a build. The owner applies
+// every queue and publishes; a companion works on its copy of the last
+// snapshot and queues what it changes. The Mac was the owner until the book
+// moved to the phone, and either can hand the book to the other.
+
+/// `owner` or `companion`. Unset is owner, which is what every book was
+/// before there was a choice.
+pub const ROLE_SETTING: &str = "book_role";
+/// This device's name in the ops folder. Made once, kept across snapshots.
+pub const DEVICE_SETTING: &str = "companion_device";
+
+/// Settings that belong to this device rather than to the book. A snapshot
+/// carries the owner's values for these, so they are put back after one is
+/// taken in.
+const LOCAL_SETTINGS: &[&str] = &[ROLE_SETTING, DEVICE_SETTING, DIR_SETTING];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    Owner,
+    Companion,
+}
+
+pub fn role(conn: &Connection) -> Result<Role> {
+    Ok(match db::setting(conn, ROLE_SETTING)?.as_deref() {
+        Some("companion") => Role::Companion,
+        _ => Role::Owner,
+    })
+}
+
+/// This device's name, made the first time it is asked for.
+pub fn device(conn: &Connection) -> Result<String> {
+    if let Some(d) = db::setting(conn, DEVICE_SETTING)?.filter(|d| !d.trim().is_empty()) {
+        return Ok(d);
+    }
+    let prefix = if cfg!(target_os = "ios") { "iphone" } else { "mac" };
+    let short: String = uuid::Uuid::new_v4().simple().to_string().chars().take(8).collect();
+    let d = format!("{prefix}-{short}");
+    db::set_setting(conn, DEVICE_SETTING, &d)?;
+    Ok(d)
+}
+
+/// Where a companion's writes go: the folder and this device's name. `None`
+/// on the owner, or with no folder set, where writes go straight in.
+pub fn queue(conn: &Connection) -> Result<Option<(PathBuf, String)>> {
+    if role(conn)? != Role::Companion {
+        return Ok(None);
+    }
+    match dir(conn)? {
+        Some(d) => Ok(Some((d, device(conn)?))),
+        None => Ok(None),
+    }
+}
+
+/// Whether this device publishes after a change: only the owner does.
+pub fn publishes(conn: &Connection) -> Result<Option<PathBuf>> {
+    if role(conn)? == Role::Owner { dir(conn) } else { Ok(None) }
+}
+
+fn read_meta(dir: &Path) -> Result<Option<Snapshot>> {
+    match std::fs::read(dir.join(SNAPSHOT_META)) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map(Some).map_err(oops),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(oops(e)),
+    }
+}
+
+fn version_of(conn: &Connection) -> Result<u64> {
+    Ok(db::setting(conn, VERSION_SETTING)?.and_then(|s| s.parse().ok()).unwrap_or(0))
+}
+
+/// The snapshot in the folder, when it is newer than the book this
+/// companion is working on.
+pub fn newer_snapshot(conn: &Connection) -> Result<Option<Snapshot>> {
+    if role(conn)? != Role::Companion {
+        return Ok(None);
+    }
+    let Some(dir) = dir(conn)? else { return Ok(None) };
+    let Some(meta) = read_meta(&dir)? else { return Ok(None) };
+    Ok((meta.version > version_of(conn)?).then_some(meta))
+}
+
+/// What taking in a snapshot did.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CaughtUp {
+    pub version: u64,
+    /// This device's own changes the snapshot didn't hold yet, laid back
+    /// over it.
+    pub replayed: u64,
+}
+
+/// Replaces the book at `book` with the folder's snapshot and opens it.
+///
+/// `conn` is the book's open connection; it is closed first, so its WAL is
+/// folded back and nothing of the old book's journal is left to be laid
+/// over the new one. The device's own settings are carried across.
+/// With `replay`, this device's queued changes the snapshot doesn't hold yet
+/// are run again on top, so nothing on screen goes backwards while the owner
+/// catches up; without it they are left for the owner's `apply` to find.
+fn swap_in(conn: Connection, book: &Path, dir: &Path, replay: bool) -> Result<(Connection, CaughtUp)> {
+    let meta = read_meta(dir)?.ok_or("There's no copy of the book in the shared folder yet.")?;
+    let mut local = Vec::new();
+    for key in LOCAL_SETTINGS {
+        if let Some(v) = db::setting(&conn, key)? {
+            local.push((*key, v));
+        }
+    }
+    drop(conn);
+
+    let tmp = book.with_extension("incoming");
+    std::fs::copy(dir.join(SNAPSHOT), &tmp).map_err(oops)?;
+    for side in ["sqlite3-wal", "sqlite3-shm"] {
+        let _ = std::fs::remove_file(book.with_extension(side));
+    }
+    std::fs::rename(&tmp, book).map_err(oops)?;
+
+    let conn = db::open(book)?;
+    for key in LOCAL_SETTINGS {
+        conn.execute("DELETE FROM settings WHERE key = ?1", params![key]).map_err(oops)?;
+    }
+    for (key, value) in &local {
+        db::set_setting(&conn, key, value)?;
+    }
+    let mut done = CaughtUp { version: meta.version, replayed: 0 };
+    if replay {
+        let device = device(&conn)?;
+        let held = meta.applied.get(&device).copied().unwrap_or(0);
+        for op in read_ops(&ops_file(dir, &device))?.into_iter().filter(|op| op.seq > held) {
+            let (out, _) = pinned(op.ids.clone(), Some(op.at.clone()), || {
+                atomically(&conn, || run(&conn, &op.cmd, &op.args))
+            });
+            // One the owner will refuse is refused here too; it waits in the
+            // owner's conflicts either way.
+            if out.is_ok() {
+                done.replayed += 1;
+            }
+        }
+    }
+    Ok((conn, done))
+}
+
+/// A companion's catch-up: the newer snapshot swapped in, its own pending
+/// changes laid back over it.
+pub fn catch_up(conn: Connection, book: &Path) -> Result<(Connection, Option<CaughtUp>)> {
+    if newer_snapshot(&conn)?.is_none() {
+        return Ok((conn, None));
+    }
+    let dir = dir(&conn)?.ok_or("No shared folder is set.")?;
+    let (conn, done) = swap_in(conn, book, &dir, true)?;
+    Ok((conn, Some(done)))
+}
+
+/// The owner gives the book away: everything queued is applied, a last
+/// snapshot is published, and from here this device is a companion that
+/// reads the new owner's snapshots and queues its own changes.
+pub fn hand_over(conn: &Connection) -> Result<Snapshot> {
+    if role(conn)? != Role::Owner {
+        return Err("This device doesn't hold the book, so it has nothing to hand over.".into());
+    }
+    let dir = dir(conn)?.ok_or("Set the shared folder first.")?;
+    apply(conn, &dir)?;
+    device(conn)?;
+    let snap = publish(conn, &dir)?;
+    db::set_setting(conn, ROLE_SETTING, "companion")?;
+    Ok(snap)
+}
+
+/// A companion takes the book: the folder's snapshot becomes this device's
+/// book of record. Its own queued changes are not replayed here; as owner
+/// it reads every queue, its own included, and applies them through `apply`
+/// like anyone else's, so each lands exactly once.
+pub fn take_over(conn: Connection, book: &Path) -> Result<(Connection, CaughtUp)> {
+    if role(&conn)? == Role::Owner && db::has_any_data(&conn)? && dir(&conn)?.is_some() {
+        return Err("This device already holds the book.".into());
+    }
+    let dir = dir(&conn)?.ok_or("Set the shared folder first.")?;
+    device(&conn)?;
+    let (conn, done) = swap_in(conn, book, &dir, false)?;
+    db::set_setting(&conn, ROLE_SETTING, "owner")?;
+    let applied = apply(&conn, &dir)?;
+    publish(&conn, &dir)?;
+    Ok((conn, CaughtUp { version: done.version, replayed: applied.applied }))
 }
 
 #[cfg(test)]
@@ -743,6 +926,70 @@ mod tests {
         assert_eq!(apply(&mac, &dir).unwrap(), Applied { applied: 1, held: 2 });
         assert_eq!(merchant(&mac, "fixed-id").as_deref(), Some("Metro"));
         assert_eq!(applied_through(&mac, "iphone").unwrap(), 3);
+    }
+
+    fn set_dir(conn: &Connection, dir: &Path) {
+        db::set_setting(conn, DIR_SETTING, &dir.to_string_lossy()).unwrap();
+    }
+
+    #[test]
+    fn the_book_moves_to_the_phone_and_the_mac_keeps_editing() {
+        // The Mac holds the book, with one posting in it.
+        let dir = folder("move");
+        let mac_book = folder("move-mac").join("midas.sqlite3");
+        let mac = db::open(&mac_book).unwrap();
+        let hdfc = account(&mac);
+        set_dir(&mac, &dir);
+        db::save_transaction(&mac, serde_json::from_value(spend(&hdfc, None, "Uber", 200_00)["input"].clone()).unwrap())
+            .unwrap();
+        assert_eq!(role(&mac).unwrap(), Role::Owner);
+
+        // It hands the book over and becomes a companion.
+        hand_over(&mac).unwrap();
+        assert_eq!(role(&mac).unwrap(), Role::Companion);
+        assert!(queue(&mac).unwrap().is_some());
+
+        // A fresh phone, pointed at the same folder, takes it.
+        let phone_book = folder("move-phone").join("midas.sqlite3");
+        let phone = db::open(&phone_book).unwrap();
+        set_dir(&phone, &dir);
+        let (phone, _) = take_over(phone, &phone_book).unwrap();
+        assert_eq!(role(&phone).unwrap(), Role::Owner);
+        assert_eq!(db::setting(&phone, DIR_SETTING).unwrap(), Some(dir.to_string_lossy().into_owned()));
+        assert_ne!(device(&phone).unwrap(), device(&mac).unwrap());
+
+        // The Mac, now a companion, still edits: the change is queued.
+        let (mac_dir, mac_id) = queue(&mac).unwrap().unwrap();
+        let made = record(&mac, &mac_dir, &mac_id, "save_transaction", spend(&hdfc, None, "Blue Tokai", 450_00)).unwrap();
+        let tx = made["id"].as_str().unwrap().to_string();
+
+        // The phone logs something of its own, then applies the Mac's queue.
+        let coffee = db::save_transaction(&phone, serde_json::from_value(spend(&hdfc, None, "Third Wave", 300_00)["input"].clone()).unwrap())
+            .unwrap()
+            .id;
+        assert_eq!(sync(&phone).unwrap(), Some(Applied { applied: 1, held: 0 }));
+        assert_eq!(merchant(&phone, &tx).as_deref(), Some("Blue Tokai"));
+
+        // The Mac makes one more change the phone hasn't seen, then catches up:
+        // it gets the phone's posting and keeps its own pending one on screen.
+        let made = record(&mac, &mac_dir, &mac_id, "save_transaction", spend(&hdfc, None, "Metro", 40_00)).unwrap();
+        let metro = made["id"].as_str().unwrap().to_string();
+        let (mac, done) = catch_up(mac, &mac_book).unwrap();
+        let done = done.unwrap();
+        assert_eq!(done.replayed, 1);
+        assert_eq!(merchant(&mac, &coffee).as_deref(), Some("Third Wave"));
+        assert_eq!(merchant(&mac, &metro).as_deref(), Some("Metro"));
+        assert_eq!(role(&mac).unwrap(), Role::Companion);
+
+        // Nothing newer: nothing to do.
+        let (mac, again) = catch_up(mac, &mac_book).unwrap();
+        assert_eq!(again, None);
+
+        // The phone applies the second change exactly once.
+        assert_eq!(sync(&phone).unwrap(), Some(Applied { applied: 1, held: 0 }));
+        assert_eq!(sync(&phone).unwrap(), Some(Applied::default()));
+        // And a companion never publishes or applies.
+        assert_eq!(sync(&mac).unwrap(), None);
     }
 
     #[test]
